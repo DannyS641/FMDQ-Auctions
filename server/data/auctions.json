@@ -1,0 +1,71 @@
+{
+  "items": [
+    {
+      "id": "LOT-2041",
+      "title": "Toyota Corolla 2015",
+      "category": "Cars",
+      "lot": "CAR-015",
+      "sku": "FMDQ-CAR-015",
+      "condition": "Used",
+      "location": "Lagos Warehouse",
+      "startBid": 4500000,
+      "reserve": 6200000,
+      "increment": 50000,
+      "currentBid": 5750000,
+      "startTime": "2026-03-02T03:06:44.169Z",
+      "endTime": "2026-03-02T06:36:44.169Z",
+      "description": "Well-maintained sedan, full service history available.",
+      "images": [],
+      "documents": [],
+      "bids": [
+        {
+          "bidder": "J. Martins",
+          "amount": 5400000,
+          "time": "09:10"
+        },
+        {
+          "bidder": "T. Okoro",
+          "amount": 5600000,
+          "time": "09:22"
+        },
+        {
+          "bidder": "L. Bello",
+          "amount": 5750000,
+          "time": "09:33"
+        }
+      ],
+      "createdAt": "2026-03-02T05:06:44.171Z"
+    },
+    {
+      "id": "LOT-2042",
+      "title": "Samsung 65 inch UHD Smart TV",
+      "category": "Household Appliances",
+      "lot": "HAP-210",
+      "sku": "FMDQ-HAP-210",
+      "condition": "Fair",
+      "location": "Abuja Hub",
+      "startBid": 180000,
+      "reserve": 260000,
+      "increment": 5000,
+      "currentBid": 205000,
+      "startTime": "2026-03-02T04:36:44.169Z",
+      "endTime": "2026-03-02T05:46:44.169Z",
+      "description": "Screen intact, minor scratches on frame.",
+      "images": [],
+      "documents": [],
+      "bids": [
+        {
+          "bidder": "K. Yusuf",
+          "amount": 190000,
+          "time": "09:40"
+        },
+        {
+          "bidder": "H. Adele",
+          "amount": 205000,
+          "time": "09:52"
+        }
+      ],
+      "createdAt": "2026-03-02T05:06:44.171Z"
+    }
+  ]
+}

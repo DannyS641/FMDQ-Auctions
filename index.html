@@ -1,0 +1,116 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FMDQ Auctions Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="min-h-screen bg-ash flex flex-col">
+      <header class="bg-white text-ink flex flex-1 flex-col">
+        <nav
+          class="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-6 px-6 py-6"
+        >
+          <div class="flex items-center gap-3">
+            <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
+          </div>
+          <div class="hidden md:flex"></div>
+        </nav>
+        <section
+          class="relative mx-auto grid w-full max-w-7xl flex-1 items-center gap-10 px-6 py-6 md:grid-cols-[1.2fr_0.8fr]"
+        >
+          <div class="relative z-10" data-reveal>
+            <!-- <div
+              class="inline-flex items-center gap-2 rounded-full border border-ink/10 bg-ash px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-slate"
+            >
+              Secure auctions
+            </div> -->
+            <h1
+              class="mt-6 text-4xl font-semibold leading-tight text-ink md:text-5xl"
+            >
+              <span class="text-[#1d326c]">DISCOVER</span> .
+              <span class="text-[#979799]">BID</span> .
+              <span class="text-[#cc9933]">OWN</span>
+            </h1>
+            <p class="mt-4 max-w-xl text-base text-slate">
+              Centralise listings, enforce bidding rules, and let verified
+              members compete in real time with AD-integrated access and
+              transparent workflows.
+            </p>
+            <div class="mt-6 flex flex-wrap gap-4">
+              <a
+                href="/bidding.html"
+                class="rounded-full bg-neon px-6 py-3 text-sm font-semibold text-white"
+                >Start bidding</a
+              >
+              <a
+                href="#process"
+                class="rounded-full border border-ink/20 px-6 py-3 text-sm font-semibold text-ink"
+                >How it works</a
+              >
+            </div>
+            <div class="mt-8 grid gap-6 text-slate md:grid-cols-3">
+              <div>
+                <p class="text-3xl font-semibold text-ink">326</p>
+                <p class="text-xs uppercase tracking-[0.3em] text-slate">
+                  Active lots
+                </p>
+              </div>
+              <div>
+                <p class="text-3xl font-semibold text-ink">74</p>
+                <p class="text-xs uppercase tracking-[0.3em] text-slate">
+                  Verified bidders
+                </p>
+              </div>
+              <div>
+                <p class="text-3xl font-semibold text-ink">99.9%</p>
+                <p class="text-xs uppercase tracking-[0.3em] text-slate">
+                  SSO uptime
+                </p>
+              </div>
+            </div>
+          </div>
+          <div class="relative z-10 h-full" data-reveal>
+            <div
+              class="relative h-full min-h-[640px] w-full overflow-hidden rounded-3xl bg-white"
+            >
+              <img
+                src="/slides/slide-1.jpg"
+                alt="Auction preview 1"
+                class="slide-fade absolute inset-0 h-full w-full object-cover object-center"
+              />
+              <img
+                src="/slides/slide-2.jpg"
+                alt="Auction preview 2"
+                class="slide-fade absolute inset-0 h-full w-full object-cover object-center"
+                style="animation-delay: 4s"
+              />
+              <img
+                src="/slides/slide-3.jpg"
+                alt="Auction preview 3"
+                class="slide-fade absolute inset-0 h-full w-full object-cover object-center"
+                style="animation-delay: 8s"
+              />
+            </div>
+          </div>
+        </section>
+      </header>
+
+      <footer class="border-t border-ink/10 bg-white">
+        <div
+          class="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-4 text-xs text-slate"
+        >
+          <p>FMDQ Group PLC Auctions Portal</p>
+          <p>Role-based access - AD integrated - Anonymous bidding</p>
+        </div>
+      </footer>
+    </div>
+    <script type="module" src="/src/landing.ts"></script>
+  </body>
+</html>
