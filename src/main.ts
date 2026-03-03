@@ -278,6 +278,7 @@ const adConfig = {
 const adEnabled = Boolean(adConfig.auth.clientId && adConfig.auth.authority);
 let msalClient: PublicClientApplication | null = null;
 let activeAccount: AccountInfo | null = null;
+let demoSignedIn = false;
 
 const parseGroupEnv = (value: string) =>
   value
@@ -865,11 +866,16 @@ const initAd = async () => {
   if (!adStatus || !adUser || !adLogin || !adLogout) return;
 
   if (!adEnabled) {
-    adStatus.textContent = "AD not configured";
-    adUser.textContent = "Demo user";
-    adLogin.disabled = true;
-    adLogin.classList.add("opacity-50", "cursor-not-allowed");
+    adStatus.textContent = "Demo mode";
+    adUser.textContent = "No AD config";
+    adLogin.disabled = false;
+    adLogin.classList.remove("opacity-50", "cursor-not-allowed");
     adLogout.classList.add("hidden");
+    adLogin.addEventListener("click", () => {
+      demoSignedIn = !demoSignedIn;
+      adStatus.textContent = demoSignedIn ? "Demo signed in" : "Demo mode";
+      adUser.textContent = demoSignedIn ? "Demo user" : "No AD config";
+    });
     updateRoleUi();
     return;
   }

@@ -14,7 +14,8 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         bidding: resolve(__dirname, "bidding.html"),
-        item: resolve(__dirname, "item.html")
+        item: resolve(__dirname, "item.html"),
+        signin: resolve(__dirname, "signin.html")
       }
     }
   }
