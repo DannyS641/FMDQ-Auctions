@@ -34,6 +34,14 @@ type AuctionItem = {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
 
 const formatMoney = (value: number) => `NGN ${value.toLocaleString("en-NG")}`;
+const formatDate = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const yyyy = date.getFullYear();
+  return `${mm}-${dd}-${yyyy}`;
+};
 
 const getQuery = () => {
   const params = new URLSearchParams(window.location.search);
@@ -125,11 +133,11 @@ const renderItem = (item: AuctionItem) => {
           </div>
           <div class="flex items-center justify-between">
             <span>Start</span>
-            <span class="font-semibold">${new Date(item.startTime).toLocaleString()}</span>
+            <span class="font-semibold">${formatDate(item.startTime)}</span>
           </div>
           <div class="flex items-center justify-between">
             <span>End</span>
-            <span class="font-semibold">${new Date(item.endTime).toLocaleString()}</span>
+            <span class="font-semibold">${formatDate(item.endTime)}</span>
           </div>
         </div>
       </div>

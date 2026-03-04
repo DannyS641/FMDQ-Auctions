@@ -303,6 +303,14 @@ const state = {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
 
 const formatMoney = (value: number) => `NGN ${value.toLocaleString("en-NG")}`;
+const formatDate = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const yyyy = date.getFullYear();
+  return `${mm}-${dd}-${yyyy}`;
+};
 const resolveMediaUrl = (url: string) =>
   url.startsWith("http") ? url : `${API_BASE_URL}${url}`;
 const canViewReserve = () => state.role === "Admin";
@@ -337,7 +345,7 @@ const resolveRole = () => {
 
 const formatStatusClass = (status: Status) => {
   if (status === "Live") return "bg-neon text-white";
-  if (status === "Upcoming") return "bg-tide text-ink";
+  if (status === "Upcoming") return "bg-gold text-white";
   return "bg-slate text-white";
 };
 
@@ -635,12 +643,12 @@ const renderDetail = () => {
           </div>
           <div>
             <p class="text-xs uppercase tracking-[0.3em] text-slate">Starts</p>
-            <p class="mt-1 font-semibold text-ink">${new Date(item.startTime).toLocaleString()}
+            <p class="mt-1 font-semibold text-ink">${formatDate(item.startTime)}
             </p>
           </div>
           <div>
             <p class="text-xs uppercase tracking-[0.3em] text-slate">Ends</p>
-            <p class="mt-1 font-semibold text-ink">${new Date(item.endTime).toLocaleString()}
+            <p class="mt-1 font-semibold text-ink">${formatDate(item.endTime)}
             </p>
           </div>
         </div>

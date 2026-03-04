@@ -6,6 +6,7 @@
         ink: "#0B0E12",
         ash: "#E6E8EB",
         neon: "#1d326c",
+        gold: "#cc9933",
         tide: "#23D7C5",
         dusk: "#131823",
         slate: "#7D8799"
