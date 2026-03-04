@@ -650,7 +650,7 @@ const renderDetail = () => {
           <p class="mt-1 text-sm text-ink">Location: ${item.location}</p>
           <p class="mt-1 text-sm text-ink">SKU: ${item.sku}</p>
         </div>
-        <a href="/item.html?id=${item.id}" class="rounded-full border border-ink/20 px-4 py-2 text-center text-xs font-semibold text-ink">Open full item page</a>
+        <a href="/item.html?id=${item.id}" class="mt-4 inline-flex w-fit rounded-full border border-ink/20 px-4 py-2 text-center text-xs font-semibold text-ink">Open full item page</a>
       </div>
     </div>
     <form id="bid-form" class="mt-6 flex flex-wrap items-center gap-3">
