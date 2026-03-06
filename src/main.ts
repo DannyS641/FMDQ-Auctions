@@ -264,6 +264,9 @@ const adUser = document.querySelector<HTMLSpanElement>("#ad-user");
 const adLogin = document.querySelector<HTMLButtonElement>("#ad-login");
 const adLogout = document.querySelector<HTMLButtonElement>("#ad-logout");
 
+const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
+const localAuthKey = "fmdq_local_auth";
+
 const adConfig = {
   auth: {
     clientId: import.meta.env.VITE_AAD_CLIENT_ID || "",
@@ -275,10 +278,15 @@ const adConfig = {
   }
 };
 
-const adEnabled = Boolean(adConfig.auth.clientId && adConfig.auth.authority);
+const adEnabled = authMode === "ad" && Boolean(adConfig.auth.clientId && adConfig.auth.authority);
 let msalClient: PublicClientApplication | null = null;
 let activeAccount: AccountInfo | null = null;
 let demoSignedIn = false;
+
+const isLocalSignedIn = () => sessionStorage.getItem(localAuthKey) === "true";
+const setLocalSignedIn = (value: boolean) => {
+  sessionStorage.setItem(localAuthKey, value ? "true" : "false");
+};
 
 const parseGroupEnv = (value: string) =>
   value
@@ -316,9 +324,10 @@ const resolveMediaUrl = (url: string) =>
 const canViewReserve = () => state.role === "Admin";
 
 const resolveRole = () => {
-  if (!adEnabled) {
-    return devRole || "Guest";
+  if (authMode === "local") {
+    return isLocalSignedIn() ? devRole || "Bidder" : "Guest";
   }
+  if (!adEnabled) return devRole || "Guest";
   if (!activeAccount) return "Guest";
 
   const claims = (activeAccount.idTokenClaims || {}) as Record<string, unknown>;
@@ -388,6 +397,7 @@ const formatDuration = (ms: number) => {
 const canBid = (item?: AuctionItem) => {
   if (!state.agreementsAccepted) return false;
   if (state.role !== "Bidder") return false;
+  if (authMode === "local" && !isLocalSignedIn()) return false;
   if (adEnabled && !activeAccount) return false;
   if (item && getStatus(item) !== "Live") return false;
   return true;
@@ -661,31 +671,54 @@ const renderDetail = () => {
         <a href="/item.html?id=${item.id}" class="mt-4 inline-flex w-fit rounded-full border border-ink/20 px-4 py-2 text-center text-xs font-semibold text-ink">Open full item page</a>
       </div>
     </div>
-    <form id="bid-form" class="mt-6 flex flex-wrap items-center gap-3">
-      <input
-        id="bid-amount"
-        type="number"
-        min="0"
-        placeholder="Enter bid amount"
-        class="flex-1 rounded-2xl border border-ink/10 px-4 py-3 text-sm"
-      />
-      <button
-        id="bid-submit"
-        type="submit"
-        class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white"
-        ${canBid(item) ? "" : "disabled"}
-      >
-        Place bid
-      </button>
-      <p id="bid-hint" class="w-full text-xs text-slate">${bidNotice}</p>
+    <form id="bid-form" class="mt-6 space-y-3">
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="flex flex-1 items-center gap-2">
+          <input
+            id="bid-amount"
+            type="number"
+            min="${minBid}"
+            step="${item.increment}"
+            placeholder="${formatMoney(item.currentBid || item.startBid)}"
+            class="no-spin flex-1 rounded-2xl border border-ink/10 px-4 py-3 text-sm"
+          />
+          <button
+            id="bid-step"
+            type="button"
+            class="rounded-full border border-ink/20 px-4 py-3 text-sm font-semibold text-ink"
+            aria-label="Increase bid"
+          >
+            ▲
+          </button>
+        </div>
+        <button
+          id="bid-submit"
+          type="submit"
+          class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white"
+          ${canBid(item) ? "" : "disabled"}
+        >
+          Place bid
+        </button>
+      </div>
+      <p id="bid-hint" class="text-xs text-slate">${bidNotice}</p>
     </form>
   `;
 
   const bidForm = detailCard.querySelector<HTMLFormElement>("#bid-form");
   const bidInput = detailCard.querySelector<HTMLInputElement>("#bid-amount");
   const bidHint = detailCard.querySelector<HTMLParagraphElement>("#bid-hint");
+  const bidStep = detailCard.querySelector<HTMLButtonElement>("#bid-step");
 
   if (bidForm && bidInput && bidHint) {
+    const stepValue = item.increment;
+    const baseBid = Math.max(item.currentBid || item.startBid, item.startBid) + item.increment;
+
+    bidStep?.addEventListener("click", () => {
+      const currentValue = Number(bidInput.value || 0);
+      const nextValue = currentValue >= baseBid ? currentValue + stepValue : baseBid;
+      bidInput.value = String(nextValue);
+    });
+
     bidForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!canBid(item)) {
@@ -696,6 +729,10 @@ const renderDetail = () => {
       const requiredBid = Math.max(item.currentBid || item.startBid, item.startBid) + item.increment;
       if (!value || value < requiredBid) {
         bidHint.textContent = `Bid must be at least ${formatMoney(requiredBid)}.`;
+        return;
+      }
+      if ((value - requiredBid) % item.increment !== 0) {
+        bidHint.textContent = `Bids must increase by ${formatMoney(item.increment)}.`;
         return;
       }
       bidHint.textContent = "Submitting bid...";
@@ -789,9 +826,11 @@ const updateRoleUi = () => {
       ? activeAccount
         ? "Role assigned from Entra ID groups."
         : "Sign in with AD to resolve your role."
-      : devRole
-        ? `Dev role override active: ${devRole}.`
-        : "AD not configured. Demo mode enabled.";
+      : authMode === "local"
+        ? "Local testing mode enabled."
+        : devRole
+          ? `Dev role override active: ${devRole}.`
+          : "AD not configured. Demo mode enabled.";
   }
   if (adminPanel) {
     adminPanel.classList.toggle("hidden", state.role !== "Admin");
@@ -872,6 +911,39 @@ const handleAdminSubmit = () => {
 
 const initAd = async () => {
   if (!adStatus || !adUser || !adLogin || !adLogout) return;
+
+  if (authMode === "local") {
+    const signedIn = isLocalSignedIn();
+    adStatus.textContent = signedIn ? "Local signed in" : "Local mode";
+    adUser.textContent = signedIn ? "Local user" : "Not signed in";
+    adLogin.disabled = false;
+    adLogin.classList.remove("opacity-50", "cursor-not-allowed");
+    if (signedIn) {
+      adLogin.classList.add("hidden");
+      adLogout.classList.remove("hidden");
+    } else {
+      adLogin.classList.remove("hidden");
+      adLogout.classList.add("hidden");
+    }
+    adLogin.addEventListener("click", () => {
+      setLocalSignedIn(true);
+      adStatus.textContent = "Local signed in";
+      adUser.textContent = "Local user";
+      adLogin.classList.add("hidden");
+      adLogout.classList.remove("hidden");
+      updateRoleUi();
+    });
+    adLogout.addEventListener("click", () => {
+      setLocalSignedIn(false);
+      adStatus.textContent = "Local mode";
+      adUser.textContent = "Not signed in";
+      adLogin.classList.remove("hidden");
+      adLogout.classList.add("hidden");
+      updateRoleUi();
+    });
+    updateRoleUi();
+    return;
+  }
 
   if (!adEnabled) {
     adStatus.textContent = "Demo mode";

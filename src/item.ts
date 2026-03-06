@@ -32,6 +32,9 @@ type AuctionItem = {
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
+const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
+const localAuthKey = "fmdq_local_auth";
+const adEnabled = authMode === "ad" && Boolean(import.meta.env.VITE_AAD_CLIENT_ID && import.meta.env.VITE_AAD_AUTHORITY);
 
 const formatMoney = (value: number) => `NGN ${value.toLocaleString("en-NG")}`;
 const formatDate = (value: string) => {
@@ -41,6 +44,34 @@ const formatDate = (value: string) => {
   const dd = String(date.getDate()).padStart(2, "0");
   const yyyy = date.getFullYear();
   return `${mm}-${dd}-${yyyy}`;
+};
+const isLocalSignedIn = () => sessionStorage.getItem(localAuthKey) === "true";
+const setLocalSignedIn = (value: boolean) => {
+  sessionStorage.setItem(localAuthKey, value ? "true" : "false");
+};
+
+const getStatus = (item: AuctionItem) => {
+  const now = Date.now();
+  const start = new Date(item.startTime).getTime();
+  const end = new Date(item.endTime).getTime();
+  if (now < start) return "Upcoming";
+  if (now > end) return "Closed";
+  return "Live";
+};
+
+const canBid = (item: AuctionItem) => {
+  if (getStatus(item) !== "Live") {
+    return { allowed: false, message: "Bidding is closed or not yet open for this item." };
+  }
+  if (authMode === "local") {
+    return isLocalSignedIn()
+      ? { allowed: true, message: "" }
+      : { allowed: false, message: "Sign in to place a bid." };
+  }
+  if (adEnabled) {
+    return { allowed: false, message: "Sign in with AD to place a bid." };
+  }
+  return { allowed: false, message: "Sign in to place a bid." };
 };
 
 const getQuery = () => {
@@ -62,6 +93,8 @@ const renderEmpty = (message: string) => {
 const renderItem = (item: AuctionItem) => {
   const container = document.querySelector<HTMLDivElement>("#item-view");
   if (!container) return;
+  const bidState = canBid(item);
+  const minBid = Math.max(item.currentBid || item.startBid, item.startBid) + item.increment;
 
   const gallery = item.images.length
     ? item.images
@@ -142,6 +175,44 @@ const renderItem = (item: AuctionItem) => {
         </div>
       </div>
       <div class="rounded-3xl border border-ink/10 bg-white p-6">
+        <p class="text-xs uppercase tracking-[0.3em] text-slate">Place bid</p>
+        <form id="bid-form" class="mt-4 space-y-3">
+          <div class="flex items-center gap-2">
+            <input
+              id="bid-amount"
+              type="number"
+              min="${minBid}"
+              step="${item.increment}"
+              placeholder="${formatMoney(item.currentBid || item.startBid)}"
+              class="no-spin w-full rounded-2xl border border-ink/10 px-4 py-3 text-sm"
+              ${bidState.allowed ? "" : "disabled"}
+            />
+            <button
+              id="bid-step"
+              type="button"
+              class="rounded-full border border-ink/20 px-4 py-3 text-sm font-semibold text-ink"
+              aria-label="Increase bid"
+            >
+              ▲
+            </button>
+          </div>
+          <button
+            id="bid-submit"
+            type="submit"
+            class="w-full rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white"
+            ${bidState.allowed ? "" : "disabled"}
+          >
+            Place bid
+          </button>
+          ${
+            authMode === "local" && !isLocalSignedIn()
+              ? `<button id="local-signin" type="button" class="w-full rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Sign in</button>`
+              : ""
+          }
+          <p id="bid-hint" class="text-xs text-slate">${bidState.message}</p>
+        </form>
+      </div>
+      <div class="rounded-3xl border border-ink/10 bg-white p-6">
         <p class="text-xs uppercase tracking-[0.3em] text-slate">Bid history</p>
         <div class="mt-4 space-y-3">
           ${item.bids.length ?
@@ -160,6 +231,66 @@ const renderItem = (item: AuctionItem) => {
       </div>
     </aside>
   `;
+
+  const bidForm = container.querySelector<HTMLFormElement>("#bid-form");
+  const bidInput = container.querySelector<HTMLInputElement>("#bid-amount");
+  const bidHint = container.querySelector<HTMLParagraphElement>("#bid-hint");
+  const bidStep = container.querySelector<HTMLButtonElement>("#bid-step");
+  const localSignin = container.querySelector<HTMLButtonElement>("#local-signin");
+
+  const refreshBidState = () => {
+    const state = canBid(item);
+    if (bidInput) bidInput.disabled = !state.allowed;
+    const submit = container.querySelector<HTMLButtonElement>("#bid-submit");
+    if (submit) submit.disabled = !state.allowed;
+    if (bidHint) bidHint.textContent = state.message || "";
+  };
+
+  bidStep?.addEventListener("click", () => {
+    const currentValue = Number(bidInput?.value || 0);
+    const nextValue = currentValue >= minBid ? currentValue + item.increment : minBid;
+    if (bidInput) bidInput.value = String(nextValue);
+  });
+
+  localSignin?.addEventListener("click", () => {
+    setLocalSignedIn(true);
+    refreshBidState();
+  });
+
+  bidForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const state = canBid(item);
+    if (!state.allowed) {
+      if (bidHint) bidHint.textContent = state.message;
+      return;
+    }
+    const value = Number(bidInput?.value || 0);
+    const requiredBid = minBid;
+    if (!value || value < requiredBid) {
+      if (bidHint) bidHint.textContent = `Bid must be at least ${formatMoney(requiredBid)}.`;
+      return;
+    }
+    if ((value - requiredBid) % item.increment !== 0) {
+      if (bidHint) bidHint.textContent = `Bids must increase by ${formatMoney(item.increment)}.`;
+      return;
+    }
+    if (bidHint) bidHint.textContent = "Submitting bid...";
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/items/${item.id}/bids`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: value,
+          bidder: authMode === "local" ? "Local bidder" : "Member bidder"
+        })
+      });
+      if (!response.ok) throw new Error("Bid failed");
+      const updated = (await response.json()) as AuctionItem;
+      renderItem(updated);
+    } catch {
+      if (bidHint) bidHint.textContent = "Unable to submit bid. Please try again.";
+    }
+  });
 };
 
 const init = async () => {

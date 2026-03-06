@@ -8,6 +8,9 @@ const adLogout = document.querySelector<HTMLButtonElement>("#ad-logout");
 const continueBtn = document.querySelector<HTMLButtonElement>("#continue-btn");
 const signInNote = document.querySelector<HTMLParagraphElement>("#signin-note");
 
+const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
+const localAuthKey = "fmdq_local_auth";
+
 const adConfig = {
   auth: {
     clientId: import.meta.env.VITE_AAD_CLIENT_ID || "",
@@ -19,10 +22,15 @@ const adConfig = {
   }
 };
 
-const adEnabled = Boolean(adConfig.auth.clientId && adConfig.auth.authority);
+const adEnabled = authMode === "ad" && Boolean(adConfig.auth.clientId && adConfig.auth.authority);
 let msalClient: PublicClientApplication | null = null;
 let activeAccount: AccountInfo | null = null;
 let demoSignedIn = false;
+
+const isLocalSignedIn = () => sessionStorage.getItem(localAuthKey) === "true";
+const setLocalSignedIn = (value: boolean) => {
+  sessionStorage.setItem(localAuthKey, value ? "true" : "false");
+};
 
 const updateContinueState = (signedIn: boolean) => {
   if (!continueBtn) return;
@@ -87,6 +95,33 @@ const initDemoMode = () => {
 
 const initAd = async () => {
   if (!adStatus || !adUser || !adLogin || !adLogout) return;
+
+  if (authMode === "local") {
+    const signedIn = isLocalSignedIn();
+    updateStatus(signedIn, signedIn ? "Local user" : "Not signed in", signedIn ? "Local signed in" : "Local mode");
+    updateNote("Local testing mode enabled. Use sign in to continue.");
+    if (signedIn) {
+      setSignedInUi();
+    } else {
+      setSignedOutUi();
+    }
+
+    adLogin.addEventListener("click", () => {
+      setLocalSignedIn(true);
+      updateStatus(true, "Local user", "Local signed in");
+      updateNote("Local session active. You can continue.");
+      setSignedInUi();
+    });
+
+    adLogout.addEventListener("click", () => {
+      setLocalSignedIn(false);
+      updateStatus(false, "Not signed in", "Local mode");
+      updateNote("Signed out. Sign in again to continue.");
+      setSignedOutUi();
+    });
+
+    return;
+  }
 
   if (!adEnabled) {
     initDemoMode();

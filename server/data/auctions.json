@@ -11,13 +11,28 @@
       "startBid": 4500000,
       "reserve": 6200000,
       "increment": 50000,
-      "currentBid": 5750000,
-      "startTime": "2026-03-02T03:06:44.169Z",
-      "endTime": "2026-03-02T06:36:44.169Z",
+      "currentBid": 6000000,
+      "startTime": "2026-03-04T00:00:00.000Z",
+      "endTime": "2026-03-06T00:00:00.000Z",
       "description": "Well-maintained sedan, full service history available.",
       "images": [],
       "documents": [],
       "bids": [
+        {
+          "bidder": "Local bidder",
+          "amount": 6000000,
+          "time": "21:18"
+        },
+        {
+          "bidder": "Local bidder",
+          "amount": 5900000,
+          "time": "21:18"
+        },
+        {
+          "bidder": "Local bidder",
+          "amount": 5800000,
+          "time": "19:24"
+        },
         {
           "bidder": "J. Martins",
           "amount": 5400000,
@@ -47,13 +62,18 @@
       "startBid": 180000,
       "reserve": 260000,
       "increment": 5000,
-      "currentBid": 205000,
-      "startTime": "2026-03-02T04:36:44.169Z",
-      "endTime": "2026-03-02T05:46:44.169Z",
+      "currentBid": 210000,
+      "startTime": "2026-03-04T00:00:00.000Z",
+      "endTime": "2026-03-06T00:00:00.000Z",
       "description": "Screen intact, minor scratches on frame.",
       "images": [],
       "documents": [],
       "bids": [
+        {
+          "bidder": "Local bidder",
+          "amount": 210000,
+          "time": "21:19"
+        },
         {
           "bidder": "K. Yusuf",
           "amount": 190000,
