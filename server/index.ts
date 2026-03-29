@@ -78,6 +78,7 @@ type StoredItem = {
   documents: StoredFileRef[];
   bids: StoredBid[];
   createdAt: string;
+  archivedAt?: string | null;
 };
 
 type AuditEntry = {
@@ -109,6 +110,25 @@ type LegacyDatabase = {
   notificationQueue?: NotificationQueueItem[];
 };
 
+const defaultCategories = [
+  "Cars",
+  "Furniture",
+  "Household Appliances",
+  "Kitchen Appliances",
+  "Phones",
+  "Other"
+];
+
+type Role = "Guest" | "Bidder" | "Observer" | "Admin";
+
+type AuthContext = {
+  actor: string;
+  actorType: AuditEntry["actorType"];
+  role: Role;
+  trusted: boolean;
+  adminAuthorized: boolean;
+};
+
 const db = new DatabaseSync(sqlitePath);
 db.exec(`
   PRAGMA journal_mode = WAL;
@@ -130,7 +150,8 @@ db.exec(`
     start_time TEXT NOT NULL,
     end_time TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    archived_at TEXT
   );
 
   CREATE TABLE IF NOT EXISTS item_files (
@@ -173,11 +194,75 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS categories (
+    name TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_items_created_at ON items(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_bids_item_created_at ON bids(item_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_item_files_item_kind ON item_files(item_id, kind);
   CREATE INDEX IF NOT EXISTS idx_audits_created_at ON audits(created_at DESC);
 `);
+
+const itemColumns = db.prepare("PRAGMA table_info(items)").all() as Array<{ name: string }>;
+if (!itemColumns.some((column) => column.name === "archived_at")) {
+  db.exec("ALTER TABLE items ADD COLUMN archived_at TEXT");
+}
+
+const allowDevAuth =
+  process.env.ALLOW_DEV_AUTH === "true" ||
+  (typeof process.env.ALLOW_DEV_AUTH === "undefined" && process.env.NODE_ENV !== "production");
+
+const normalizeRole = (value: string): Role => {
+  if (value === "Admin" || value === "Bidder" || value === "Observer" || value === "Guest") {
+    return value;
+  }
+  return "Guest";
+};
+
+const isLoopbackAddress = (value: string) =>
+  value === "::1" ||
+  value === "127.0.0.1" ||
+  value === "::ffff:127.0.0.1" ||
+  value === "::ffff:localhost" ||
+  value.endsWith("/127.0.0.1");
+
+const getAuthContext = (req: express.Request): AuthContext => {
+  if (adminApiToken && req.header("x-admin-token") === adminApiToken) {
+    return {
+      actor: "Admin API token",
+      actorType: "integration",
+      role: "Admin",
+      trusted: true,
+      adminAuthorized: true
+    };
+  }
+
+  const remoteAddress = req.ip || req.socket.remoteAddress || "";
+  const authMode = String(req.header("x-auth-mode") || "").toLowerCase();
+  const userLabel = String(req.header("x-user") || "").trim();
+  const role = normalizeRole(String(req.header("x-role") || "Guest"));
+  const trustedLocalDevSession = allowDevAuth && authMode === "local" && isLoopbackAddress(remoteAddress);
+
+  if (trustedLocalDevSession && userLabel) {
+    return {
+      actor: userLabel,
+      actorType: "user",
+      role,
+      trusted: true,
+      adminAuthorized: role === "Admin"
+    };
+  }
+
+  return {
+    actor: "anonymous-client",
+    actorType: "system",
+    role: "Guest",
+    trusted: false,
+    adminAuthorized: false
+  };
+};
 
 const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "-");
 
@@ -215,6 +300,25 @@ const upload = multer({
 });
 
 const itemCountStmt = db.prepare("SELECT COUNT(*) as count FROM items");
+const categoryCountStmt = db.prepare("SELECT COUNT(*) as count FROM categories");
+const getCategoriesStmt = db.prepare(`
+  SELECT name
+  FROM categories
+  ORDER BY LOWER(name) ASC
+`);
+const insertCategoryStmt = db.prepare(`
+  INSERT OR IGNORE INTO categories (name, created_at)
+  VALUES (?, ?)
+`);
+const deleteCategoryStmt = db.prepare(`
+  DELETE FROM categories
+  WHERE name = ?
+`);
+const categoryInUseStmt = db.prepare(`
+  SELECT COUNT(*) as count
+  FROM items
+  WHERE category = ?
+`);
 const getItemsStmt = db.prepare(`
   SELECT
     id,
@@ -231,9 +335,32 @@ const getItemsStmt = db.prepare(`
     start_time as startTime,
     end_time as endTime,
     description,
-    created_at as createdAt
+    created_at as createdAt,
+    archived_at as archivedAt
   FROM items
+  WHERE archived_at IS NULL
   ORDER BY datetime(created_at) DESC
+`);
+const getAllItemsStmt = db.prepare(`
+  SELECT
+    id,
+    title,
+    category,
+    lot,
+    sku,
+    condition,
+    location,
+    start_bid as startBid,
+    reserve,
+    increment_amount as increment,
+    current_bid as currentBid,
+    start_time as startTime,
+    end_time as endTime,
+    description,
+    created_at as createdAt,
+    archived_at as archivedAt
+  FROM items
+  ORDER BY archived_at IS NOT NULL ASC, datetime(created_at) DESC
 `);
 const getItemByIdStmt = db.prepare(`
   SELECT
@@ -251,8 +378,19 @@ const getItemByIdStmt = db.prepare(`
     start_time as startTime,
     end_time as endTime,
     description,
-    created_at as createdAt
+    created_at as createdAt,
+    archived_at as archivedAt
   FROM items
+  WHERE id = ?
+`);
+const archiveItemStmt = db.prepare(`
+  UPDATE items
+  SET archived_at = ?
+  WHERE id = ?
+`);
+const restoreItemStmt = db.prepare(`
+  UPDATE items
+  SET archived_at = NULL
   WHERE id = ?
 `);
 const getItemFilesStmt = db.prepare(`
@@ -285,6 +423,23 @@ const insertBidStmt = db.prepare(`
 const updateItemBidStmt = db.prepare(`
   UPDATE items SET current_bid = ? WHERE id = ?
 `);
+const updateItemStmt = db.prepare(`
+  UPDATE items
+  SET
+    title = ?,
+    category = ?,
+    lot = ?,
+    sku = ?,
+    condition = ?,
+    location = ?,
+    start_bid = ?,
+    reserve = ?,
+    increment_amount = ?,
+    start_time = ?,
+    end_time = ?,
+    description = ?
+  WHERE id = ?
+`);
 const insertAuditStmt = db.prepare(`
   INSERT INTO audits (
     id, event_type, entity_type, entity_id, actor,
@@ -297,8 +452,9 @@ const insertNotificationStmt = db.prepare(`
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
-const getActor = (req: express.Request) => String(req.header("x-user") || "system");
-const getActorRole = (req: express.Request) => String(req.header("x-role") || "Guest");
+const getActor = (req: express.Request) => getAuthContext(req).actor;
+const getActorRole = (req: express.Request) => getAuthContext(req).role;
+const getActorType = (req: express.Request) => getAuthContext(req).actorType;
 const recentBidAttempts = new Map<string, number[]>();
 const processedBidKeys = new Map<string, string>();
 
@@ -323,14 +479,19 @@ const mapItem = (row: Record<string, unknown>): StoredItem => {
     images: files.filter((file) => file.kind === "image").map(({ name, url }) => ({ name, url })),
     documents: files.filter((file) => file.kind === "document").map(({ name, url }) => ({ name, url })),
     bids,
-    createdAt: String(row.createdAt)
+    createdAt: String(row.createdAt),
+    archivedAt: row.archivedAt ? String(row.archivedAt) : null
   };
 };
 
-const getItems = () => (getItemsStmt.all() as Array<Record<string, unknown>>).map(mapItem);
-const getItemById = (id: string) => {
+const getItems = (includeArchived = false) =>
+  ((includeArchived ? getAllItemsStmt : getItemsStmt).all() as Array<Record<string, unknown>>).map(mapItem);
+const getItemById = (id: string, includeArchived = false) => {
   const row = getItemByIdStmt.get(id) as Record<string, unknown> | undefined;
-  return row ? mapItem(row) : null;
+  if (!row) return null;
+  const item = mapItem(row);
+  if (!includeArchived && item.archivedAt) return null;
+  return item;
 };
 
 const appendAudit = (
@@ -367,6 +528,24 @@ const queueNotification = (
   );
 };
 
+const getCategories = () => (getCategoriesStmt.all() as Array<{ name: string }>).map((row) => row.name);
+
+const ensureCategory = (name: string) => {
+  const value = name.trim();
+  if (!value) return;
+  insertCategoryStmt.run(value, new Date().toISOString());
+};
+
+const removeStoredFile = (url: string) => {
+  if (!url.startsWith("/uploads/")) return;
+  const relativePath = url.replace(/^\/+/, "");
+  const filePath = path.normalize(path.join(__dirname, relativePath));
+  if (!filePath.startsWith(uploadsDir)) return;
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+};
+
 const toIso = (value: string) => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
@@ -381,7 +560,8 @@ const validateNewItem = (body: Record<string, string>) => {
   const location = (body.location || "").trim();
   const description = (body.description || "").trim();
   const startBid = Number(body.startBid);
-  const reserve = Number(body.reserve);
+  const rawReserve = (body.reserve || "").trim();
+  const reserve = rawReserve ? Number(rawReserve) : 0;
   const increment = Number(body.increment || Math.max(500, Math.round(startBid * 0.02)));
   const startTime = toIso(body.startTime || "");
   const endTime = toIso(body.endTime || "");
@@ -398,8 +578,11 @@ const validateNewItem = (body: Record<string, string>) => {
   if (!Number.isFinite(startBid) || startBid <= 0) {
     return { ok: false as const, error: "Starting bid must be greater than zero." };
   }
-  if (!Number.isFinite(reserve) || reserve < startBid) {
-    return { ok: false as const, error: "Reserve price must be at least the starting bid." };
+  if (!Number.isFinite(reserve) || reserve < 0) {
+    return { ok: false as const, error: "Reserve price cannot be negative." };
+  }
+  if (reserve > 0 && reserve < startBid) {
+    return { ok: false as const, error: "Reserve price must be at least the starting bid when provided." };
   }
   if (!Number.isFinite(increment) || increment <= 0) {
     return { ok: false as const, error: "Bid increment must be greater than zero." };
@@ -422,6 +605,17 @@ const validateNewItem = (body: Record<string, string>) => {
       endTime
     }
   };
+};
+
+const validateCategoryName = (value: string) => {
+  const name = value.trim();
+  if (!name) {
+    return { ok: false as const, error: "Category name is required." };
+  }
+  if (name.length > 60) {
+    return { ok: false as const, error: "Category name must be 60 characters or fewer." };
+  }
+  return { ok: true as const, value: name };
 };
 
 const formatBidTime = (createdAt: string) =>
@@ -461,22 +655,19 @@ const toCsv = (rows: Array<Record<string, string | number | boolean>>) => {
 };
 
 const requireAdminToken = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (!adminApiToken) {
-    next();
-    return;
-  }
-  if (req.header("x-admin-token") !== adminApiToken) {
-    res.status(403).json({ error: "Admin token required." });
+  if (!canManageItems(req)) {
+    res.status(403).json({
+      error: adminApiToken
+        ? "Admin token required."
+        : "Admin access is only available in trusted local testing or with an admin token."
+    });
     return;
   }
   next();
 };
 
 const canManageItems = (req: express.Request) => {
-  if (adminApiToken) {
-    return req.header("x-admin-token") === adminApiToken;
-  }
-  return getActorRole(req) === "Admin";
+  return getAuthContext(req).adminAuthorized;
 };
 
 const checkBidRateLimit = (actor: string, itemId: string) => {
@@ -506,6 +697,7 @@ const migrateLegacyJson = () => {
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const item of items) {
+      ensureCategory(item.category);
       insertItemStmt.run(
         item.id,
         item.title,
@@ -628,6 +820,7 @@ const seedIfEmpty = () => {
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const item of seedItems) {
+      ensureCategory(item.category);
       insertItemStmt.run(
         item.id,
         item.title,
@@ -667,6 +860,22 @@ const seedIfEmpty = () => {
   }
 };
 
+const seedCategoriesIfEmpty = () => {
+  const categoryCountRow = categoryCountStmt.get() as { count: number };
+  if (categoryCountRow.count > 0) return;
+
+  const allCategories = new Set<string>(defaultCategories);
+  const itemRows = db.prepare("SELECT DISTINCT category FROM items").all() as Array<{ category: string }>;
+  itemRows.forEach((row) => {
+    if (row.category) allCategories.add(String(row.category));
+  });
+
+  const createdAt = new Date().toISOString();
+  for (const category of allCategories) {
+    insertCategoryStmt.run(category, createdAt);
+  }
+};
+
 app.get("/api/health", (req, res) => {
   const itemsCount = Number((itemCountStmt.get() as { count: number }).count);
   const auditsCount = Number((db.prepare("SELECT COUNT(*) as count FROM audits").get() as { count: number }).count);
@@ -681,16 +890,95 @@ app.get("/api/health", (req, res) => {
 });
 
 app.get("/api/items", (req, res) => {
-  res.json(getItems());
+  const includeArchived = String(req.query.includeArchived || "") === "1";
+  if (includeArchived && !canManageItems(req)) {
+    res.status(403).json({ error: "Admin role required." });
+    return;
+  }
+  res.json(getItems(includeArchived));
 });
 
 app.get("/api/items/:id", (req, res) => {
-  const item = getItemById(req.params.id);
+  const includeArchived = String(req.query.includeArchived || "") === "1";
+  if (includeArchived && !canManageItems(req)) {
+    res.status(403).json({ error: "Admin role required." });
+    return;
+  }
+  const item = getItemById(req.params.id, includeArchived);
   if (!item) {
     res.status(404).json({ error: "Item not found" });
     return;
   }
   res.json(item);
+});
+
+app.get("/api/categories", (req, res) => {
+  res.json(getCategories());
+});
+
+app.post("/api/categories", express.json({ limit: "128kb" }), (req, res) => {
+  if (!canManageItems(req)) {
+    res.status(403).json({ error: "Admin role required." });
+    return;
+  }
+
+  const validation = validateCategoryName(String(req.body?.name || ""));
+  if (!validation.ok) {
+    res.status(400).json({ error: validation.error });
+    return;
+  }
+
+  const categoriesBefore = new Set(getCategories());
+  ensureCategory(validation.value);
+  const created = !categoriesBefore.has(validation.value);
+
+  appendAudit(req, {
+    eventType: created ? "CATEGORY_CREATED" : "CATEGORY_REUSED",
+    entityType: "system",
+    entityId: validation.value,
+    actor: getActor(req),
+    actorType: getActorType(req),
+    details: { name: validation.value }
+  });
+
+  res.status(created ? 201 : 200).json({ name: validation.value, created });
+});
+
+app.delete("/api/categories/:name", (req, res) => {
+  if (!canManageItems(req)) {
+    res.status(403).json({ error: "Admin role required." });
+    return;
+  }
+
+  const validation = validateCategoryName(decodeURIComponent(req.params.name || ""));
+  if (!validation.ok) {
+    res.status(400).json({ error: validation.error });
+    return;
+  }
+
+  const categories = new Set(getCategories());
+  if (!categories.has(validation.value)) {
+    res.status(404).json({ error: "Category not found." });
+    return;
+  }
+
+  const inUse = Number((categoryInUseStmt.get(validation.value) as { count: number }).count);
+  if (inUse > 0) {
+    res.status(409).json({ error: "Category is still assigned to auction items." });
+    return;
+  }
+
+  deleteCategoryStmt.run(validation.value);
+  appendAudit(req, {
+    eventType: "CATEGORY_DELETED",
+    entityType: "system",
+    entityId: validation.value,
+    actor: getActor(req),
+    actorType: getActorType(req),
+    details: { name: validation.value }
+  });
+
+  res.status(204).send();
 });
 
 app.get("/api/exports/items.csv", requireAdminToken, (req, res) => {
@@ -716,7 +1004,7 @@ app.get("/api/exports/items.csv", requireAdminToken, (req, res) => {
     entityType: "export",
     entityId: "items.csv",
     actor: getActor(req),
-    actorType: "user",
+    actorType: getActorType(req),
     details: { rowCount: rows.length }
   });
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -754,7 +1042,7 @@ app.get("/api/exports/audits.csv", requireAdminToken, (req, res) => {
     entityType: "export",
     entityId: "audits.csv",
     actor: getActor(req),
-    actorType: "user",
+    actorType: getActorType(req),
     details: { rowCount: rows.length }
   });
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -822,7 +1110,7 @@ app.post(
         entityType: "item",
         entityId: itemId,
         actor: getActor(req),
-        actorType: "user",
+        actorType: getActorType(req),
         details: {
           category: validation.value.category,
           lot: validation.value.lot,
@@ -831,6 +1119,7 @@ app.post(
           documentCount: documents.length
         }
       });
+      ensureCategory(validation.value.category);
       queueNotification("ITEM_CREATED", `Auction item created: ${validation.value.title}`, {
         itemId,
         title: validation.value.title,
@@ -846,6 +1135,186 @@ app.post(
     res.status(201).json(created);
   }
 );
+
+app.patch(
+  "/api/items/:id",
+  upload.fields([
+    { name: "images", maxCount: 10 },
+    { name: "documents", maxCount: 6 }
+  ]),
+  (req, res) => {
+    if (!canManageItems(req)) {
+      res.status(403).json({ error: "Admin role required." });
+      return;
+    }
+
+    const existing = getItemById(req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: "Item not found" });
+      return;
+    }
+
+    const body = req.body as Record<string, string>;
+    const validation = validateNewItem(body);
+    if (!validation.ok) {
+      res.status(400).json({ error: validation.error });
+      return;
+    }
+
+    const images = ((req.files as Record<string, Express.Multer.File[]>)?.images || []).map((file) => ({
+      name: file.originalname,
+      url: `/uploads/images/${file.filename}`
+    }));
+    const documents = ((req.files as Record<string, Express.Multer.File[]>)?.documents || []).map((file) => ({
+      name: file.originalname,
+      url: `/uploads/documents/${file.filename}`
+    }));
+
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      updateItemStmt.run(
+        validation.value.title,
+        validation.value.category,
+        validation.value.lot,
+        validation.value.sku,
+        validation.value.condition,
+        validation.value.location,
+        validation.value.startBid,
+        validation.value.reserve,
+        validation.value.increment,
+        validation.value.startTime,
+        validation.value.endTime,
+        validation.value.description,
+        existing.id
+      );
+      for (const image of images) {
+        insertItemFileStmt.run(randomUUID(), existing.id, "image", image.name, image.url);
+      }
+      for (const document of documents) {
+        insertItemFileStmt.run(randomUUID(), existing.id, "document", document.name, document.url);
+      }
+      appendAudit(req, {
+        eventType: "ITEM_UPDATED",
+        entityType: "item",
+        entityId: existing.id,
+        actor: getActor(req),
+        actorType: getActorType(req),
+        details: {
+          category: validation.value.category,
+          lot: validation.value.lot,
+          reserve: validation.value.reserve,
+          imageCountAdded: images.length,
+          documentCountAdded: documents.length
+        }
+      });
+      ensureCategory(validation.value.category);
+      queueNotification("ITEM_UPDATED", `Auction item updated: ${validation.value.title}`, {
+        itemId: existing.id,
+        title: validation.value.title,
+        category: validation.value.category
+      });
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+
+    const updated = getItemById(existing.id);
+    res.json(updated);
+  }
+);
+
+app.delete("/api/items/:id", (req, res) => {
+  if (!canManageItems(req)) {
+    res.status(403).json({ error: "Admin role required." });
+    return;
+  }
+
+  const existing = getItemById(req.params.id, true);
+  if (!existing) {
+    res.status(404).json({ error: "Item not found" });
+    return;
+  }
+  if (existing.archivedAt) {
+    res.status(409).json({ error: "Item is already archived." });
+    return;
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const archivedAt = new Date().toISOString();
+    archiveItemStmt.run(archivedAt, existing.id);
+    appendAudit(req, {
+      eventType: "ITEM_ARCHIVED",
+      entityType: "item",
+      entityId: existing.id,
+      actor: getActor(req),
+      actorType: getActorType(req),
+      details: {
+        title: existing.title,
+        lot: existing.lot,
+        imageCount: existing.images.length,
+        documentCount: existing.documents.length
+      }
+    });
+    queueNotification("ITEM_ARCHIVED", `Auction item archived: ${existing.title}`, {
+      itemId: existing.id,
+      title: existing.title,
+      lot: existing.lot
+    });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  res.status(204).send();
+});
+
+app.post("/api/items/:id/restore", (req, res) => {
+  if (!canManageItems(req)) {
+    res.status(403).json({ error: "Admin role required." });
+    return;
+  }
+
+  const existing = getItemById(req.params.id, true);
+  if (!existing) {
+    res.status(404).json({ error: "Item not found" });
+    return;
+  }
+  if (!existing.archivedAt) {
+    res.status(409).json({ error: "Item is already active." });
+    return;
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    restoreItemStmt.run(existing.id);
+    appendAudit(req, {
+      eventType: "ITEM_RESTORED",
+      entityType: "item",
+      entityId: existing.id,
+      actor: getActor(req),
+      actorType: getActorType(req),
+      details: {
+        title: existing.title,
+        lot: existing.lot
+      }
+    });
+    queueNotification("ITEM_RESTORED", `Auction item restored: ${existing.title}`, {
+      itemId: existing.id,
+      title: existing.title,
+      lot: existing.lot
+    });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  const restored = getItemById(existing.id, true);
+  res.json(restored);
+});
 
 app.post("/api/items/:id/bids", (req, res) => {
   const actor = getActor(req);
@@ -899,7 +1368,7 @@ app.post("/api/items/:id/bids", (req, res) => {
       entityType: "bid",
       entityId: item.id,
       actor,
-      actorType: "user",
+      actorType: getActorType(req),
       details: {
         amount,
         bidSequence,
@@ -924,6 +1393,7 @@ app.post("/api/items/:id/bids", (req, res) => {
 const start = () => {
   migrateLegacyJson();
   seedIfEmpty();
+  seedCategoriesIfEmpty();
   app.listen(port, () => {
     console.log(`Auction API running at http://localhost:${port}`);
     console.log(`Storage backend: sqlite (${sqlitePath})`);

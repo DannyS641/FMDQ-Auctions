@@ -3,21 +3,15 @@ import { PublicClientApplication, AccountInfo } from "@azure/msal-browser";
 import {
   clearAuthSession,
   getAuditHeaders,
+  hasAcceptedAgreements,
   isDemoSignedIn,
   isLocalSignedIn,
   readAuthSession,
+  setAcceptedAgreements,
   setDemoSignedIn,
   setLocalSignedIn,
   writeAuthSession
 } from "./auth";
-
-type Category =
-  | "Cars"
-  | "Furniture"
-  | "Household Appliances"
-  | "Kitchen Appliances"
-  | "Phones"
-  | "Other";
 
 type Condition = "New" | "Used" | "Fair" | "Damaged";
 
@@ -39,7 +33,7 @@ type FileRef = {
 type AuctionItem = {
   id: string;
   title: string;
-  category: Category;
+  category: string;
   lot: string;
   sku: string;
   condition: Condition;
@@ -55,15 +49,6 @@ type AuctionItem = {
   documents: FileRef[];
   bids: Bid[];
 };
-
-const categories: Category[] = [
-  "Cars",
-  "Furniture",
-  "Household Appliances",
-  "Kitchen Appliances",
-  "Phones",
-  "Other"
-];
 
 const conditions: Condition[] = ["New", "Used", "Fair", "Damaged"];
 
@@ -244,6 +229,7 @@ const seedItems: AuctionItem[] = [
 ];
 
 let items: AuctionItem[] = [...seedItems];
+let categories: string[] = Array.from(new Set(seedItems.map((item) => item.category))).sort((a, b) => a.localeCompare(b));
 
 const categoryTabs = document.querySelector<HTMLDivElement>("#category-tabs");
 const categoryFilters = document.querySelector<HTMLDivElement>("#category-filters");
@@ -264,15 +250,12 @@ const roleBadge = document.querySelector<HTMLParagraphElement>("#role-badge");
 const accessNote = document.querySelector<HTMLDivElement>("#access-note");
 
 const adminPanel = document.querySelector<HTMLElement>("#admin");
-const adminForm = document.querySelector<HTMLFormElement>("#admin-form");
-const adminCategory = document.querySelector<HTMLSelectElement>("#admin-category");
-const adminCondition = document.querySelector<HTMLSelectElement>("#admin-condition");
-const adminFeedback = document.querySelector<HTMLParagraphElement>("#admin-feedback");
 
 const adStatus = document.querySelector<HTMLSpanElement>("#ad-status");
 const adUser = document.querySelector<HTMLSpanElement>("#ad-user");
 const adLogin = document.querySelector<HTMLButtonElement>("#ad-login");
 const adLogout = document.querySelector<HTMLButtonElement>("#ad-logout");
+const activeRoleLabel = document.querySelector<HTMLSpanElement>("#active-role-label");
 
 const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
 
@@ -303,12 +286,18 @@ const bidderGroups = parseGroupEnv(import.meta.env.VITE_AAD_BIDDER_GROUPS || "")
 const observerGroups = parseGroupEnv(import.meta.env.VITE_AAD_OBSERVER_GROUPS || "");
 const devRole = (import.meta.env.VITE_DEV_ROLE || "").trim() as Role;
 
+const revealApp = () => {
+  window.requestAnimationFrame(() => {
+    document.body.removeAttribute("data-app-loading");
+  });
+};
+
 const state = {
-  selectedCategories: new Set<Category>(),
+  selectedCategories: new Set<string>(),
   selectedConditions: new Set<Condition>(),
   search: "",
   selectedItemId: items[0]?.id ?? "",
-  agreementsAccepted: false,
+  agreementsAccepted: hasAcceptedAgreements(),
   role: "Guest" as Role
 };
 
@@ -329,7 +318,9 @@ const canViewReserve = () => state.role === "Admin";
 
 const resolveRole = () => {
   if (authMode === "local") {
-    return isLocalSignedIn() ? devRole || "Bidder" : "Guest";
+    if (!isLocalSignedIn()) return "Guest";
+    const session = readAuthSession();
+    return (session.role as Role) || devRole || "Bidder";
   }
   if (!adEnabled) return devRole || "Guest";
   if (!activeAccount) return "Guest";
@@ -503,15 +494,32 @@ const updateSummaryCounts = () => {
   closingCount.textContent = String(closingSoon.length);
 };
 
+const syncCategoriesFromItems = () => {
+  categories = Array.from(new Set(items.map((item) => item.category))).sort((a, b) => a.localeCompare(b));
+};
+
+const fetchCategories = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/categories`);
+    if (!response.ok) throw new Error("Failed to load categories");
+    const data = (await response.json()) as string[];
+    categories = data.length ? data : Array.from(new Set(seedItems.map((item) => item.category)));
+  } catch {
+    syncCategoriesFromItems();
+  }
+};
+
 const fetchItems = async () => {
   try {
     const response = await fetch(`${API_BASE_URL}/api/items`);
     if (!response.ok) throw new Error("Failed to load items");
     const data = (await response.json()) as AuctionItem[];
     items = data.length ? data : [...seedItems];
+    syncCategoriesFromItems();
     state.selectedItemId = items[0]?.id ?? "";
   } catch {
     items = [...seedItems];
+    syncCategoriesFromItems();
     state.selectedItemId = items[0]?.id ?? "";
   }
 };
@@ -536,13 +544,14 @@ const renderItems = () => {
       const countdown = getCountdown(item);
       const highlight = item.id === state.selectedItemId ? "border-ink" : "border-ink/10";
       const currentBid = item.currentBid > 0 ? formatMoney(item.currentBid) : "No bids";
-      const reserveLabel = canViewReserve() ? formatMoney(item.reserve) : "Confidential";
+      const reserveLabel = item.reserve > 0
+        ? (canViewReserve() ? formatMoney(item.reserve) : "Confidential")
+        : "No reserve";
       const coverUrl = item.images[0]?.url;
-      const coverStyle = coverUrl ? `style="background-image: url('${resolveMediaUrl(coverUrl)}')"` : "";
       return `
         <article
           data-item-card="${item.id}"
-          class="card-hover grid min-h-[480px] grid-rows-[2rem_4rem_1.75rem_8.75rem_4rem_2.75rem] gap-y-3 rounded-3xl border ${highlight} bg-white p-5"
+          class="card-hover grid min-h-[520px] grid-rows-[2rem_4rem_1.75rem_11rem_4rem_2.75rem] gap-y-3 rounded-3xl border ${highlight} bg-white p-5"
         >
           <div class="flex items-center justify-between gap-3">
             <p class="text-xs uppercase tracking-[0.3em] text-slate">${item.category}</p>
@@ -555,7 +564,13 @@ const renderItems = () => {
           </div>
           <h3 class="text-lg font-semibold leading-snug text-ink clamp-2">${item.title}</h3>
           <p class="text-xs text-slate leading-tight">Lot ${item.lot} - ${item.location}</p>
-          <div class="h-full rounded-2xl photo-placeholder bg-cover bg-center" ${coverStyle}></div>
+          <div class="flex h-full items-center justify-center overflow-hidden rounded-2xl border border-ink/10 bg-white p-1">
+            ${
+              coverUrl
+                ? `<img src="${resolveMediaUrl(coverUrl)}" alt="${item.title}" class="h-full w-full object-contain" />`
+                : `<div class="h-full w-full rounded-2xl photo-placeholder"></div>`
+            }
+          </div>
           <div class="grid grid-cols-2 gap-4 text-sm">
             <div>
               <p class="text-xs uppercase tracking-[0.3em] text-slate">Current bid</p>
@@ -592,17 +607,18 @@ const renderDetail = () => {
       ? "Sign agreements, choose Bidder role, and sign in to place bids."
       : "Bidding is closed or not yet open for this item.";
 
-  const reserveLine = canViewReserve() ? formatMoney(item.reserve) : "Confidential";
+  const reserveLine = item.reserve > 0
+    ? (canViewReserve() ? formatMoney(item.reserve) : "Confidential")
+    : "No reserve";
   const mainImage = item.images[0]?.url;
-  const mainStyle = mainImage ? `style="background-image: url('${resolveMediaUrl(mainImage)}')"` : "";
   const thumbnailGrid = item.images.length > 1
     ? item.images
         .slice(1, 5)
         .map(
           (image) => `
-            <div class="h-16 rounded-2xl border border-ink/10 bg-ink/5 bg-cover bg-center" style="background-image: url('${resolveMediaUrl(
-              image.url
-            )}')"></div>
+            <div class="flex h-16 items-center justify-center overflow-hidden rounded-2xl border border-ink/10 bg-white p-1">
+              <img src="${resolveMediaUrl(image.url)}" alt="${image.name}" class="h-full w-full object-contain" />
+            </div>
           `
         )
         .join("")
@@ -631,7 +647,13 @@ const renderDetail = () => {
     </div>
     <div class="mt-6 grid gap-6 md:grid-cols-[0.9fr_1.1fr]">
       <div class="space-y-4">
-        <div class="h-56 rounded-3xl photo-placeholder bg-cover bg-center" ${mainStyle}></div>
+        <div class="flex h-72 items-center justify-center overflow-hidden rounded-3xl border border-ink/10 bg-white p-2">
+          ${
+            mainImage
+              ? `<img src="${resolveMediaUrl(mainImage)}" alt="${item.title}" class="h-full w-full object-contain" />`
+              : `<div class="h-full w-full rounded-3xl photo-placeholder"></div>`
+          }
+        </div>
         ${thumbnailGrid ? `<div class="grid grid-cols-4 gap-3">${thumbnailGrid}</div>` : ""}
         <div>
           <p class="text-xs uppercase tracking-[0.3em] text-slate">Documents</p>
@@ -824,6 +846,7 @@ const updateCountdowns = () => {
 
 const updateAgreementState = () => {
   state.agreementsAccepted = agreements.every((checkbox) => checkbox.checked);
+  setAcceptedAgreements(state.agreementsAccepted);
   if (agreementHint) {
     agreementHint.classList.toggle("hidden", state.agreementsAccepted);
   }
@@ -832,14 +855,21 @@ const updateAgreementState = () => {
 
 const updateRoleUi = () => {
   state.role = resolveRole();
+  const session = readAuthSession();
+  if (session.signedIn) {
+    writeAuthSession({ ...session, role: state.role });
+  }
   if (roleBadge) roleBadge.textContent = state.role;
+  if (activeRoleLabel) {
+    activeRoleLabel.textContent = state.role;
+  }
   if (accessNote) {
     accessNote.textContent = adEnabled
       ? activeAccount
         ? "Role assigned from Entra ID groups."
         : "Sign in with AD to resolve your role."
       : authMode === "local"
-        ? "Local testing mode enabled."
+        ? `Local testing mode enabled. Active role: ${state.role}.`
         : devRole
           ? `Dev role override active: ${devRole}.`
           : "AD not configured. Demo mode enabled.";
@@ -852,87 +882,18 @@ const updateRoleUi = () => {
   renderHistory();
 };
 
-const handleAdminSubmit = () => {
-  if (!adminForm || !adminCategory || !adminCondition || !adminFeedback) return;
-  adminForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (state.role !== "Admin") {
-      adminFeedback.textContent = "Only staff admins can upload items.";
-      return;
-    }
-
-    const title = (document.querySelector<HTMLInputElement>("#admin-title")?.value || "").trim();
-    const sku = (document.querySelector<HTMLInputElement>("#admin-sku")?.value || "").trim();
-    const lot = (document.querySelector<HTMLInputElement>("#admin-lot")?.value || "").trim();
-    const location = (document.querySelector<HTMLInputElement>("#admin-location")?.value || "").trim();
-    const startTime = document.querySelector<HTMLInputElement>("#admin-start")?.value;
-    const endTime = document.querySelector<HTMLInputElement>("#admin-end")?.value;
-    const startBid = Number(document.querySelector<HTMLInputElement>("#admin-starting")?.value || 0);
-    const reserve = Number(document.querySelector<HTMLInputElement>("#admin-reserve")?.value || 0);
-    const description = (document.querySelector<HTMLTextAreaElement>("#admin-description")?.value || "").trim();
-    const imagesInput = document.querySelector<HTMLInputElement>("#admin-images");
-    const documentsInput = document.querySelector<HTMLInputElement>("#admin-documents");
-
-    if (!title || !sku || !lot || !location || !startTime || !endTime || !startBid || !reserve) {
-      adminFeedback.textContent = "Please complete all required fields.";
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("title", title);
-    formData.append("category", adminCategory.value);
-    formData.append("lot", lot);
-    formData.append("sku", sku);
-    formData.append("condition", adminCondition.value);
-    formData.append("location", location);
-    formData.append("startBid", String(startBid));
-    formData.append("reserve", String(reserve));
-    formData.append("startTime", startTime);
-    formData.append("endTime", endTime);
-    formData.append("description", description);
-
-    if (imagesInput?.files) {
-      Array.from(imagesInput.files).forEach((file) => formData.append("images", file));
-    }
-
-    if (documentsInput?.files) {
-      Array.from(documentsInput.files).forEach((file) => formData.append("documents", file));
-    }
-
-    adminFeedback.textContent = "Uploading item...";
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/items`, {
-        method: "POST",
-        headers: getAuditHeaders(state.role),
-        body: formData
-      });
-      if (!response.ok) throw new Error("Upload failed");
-      const created = (await response.json()) as AuctionItem;
-      upsertItem(created);
-      state.selectedItemId = created.id;
-      adminForm.reset();
-      seedAdminSelectors();
-      adminFeedback.textContent = "Item added and published to the auction grid.";
-      renderItems();
-      renderDetail();
-      renderHistory();
-    } catch {
-      adminFeedback.textContent = "Unable to upload. Check the API service and try again.";
-    }
-  });
-};
-
 const initAd = async () => {
   if (!adStatus || !adUser || !adLogin || !adLogout) return;
 
   if (authMode === "local") {
     const signedIn = isLocalSignedIn();
+    const persistedRole = (readAuthSession().role as Role) || devRole || "Bidder";
     adStatus.textContent = signedIn ? "Local signed in" : "Local mode";
-    adUser.textContent = signedIn ? "Local user" : "Not signed in";
+    adUser.textContent = signedIn ? `${persistedRole} tester` : "Not signed in";
     adLogin.disabled = false;
     adLogin.classList.remove("opacity-50", "cursor-not-allowed");
     if (signedIn) {
-      writeAuthSession({ mode: "local", signedIn: true, displayName: "Local user" });
+      writeAuthSession({ mode: "local", signedIn: true, displayName: `${persistedRole} tester`, role: persistedRole });
       adLogin.classList.add("hidden");
       adLogout.classList.remove("hidden");
     } else {
@@ -940,10 +901,11 @@ const initAd = async () => {
       adLogout.classList.add("hidden");
     }
     adLogin.addEventListener("click", () => {
+      const role = ((readAuthSession().role as Role) || devRole || "Bidder");
       setLocalSignedIn(true);
       adStatus.textContent = "Local signed in";
-      adUser.textContent = "Local user";
-      writeAuthSession({ mode: "local", signedIn: true, displayName: "Local user" });
+      adUser.textContent = `${role} tester`;
+      writeAuthSession({ mode: "local", signedIn: true, displayName: `${role} tester`, role });
       adLogin.classList.add("hidden");
       adLogout.classList.remove("hidden");
       updateRoleUi();
@@ -968,7 +930,7 @@ const initAd = async () => {
     adLogin.disabled = false;
     adLogin.classList.remove("opacity-50", "cursor-not-allowed");
     if (demoSignedIn) {
-      writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user" });
+      writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user", role: state.role });
       adLogin.classList.add("hidden");
       adLogout.classList.remove("hidden");
     } else {
@@ -981,7 +943,7 @@ const initAd = async () => {
       adStatus.textContent = demoSignedIn ? "Demo signed in" : "Demo mode";
       adUser.textContent = demoSignedIn ? "Demo user" : "No AD config";
       if (demoSignedIn) {
-        writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user" });
+        writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user", role: state.role });
         adLogin.classList.add("hidden");
         adLogout.classList.remove("hidden");
       } else {
@@ -1023,7 +985,8 @@ const initAd = async () => {
     writeAuthSession({
       mode: "ad",
       signedIn: true,
-      displayName: activeAccount.name || activeAccount.username || "Signed in"
+      displayName: activeAccount.name || activeAccount.username || "Signed in",
+      role: state.role
     });
     adLogin.classList.add("hidden");
     adLogout.classList.remove("hidden");
@@ -1049,7 +1012,8 @@ const initAd = async () => {
       writeAuthSession({
         mode: "ad",
         signedIn: true,
-        displayName: activeAccount?.name || activeAccount?.username || "Signed in"
+        displayName: activeAccount?.name || activeAccount?.username || "Signed in",
+        role: state.role
       });
       adLogin.classList.add("hidden");
       adLogout.classList.remove("hidden");
@@ -1082,7 +1046,7 @@ const wireEvents = () => {
       state.selectedCategories.clear();
     } else {
       state.selectedCategories.clear();
-      state.selectedCategories.add(value as Category);
+      state.selectedCategories.add(value);
     }
     renderCategoryTabs();
     renderCategoryFilters();
@@ -1091,7 +1055,7 @@ const wireEvents = () => {
 
   categoryFilters?.addEventListener("change", (event) => {
     const target = event.target as HTMLInputElement;
-    const value = target.dataset.categoryFilter as Category | undefined;
+    const value = target.dataset.categoryFilter;
     if (!value) return;
     if (target.checked) {
       state.selectedCategories.add(value);
@@ -1148,40 +1112,27 @@ const wireEvents = () => {
 
 };
 
-const seedAdminSelectors = () => {
-  if (adminCategory) {
-    adminCategory.innerHTML = categories
-      .map((category) => `<option value="${category}">${category}</option>`)
-      .join("");
-  }
-  if (adminCondition) {
-    adminCondition.innerHTML = conditions
-      .map((condition) => `<option value="${condition}">${condition}</option>`)
-      .join("");
-  }
-
-  const startInput = document.querySelector<HTMLInputElement>("#admin-start");
-  const endInput = document.querySelector<HTMLInputElement>("#admin-end");
-  const startTime = new Date(Date.now() + 30 * 60 * 1000);
-  const endTime = new Date(Date.now() + 2 * 60 * 60 * 1000);
-  if (startInput) startInput.value = startTime.toISOString().slice(0, 16);
-  if (endInput) endInput.value = endTime.toISOString().slice(0, 16);
-};
-
 const init = async () => {
+  agreements.forEach((checkbox) => {
+    checkbox.checked = state.agreementsAccepted;
+  });
+  if (agreementHint) {
+    agreementHint.classList.toggle("hidden", state.agreementsAccepted);
+  }
+
   await fetchItems();
+  await fetchCategories();
+  categories = Array.from(new Set([...categories, ...items.map((item) => item.category)])).sort((a, b) => a.localeCompare(b));
   renderCategoryTabs();
   renderCategoryFilters();
   renderConditionFilters();
   renderItems();
   renderDetail();
   renderHistory();
-  updateAgreementState();
-  seedAdminSelectors();
-  handleAdminSubmit();
   wireEvents();
   initAd();
   updateRoleUi();
+  revealApp();
   setInterval(updateCountdowns, 1000);
 };
 

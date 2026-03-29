@@ -10,9 +10,36 @@
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600&display=swap"
       rel="stylesheet"
     />
+    <style>
+      body[data-app-loading="true"] {
+        margin: 0;
+        background: #e6e8eb;
+      }
+
+      body[data-app-loading="true"] [data-app-root] {
+        visibility: hidden;
+      }
+
+      [data-app-loader] {
+        display: none;
+      }
+
+      body[data-app-loading="true"] [data-app-loader] {
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        padding: 24px;
+      }
+    </style>
   </head>
-  <body>
-    <div class="min-h-screen bg-ash flex flex-col">
+  <body data-app-loading="true">
+    <div data-app-loader>
+      <div style="width:min(560px,100%);border:1px solid rgba(15,23,42,.08);border-radius:32px;background:rgba(255,255,255,.92);padding:40px 32px;text-align:center;box-shadow:0 24px 70px rgba(148,163,184,.18);font-family:'Space Grotesk',sans-serif;color:#0f172a;">
+        <img src="/slides/fmdq-logo.png" alt="FMDQ" style="height:44px;width:auto;" />
+        <p style="margin:20px 0 0;font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:#64748b;">Loading auctions portal</p>
+      </div>
+    </div>
+    <div class="min-h-screen bg-ash flex flex-col" data-app-root>
       <header class="bg-white text-ink flex flex-1 flex-col">
         <nav
           class="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-6 px-6 py-6"

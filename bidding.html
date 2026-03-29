@@ -10,9 +10,36 @@
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,600&display=swap"
       rel="stylesheet"
     />
+    <style>
+      body[data-app-loading="true"] {
+        margin: 0;
+        background: #e6e8eb;
+      }
+
+      body[data-app-loading="true"] [data-app-root] {
+        visibility: hidden;
+      }
+
+      [data-app-loader] {
+        display: none;
+      }
+
+      body[data-app-loading="true"] [data-app-loader] {
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        padding: 24px;
+      }
+    </style>
   </head>
-  <body>
-    <div class="min-h-screen bg-ash">
+  <body data-app-loading="true">
+    <div data-app-loader>
+      <div style="width:min(560px,100%);border:1px solid rgba(15,23,42,.08);border-radius:32px;background:rgba(255,255,255,.92);padding:40px 32px;text-align:center;box-shadow:0 24px 70px rgba(148,163,184,.18);font-family:'Space Grotesk',sans-serif;color:#0f172a;">
+        <img src="/slides/fmdq-logo.png" alt="FMDQ" style="height:44px;width:auto;" />
+        <p style="margin:20px 0 0;font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:#64748b;">Loading auction desk</p>
+      </div>
+    </div>
+    <div class="min-h-screen bg-ash" data-app-root>
       <header class="border-b border-ink/10 bg-white">
         <nav class="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-6 px-6 py-6">
           <div class="flex items-center gap-3">
@@ -22,6 +49,10 @@
             <div class="rounded-full border border-ink/10 bg-ink/5 px-4 py-2">
               <span class="text-slate">AD status:</span>
               <span class="ml-2 font-semibold text-ink" id="ad-status">Loading</span>
+            </div>
+            <div class="rounded-full border border-ink/10 bg-[#fff7e8] px-4 py-2">
+              <span class="text-[#9a6408]">Active role:</span>
+              <span class="ml-2 font-semibold text-ink" id="active-role-label">Guest</span>
             </div>
             <div class="rounded-full border border-ink/10 bg-ink/5 px-4 py-2">
               <span class="text-slate">User:</span>
@@ -121,28 +152,11 @@
           <div class="flex flex-wrap items-center justify-between gap-4">
             <div>
               <p class="text-xs uppercase tracking-[0.3em] text-slate">Admin</p>
-              <h2 class="mt-2 text-2xl font-semibold text-ink">Upload auction items</h2>
-              <p class="mt-2 text-sm text-slate">Fast entry form for staff. Items appear instantly in the live grid.</p>
+              <h2 class="mt-2 text-2xl font-semibold text-ink">Manage auction items</h2>
+              <p class="mt-2 text-sm text-slate">Create new listings, edit current items, and remove items from a dedicated admin workspace.</p>
             </div>
-            <div class="text-xs text-slate" id="admin-status">Staff-only</div>
+            <a href="/admin-item.html" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">Open item manager</a>
           </div>
-          <form id="admin-form" class="mt-6 grid gap-4 md:grid-cols-2">
-            <input id="admin-title" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm" placeholder="Item title" required />
-            <input id="admin-sku" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm" placeholder="SKU / Asset code" required />
-            <input id="admin-lot" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm" placeholder="Lot number" required />
-            <select id="admin-category" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm"></select>
-            <select id="admin-condition" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm"></select>
-            <input id="admin-location" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm" placeholder="Location" required />
-            <input id="admin-start" type="datetime-local" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm" required />
-            <input id="admin-end" type="datetime-local" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm" required />
-            <input id="admin-starting" type="number" min="0" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm" placeholder="Starting bid (NGN)" required />
-            <input id="admin-reserve" type="number" min="0" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm" placeholder="Reserve price (NGN)" required />
-            <textarea id="admin-description" class="md:col-span-2 rounded-2xl border border-ink/10 px-4 py-3 text-sm" rows="3" placeholder="Item description"></textarea>
-            <input id="admin-images" type="file" multiple class="md:col-span-2 rounded-2xl border border-ink/10 px-4 py-3 text-sm" />
-            <input id="admin-documents" type="file" multiple class="md:col-span-2 rounded-2xl border border-ink/10 px-4 py-3 text-sm" />
-            <button type="submit" class="md:col-span-2 rounded-full bg-ink px-6 py-3 text-sm font-semibold text-white">Add item to auction</button>
-            <p id="admin-feedback" class="md:col-span-2 text-xs text-slate"></p>
-          </form>
         </section>
       </main>
 
@@ -157,4 +171,3 @@
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
-

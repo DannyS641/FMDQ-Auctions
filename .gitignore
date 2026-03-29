@@ -10,3 +10,8 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 tools/ffmpeg/ffmpeg.zip
+*.tsbuildinfo
+server/data/*.sqlite
+server/data/*.sqlite-shm
+server/data/*.sqlite-wal
+server/uploads/

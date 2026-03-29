@@ -15,7 +15,8 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         bidding: resolve(__dirname, "bidding.html"),
         item: resolve(__dirname, "item.html"),
-        signin: resolve(__dirname, "signin.html")
+        signin: resolve(__dirname, "signin.html"),
+        adminItem: resolve(__dirname, "admin-item.html")
       }
     }
   }

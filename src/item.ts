@@ -1,6 +1,7 @@
 ﻿import "./styles.css";
 import {
   getAuditHeaders,
+  hasAcceptedAgreements,
   isLocalSignedIn,
   readAuthSession,
   setLocalSignedIn,
@@ -41,6 +42,13 @@ type AuctionItem = {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
 const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
 const adEnabled = authMode === "ad" && Boolean(import.meta.env.VITE_AAD_CLIENT_ID && import.meta.env.VITE_AAD_AUTHORITY);
+const devRole = (import.meta.env.VITE_DEV_ROLE || "Bidder").trim() || "Bidder";
+
+const revealApp = () => {
+  window.requestAnimationFrame(() => {
+    document.body.removeAttribute("data-app-loading");
+  });
+};
 
 const formatMoney = (value: number) => `NGN ${value.toLocaleString("en-NG")}`;
 const formatDate = (value: string) => {
@@ -65,6 +73,12 @@ const canBid = (item: AuctionItem) => {
   if (getStatus(item) !== "Live") {
     return { allowed: false, message: "Bidding is closed or not yet open for this item." };
   }
+  if (!hasAcceptedAgreements()) {
+    return {
+      allowed: false,
+      message: "Accept the Terms and Conditions and Auction Rules on the listings page before placing a bid."
+    };
+  }
   if (authMode === "local") {
     return isLocalSignedIn()
       ? { allowed: true, message: "" }
@@ -85,6 +99,14 @@ const getQuery = () => {
   return params.get("id");
 };
 
+const getLocalTestingRole = () => {
+  const session = readAuthSession();
+  if (session.role && session.role !== "Guest") return session.role;
+  return devRole;
+};
+
+const getLocalDisplayName = (role: string) => `${role} tester`;
+
 const renderEmpty = (message: string) => {
   const container = document.querySelector<HTMLDivElement>("#item-view");
   if (!container) return;
@@ -94,6 +116,7 @@ const renderEmpty = (message: string) => {
       <p class="mt-3 text-sm text-slate">${message}</p>
     </div>
   `;
+  revealApp();
 };
 
 const renderItem = (item: AuctionItem) => {
@@ -101,13 +124,14 @@ const renderItem = (item: AuctionItem) => {
   if (!container) return;
   const bidState = canBid(item);
   const minBid = Math.max(item.currentBid || item.startBid, item.startBid) + item.increment;
+  const session = readAuthSession();
 
   const gallery = item.images.length
     ? item.images
         .map(
           (image) => `
-          <div class="h-36 overflow-hidden rounded-2xl border border-ink/10 bg-ink/5">
-            <img src="${API_BASE_URL}${image.url}" alt="${image.name}" class="h-full w-full object-cover" />
+          <div class="flex h-52 items-center justify-center overflow-hidden rounded-2xl border border-ink/10 bg-white p-1">
+            <img src="${API_BASE_URL}${image.url}" alt="${image.name}" class="h-full w-full object-contain" />
           </div>
         `
         )
@@ -179,6 +203,11 @@ const renderItem = (item: AuctionItem) => {
             <span class="font-semibold">${formatDate(item.endTime)}</span>
           </div>
         </div>
+        ${
+          session.role === "Admin"
+            ? `<a href="/admin-item.html?id=${item.id}" class="mt-5 inline-flex rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Edit item</a>`
+            : ""
+        }
       </div>
       <div class="rounded-3xl border border-ink/10 bg-white p-6">
         <p class="text-xs uppercase tracking-[0.3em] text-slate">Place bid</p>
@@ -198,6 +227,7 @@ const renderItem = (item: AuctionItem) => {
               type="button"
               class="rounded-full border border-ink/20 px-4 py-3 text-sm font-semibold text-ink"
               aria-label="Increase bid"
+              ${bidState.allowed ? "" : "disabled"}
             >
               ▲
             </button>
@@ -237,6 +267,7 @@ const renderItem = (item: AuctionItem) => {
       </div>
     </aside>
   `;
+  revealApp();
 
   const bidForm = container.querySelector<HTMLFormElement>("#bid-form");
   const bidInput = container.querySelector<HTMLInputElement>("#bid-amount");
@@ -249,6 +280,7 @@ const renderItem = (item: AuctionItem) => {
     if (bidInput) bidInput.disabled = !state.allowed;
     const submit = container.querySelector<HTMLButtonElement>("#bid-submit");
     if (submit) submit.disabled = !state.allowed;
+    if (bidStep) bidStep.disabled = !state.allowed;
     if (bidHint) bidHint.textContent = state.message || "";
   };
 
@@ -259,8 +291,9 @@ const renderItem = (item: AuctionItem) => {
   });
 
   localSignin?.addEventListener("click", () => {
+    const role = getLocalTestingRole();
     setLocalSignedIn(true);
-    writeAuthSession({ mode: "local", signedIn: true, displayName: "Local user" });
+    writeAuthSession({ mode: "local", signedIn: true, displayName: getLocalDisplayName(role), role });
     refreshBidState();
   });
 
@@ -328,4 +361,3 @@ const init = async () => {
 };
 
 init();
-

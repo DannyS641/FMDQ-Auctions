@@ -4,10 +4,25 @@ import {
   clearAuthSession,
   isDemoSignedIn,
   isLocalSignedIn,
+  readAuthSession,
   setDemoSignedIn,
   setLocalSignedIn,
   writeAuthSession
 } from "./auth";
+
+type LocalTestRole = "Admin" | "Bidder" | "Observer";
+
+const localRoleOptions: LocalTestRole[] = ["Admin", "Bidder", "Observer"];
+const normalizeLocalRole = (value: string): LocalTestRole =>
+  localRoleOptions.includes(value as LocalTestRole) ? (value as LocalTestRole) : "Bidder";
+const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
+const devRole = normalizeLocalRole((import.meta.env.VITE_DEV_ROLE || "Bidder").trim() || "Bidder");
+
+const revealApp = () => {
+  window.requestAnimationFrame(() => {
+    document.body.removeAttribute("data-app-loading");
+  });
+};
 
 const renderSigninPage = () => {
   document.body.innerHTML = `
@@ -49,6 +64,14 @@ const renderSigninPage = () => {
                   <p class="text-[11px] uppercase tracking-[0.28em] text-slate">User</p>
                   <p id="ad-user" class="mt-1 font-display text-base font-semibold text-ink">No active session</p>
                 </div>
+                <label id="local-role-wrap" class="hidden rounded-[1.5rem] border border-ink/10 bg-[#faf9f7] px-5 py-4">
+                  <span class="text-[11px] uppercase tracking-[0.28em] text-slate">Test role</span>
+                  <select id="local-role" class="mt-2 w-full bg-transparent font-display text-base font-semibold text-ink">
+                    ${localRoleOptions
+                      .map((role) => `<option value="${role}" ${role === normalizeLocalRole(devRole) ? "selected" : ""}>${role}</option>`)
+                      .join("")}
+                  </select>
+                </label>
               </div>
 
               <div class="my-6 flex items-center gap-4">
@@ -89,14 +112,15 @@ const renderSigninPage = () => {
 };
 
 renderSigninPage();
+revealApp();
 
 const adUser = document.querySelector<HTMLParagraphElement>("#ad-user");
 const adLogin = document.querySelector<HTMLButtonElement>("#ad-login");
 const adLogout = document.querySelector<HTMLButtonElement>("#ad-logout");
 const continueBtn = document.querySelector<HTMLButtonElement>("#continue-btn");
 const signInNote = document.querySelector<HTMLParagraphElement>("#signin-note");
-
-const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
+const localRoleWrap = document.querySelector<HTMLLabelElement>("#local-role-wrap");
+const localRoleSelect = document.querySelector<HTMLSelectElement>("#local-role");
 
 const adConfig = {
   auth: {
@@ -113,6 +137,9 @@ const adEnabled = authMode === "ad" && Boolean(adConfig.auth.clientId && adConfi
 let msalClient: PublicClientApplication | null = null;
 let activeAccount: AccountInfo | null = null;
 let demoSignedIn = false;
+
+const getSelectedLocalRole = () => normalizeLocalRole(localRoleSelect?.value || devRole);
+const getLocalDisplayName = (role: LocalTestRole) => `${role} tester`;
 
 const updateContinueState = (signedIn: boolean) => {
   if (!continueBtn) return;
@@ -152,7 +179,7 @@ const initDemoMode = () => {
   updateStatus(demoSignedIn, demoSignedIn ? "Demo user" : "No AD config");
   updateNote("Demo mode is active for this environment.");
   if (demoSignedIn) {
-    writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user" });
+    writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user", role: "Bidder" });
     setSignedInUi();
   } else {
     setSignedOutUi();
@@ -164,7 +191,7 @@ const initDemoMode = () => {
     updateStatus(demoSignedIn, demoSignedIn ? "Demo user" : "No AD config");
     updateNote(demoSignedIn ? "Demo mode is active. You can continue." : "Demo mode is active for this environment.");
     if (demoSignedIn) {
-      writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user" });
+      writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user", role: "Bidder" });
       setSignedInUi();
     } else {
       setSignedOutUi();
@@ -184,21 +211,35 @@ const initAd = async () => {
   if (!adLogin || !adLogout) return;
 
   if (authMode === "local") {
+    localRoleWrap?.classList.remove("hidden");
+    const persistedRole = normalizeLocalRole(readAuthSession().role || devRole);
+    if (localRoleSelect) localRoleSelect.value = persistedRole;
     const signedIn = isLocalSignedIn();
-    updateStatus(signedIn, signedIn ? "Local user" : "Not signed in");
-    updateNote("Local testing mode is active. Use sign in to continue.");
+    const selectedRole = getSelectedLocalRole();
+    updateStatus(signedIn, signedIn ? getLocalDisplayName(selectedRole) : "Not signed in");
+    updateNote(`Local testing mode is active. Selected role: ${selectedRole}.`);
     if (signedIn) {
-      writeAuthSession({ mode: "local", signedIn: true, displayName: "Local user" });
+      writeAuthSession({ mode: "local", signedIn: true, displayName: getLocalDisplayName(selectedRole), role: selectedRole });
       setSignedInUi();
     } else {
       setSignedOutUi();
     }
 
+    localRoleSelect?.addEventListener("change", () => {
+      const role = getSelectedLocalRole();
+      updateStatus(isLocalSignedIn(), isLocalSignedIn() ? getLocalDisplayName(role) : "Not signed in");
+      updateNote(`Local testing mode is active. Selected role: ${role}.`);
+      if (isLocalSignedIn()) {
+        writeAuthSession({ mode: "local", signedIn: true, displayName: getLocalDisplayName(role), role });
+      }
+    });
+
     adLogin.addEventListener("click", () => {
+      const role = getSelectedLocalRole();
       setLocalSignedIn(true);
-      updateStatus(true, "Local user");
-      updateNote("Local testing mode is active. You can continue.");
-      writeAuthSession({ mode: "local", signedIn: true, displayName: "Local user" });
+      updateStatus(true, getLocalDisplayName(role));
+      updateNote(`Local testing mode is active. Signed in as ${role}.`);
+      writeAuthSession({ mode: "local", signedIn: true, displayName: getLocalDisplayName(role), role });
       setSignedInUi();
     });
 
@@ -233,7 +274,8 @@ const initAd = async () => {
     writeAuthSession({
       mode: "ad",
       signedIn: true,
-      displayName: activeAccount.name || activeAccount.username || "Signed in"
+      displayName: activeAccount.name || activeAccount.username || "Signed in",
+      role: "Bidder"
     });
     setSignedInUi();
   } else {
@@ -255,7 +297,8 @@ const initAd = async () => {
       writeAuthSession({
         mode: "ad",
         signedIn: true,
-        displayName: activeAccount?.name || activeAccount?.username || "Signed in"
+        displayName: activeAccount?.name || activeAccount?.username || "Signed in",
+        role: "Bidder"
       });
       setSignedInUi();
     } catch (error) {

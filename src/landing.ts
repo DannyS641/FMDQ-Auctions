@@ -1,5 +1,11 @@
 ﻿import "./styles.css";
 
+const revealApp = () => {
+  window.requestAnimationFrame(() => {
+    document.body.removeAttribute("data-app-loading");
+  });
+};
+
 const setupReveals = () => {
   const elements = Array.from(document.querySelectorAll<HTMLElement>("[data-reveal]"));
   if (!elements.length) return;
@@ -26,3 +32,4 @@ const setupReveals = () => {
 };
 
 setupReveals();
+revealApp();

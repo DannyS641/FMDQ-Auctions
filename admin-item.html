@@ -1,9 +1,9 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FMDQ Auctions - Sign In</title>
+    <title>FMDQ Auctions - Item Manager</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -13,10 +13,10 @@
     <style>
       body[data-app-loading="true"] {
         margin: 0;
-        background: #eef2f1;
+        background: #e6e8eb;
       }
 
-      body[data-app-loading="true"] > :not([data-app-loader]) {
+      body[data-app-loading="true"] [data-app-root] {
         visibility: hidden;
       }
 
@@ -34,11 +34,12 @@
   </head>
   <body data-app-loading="true">
     <div data-app-loader>
-      <div style="width:min(560px,100%);border:1px solid rgba(15,23,42,.08);border-radius:32px;background:rgba(255,255,255,.88);padding:40px 32px;text-align:center;box-shadow:0 24px 70px rgba(148,163,184,.18);font-family:'Space Grotesk',sans-serif;color:#0f172a;">
+      <div style="width:min(560px,100%);border:1px solid rgba(15,23,42,.08);border-radius:32px;background:rgba(255,255,255,.92);padding:40px 32px;text-align:center;box-shadow:0 24px 70px rgba(148,163,184,.18);font-family:'Space Grotesk',sans-serif;color:#0f172a;">
         <img src="/slides/fmdq-logo.png" alt="FMDQ" style="height:44px;width:auto;" />
-        <p style="margin:20px 0 0;font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:#64748b;">Loading secure access</p>
+        <p style="margin:20px 0 0;font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:#64748b;">Loading item manager</p>
       </div>
     </div>
-    <script type="module" src="/src/signin.ts"></script>
+    <div id="admin-item-app" data-app-root></div>
+    <script type="module" src="/src/admin-item.ts"></script>
   </body>
 </html>
