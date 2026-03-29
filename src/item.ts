@@ -1,4 +1,11 @@
 ﻿import "./styles.css";
+import {
+  getAuditHeaders,
+  isLocalSignedIn,
+  readAuthSession,
+  setLocalSignedIn,
+  writeAuthSession
+} from "./auth";
 
 type FileRef = {
   name: string;
@@ -33,7 +40,6 @@ type AuctionItem = {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
 const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
-const localAuthKey = "fmdq_local_auth";
 const adEnabled = authMode === "ad" && Boolean(import.meta.env.VITE_AAD_CLIENT_ID && import.meta.env.VITE_AAD_AUTHORITY);
 
 const formatMoney = (value: number) => `NGN ${value.toLocaleString("en-NG")}`;
@@ -45,11 +51,6 @@ const formatDate = (value: string) => {
   const yyyy = date.getFullYear();
   return `${mm}-${dd}-${yyyy}`;
 };
-const isLocalSignedIn = () => sessionStorage.getItem(localAuthKey) === "true";
-const setLocalSignedIn = (value: boolean) => {
-  sessionStorage.setItem(localAuthKey, value ? "true" : "false");
-};
-
 const getStatus = (item: AuctionItem) => {
   const now = Date.now();
   const start = new Date(item.startTime).getTime();
@@ -60,6 +61,7 @@ const getStatus = (item: AuctionItem) => {
 };
 
 const canBid = (item: AuctionItem) => {
+  const session = readAuthSession();
   if (getStatus(item) !== "Live") {
     return { allowed: false, message: "Bidding is closed or not yet open for this item." };
   }
@@ -69,9 +71,13 @@ const canBid = (item: AuctionItem) => {
       : { allowed: false, message: "Sign in to place a bid." };
   }
   if (adEnabled) {
-    return { allowed: false, message: "Sign in with AD to place a bid." };
+    return session.signedIn
+      ? { allowed: true, message: "" }
+      : { allowed: false, message: "Sign in with AD to place a bid." };
   }
-  return { allowed: false, message: "Sign in to place a bid." };
+  return session.signedIn
+    ? { allowed: true, message: "" }
+    : { allowed: false, message: "Sign in to place a bid." };
 };
 
 const getQuery = () => {
@@ -254,6 +260,7 @@ const renderItem = (item: AuctionItem) => {
 
   localSignin?.addEventListener("click", () => {
     setLocalSignedIn(true);
+    writeAuthSession({ mode: "local", signedIn: true, displayName: "Local user" });
     refreshBidState();
   });
 
@@ -278,17 +285,24 @@ const renderItem = (item: AuctionItem) => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/items/${item.id}/bids`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuditHeaders("Bidder"),
+          "x-idempotency-key": crypto.randomUUID()
+        },
         body: JSON.stringify({
           amount: value,
-          bidder: authMode === "local" ? "Local bidder" : "Member bidder"
+          expectedCurrentBid: item.currentBid
         })
       });
-      if (!response.ok) throw new Error("Bid failed");
+      if (!response.ok) {
+        const error = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(error?.error || "Bid failed");
+      }
       const updated = (await response.json()) as AuctionItem;
       renderItem(updated);
-    } catch {
-      if (bidHint) bidHint.textContent = "Unable to submit bid. Please try again.";
+    } catch (error) {
+      if (bidHint) bidHint.textContent = error instanceof Error ? error.message : "Unable to submit bid. Please try again.";
     }
   });
 };
@@ -314,5 +328,4 @@ const init = async () => {
 };
 
 init();
-
 

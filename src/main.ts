@@ -1,5 +1,15 @@
 ﻿import "./styles.css";
 import { PublicClientApplication, AccountInfo } from "@azure/msal-browser";
+import {
+  clearAuthSession,
+  getAuditHeaders,
+  isDemoSignedIn,
+  isLocalSignedIn,
+  readAuthSession,
+  setDemoSignedIn,
+  setLocalSignedIn,
+  writeAuthSession
+} from "./auth";
 
 type Category =
   | "Cars"
@@ -265,13 +275,12 @@ const adLogin = document.querySelector<HTMLButtonElement>("#ad-login");
 const adLogout = document.querySelector<HTMLButtonElement>("#ad-logout");
 
 const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
-const localAuthKey = "fmdq_local_auth";
 
 const adConfig = {
   auth: {
     clientId: import.meta.env.VITE_AAD_CLIENT_ID || "",
     authority: import.meta.env.VITE_AAD_AUTHORITY || "",
-    redirectUri: window.location.origin
+    redirectUri: `${window.location.origin}/signin.html`
   },
   cache: {
     cacheLocation: "sessionStorage" as const
@@ -282,11 +291,6 @@ const adEnabled = authMode === "ad" && Boolean(adConfig.auth.clientId && adConfi
 let msalClient: PublicClientApplication | null = null;
 let activeAccount: AccountInfo | null = null;
 let demoSignedIn = false;
-
-const isLocalSignedIn = () => sessionStorage.getItem(localAuthKey) === "true";
-const setLocalSignedIn = (value: boolean) => {
-  sessionStorage.setItem(localAuthKey, value ? "true" : "false");
-};
 
 const parseGroupEnv = (value: string) =>
   value
@@ -395,10 +399,11 @@ const formatDuration = (ms: number) => {
 };
 
 const canBid = (item?: AuctionItem) => {
+  const session = readAuthSession();
   if (!state.agreementsAccepted) return false;
   if (state.role !== "Bidder") return false;
   if (authMode === "local" && !isLocalSignedIn()) return false;
-  if (adEnabled && !activeAccount) return false;
+  if (authMode === "ad" && !session.signedIn) return false;
   if (item && getStatus(item) !== "Live") return false;
   return true;
 };
@@ -739,13 +744,20 @@ const renderDetail = () => {
       try {
         const response = await fetch(`${API_BASE_URL}/api/items/${item.id}/bids`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuditHeaders(state.role),
+            "x-idempotency-key": crypto.randomUUID()
+          },
           body: JSON.stringify({
             amount: value,
-            bidder: activeAccount?.name || "Member Bidder"
+            expectedCurrentBid: item.currentBid
           })
         });
-        if (!response.ok) throw new Error("Bid failed");
+        if (!response.ok) {
+          const error = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(error?.error || "Bid failed");
+        }
         const updated = (await response.json()) as AuctionItem;
         upsertItem(updated);
         state.selectedItemId = updated.id;
@@ -754,8 +766,8 @@ const renderDetail = () => {
         renderItems();
         renderDetail();
         renderHistory();
-      } catch {
-        bidHint.textContent = "Unable to submit bid. Please try again.";
+      } catch (error) {
+        bidHint.textContent = error instanceof Error ? error.message : "Unable to submit bid. Please try again.";
       }
     });
   }
@@ -891,6 +903,7 @@ const handleAdminSubmit = () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/items`, {
         method: "POST",
+        headers: getAuditHeaders(state.role),
         body: formData
       });
       if (!response.ok) throw new Error("Upload failed");
@@ -919,6 +932,7 @@ const initAd = async () => {
     adLogin.disabled = false;
     adLogin.classList.remove("opacity-50", "cursor-not-allowed");
     if (signedIn) {
+      writeAuthSession({ mode: "local", signedIn: true, displayName: "Local user" });
       adLogin.classList.add("hidden");
       adLogout.classList.remove("hidden");
     } else {
@@ -929,12 +943,14 @@ const initAd = async () => {
       setLocalSignedIn(true);
       adStatus.textContent = "Local signed in";
       adUser.textContent = "Local user";
+      writeAuthSession({ mode: "local", signedIn: true, displayName: "Local user" });
       adLogin.classList.add("hidden");
       adLogout.classList.remove("hidden");
       updateRoleUi();
     });
     adLogout.addEventListener("click", () => {
       setLocalSignedIn(false);
+      clearAuthSession();
       adStatus.textContent = "Local mode";
       adUser.textContent = "Not signed in";
       adLogin.classList.remove("hidden");
@@ -946,15 +962,44 @@ const initAd = async () => {
   }
 
   if (!adEnabled) {
-    adStatus.textContent = "Demo mode";
-    adUser.textContent = "No AD config";
+    demoSignedIn = isDemoSignedIn();
+    adStatus.textContent = demoSignedIn ? "Demo signed in" : "Demo mode";
+    adUser.textContent = demoSignedIn ? "Demo user" : "No AD config";
     adLogin.disabled = false;
     adLogin.classList.remove("opacity-50", "cursor-not-allowed");
-    adLogout.classList.add("hidden");
+    if (demoSignedIn) {
+      writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user" });
+      adLogin.classList.add("hidden");
+      adLogout.classList.remove("hidden");
+    } else {
+      adLogin.classList.remove("hidden");
+      adLogout.classList.add("hidden");
+    }
     adLogin.addEventListener("click", () => {
       demoSignedIn = !demoSignedIn;
+      setDemoSignedIn(demoSignedIn);
       adStatus.textContent = demoSignedIn ? "Demo signed in" : "Demo mode";
       adUser.textContent = demoSignedIn ? "Demo user" : "No AD config";
+      if (demoSignedIn) {
+        writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user" });
+        adLogin.classList.add("hidden");
+        adLogout.classList.remove("hidden");
+      } else {
+        clearAuthSession();
+        adLogin.classList.remove("hidden");
+        adLogout.classList.add("hidden");
+      }
+      updateRoleUi();
+    });
+    adLogout.addEventListener("click", () => {
+      demoSignedIn = false;
+      setDemoSignedIn(false);
+      clearAuthSession();
+      adStatus.textContent = "Demo mode";
+      adUser.textContent = "No AD config";
+      adLogin.classList.remove("hidden");
+      adLogout.classList.add("hidden");
+      updateRoleUi();
     });
     updateRoleUi();
     return;
@@ -964,8 +1009,10 @@ const initAd = async () => {
 
   try {
     await msalClient.initialize();
-    const accounts = msalClient.getAllAccounts();
-    activeAccount = accounts[0] ?? null;
+    activeAccount = msalClient.getActiveAccount() ?? msalClient.getAllAccounts()[0] ?? null;
+    if (activeAccount) {
+      msalClient.setActiveAccount(activeAccount);
+    }
   } catch (error) {
     console.error("Failed to initialize MSAL", error);
   }
@@ -973,6 +1020,11 @@ const initAd = async () => {
   if (activeAccount) {
     adStatus.textContent = "Connected";
     adUser.textContent = activeAccount.name || activeAccount.username;
+    writeAuthSession({
+      mode: "ad",
+      signedIn: true,
+      displayName: activeAccount.name || activeAccount.username || "Signed in"
+    });
     adLogin.classList.add("hidden");
     adLogout.classList.remove("hidden");
   } else {
@@ -989,8 +1041,16 @@ const initAd = async () => {
     try {
       const result = await msalClient.loginPopup({ scopes: ["User.Read"] });
       activeAccount = result.account;
+      if (activeAccount) {
+        msalClient.setActiveAccount(activeAccount);
+      }
       adStatus.textContent = "Connected";
       adUser.textContent = activeAccount?.name || activeAccount?.username || "Signed in";
+      writeAuthSession({
+        mode: "ad",
+        signedIn: true,
+        displayName: activeAccount?.name || activeAccount?.username || "Signed in"
+      });
       adLogin.classList.add("hidden");
       adLogout.classList.remove("hidden");
       updateRoleUi();
@@ -1003,6 +1063,7 @@ const initAd = async () => {
     if (!msalClient || !activeAccount) return;
     await msalClient.logoutPopup({ account: activeAccount });
     activeAccount = null;
+    clearAuthSession();
     adStatus.textContent = "Ready";
     adUser.textContent = "No active session";
     adLogin.classList.remove("hidden");
@@ -1125,6 +1186,3 @@ const init = async () => {
 };
 
 void init();
-
-
-
