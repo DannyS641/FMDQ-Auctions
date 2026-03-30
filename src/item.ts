@@ -126,17 +126,28 @@ const renderItem = (item: AuctionItem) => {
   const minBid = Math.max(item.currentBid || item.startBid, item.startBid) + item.increment;
   const session = readAuthSession();
 
-  const gallery = item.images.length
-    ? item.images
-        .map(
-          (image) => `
-          <div class="flex h-52 items-center justify-center overflow-hidden rounded-2xl border border-ink/10 bg-white p-1">
-            <img src="${API_BASE_URL}${image.url}" alt="${image.name}" class="h-full w-full object-contain" />
+  const mainImage = item.images[0];
+  const gallery = mainImage
+    ? `
+        <div class="flex min-h-[28rem] items-center justify-center overflow-hidden rounded-[2rem] border border-ink/10 bg-white p-3 shadow-[0_20px_50px_rgba(15,23,42,0.08)] lg:min-h-[36rem]">
+          <img src="${API_BASE_URL}${mainImage.url}" alt="${mainImage.name}" class="h-full w-full object-contain" />
+        </div>
+        ${item.images.length > 1 ? `
+          <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            ${item.images
+              .slice(1)
+              .map(
+                (image) => `
+                  <div class="flex h-44 items-center justify-center overflow-hidden rounded-2xl border border-ink/10 bg-white p-2">
+                    <img src="${API_BASE_URL}${image.url}" alt="${image.name}" class="h-full w-full object-contain" />
+                  </div>
+                `
+              )
+              .join("")}
           </div>
-        `
-        )
-        .join("")
-    : `<div class="h-36 rounded-2xl border border-ink/10 bg-ink/5"></div>`;
+        ` : ""}
+      `
+    : `<div class="h-[28rem] rounded-[2rem] border border-ink/10 bg-ink/5 lg:h-[36rem]"></div>`;
 
   const documents = item.documents.length
     ? item.documents
@@ -158,7 +169,7 @@ const renderItem = (item: AuctionItem) => {
         <h1 class="mt-2 text-3xl font-semibold text-ink">${item.title}</h1>
         <p class="mt-3 text-sm text-slate">${item.description}</p>
       </div>
-      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div class="space-y-4">
         ${gallery}
       </div>
       <div>

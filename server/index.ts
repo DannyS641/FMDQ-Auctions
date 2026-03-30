@@ -14,17 +14,20 @@ const app = express();
 const port = Number(process.env.PORT || 5174);
 const adminApiToken = process.env.ADMIN_API_TOKEN || "";
 const notificationRecipient = process.env.NOTIFY_TO || "operations@fmdq.example";
+const notificationTransport = (process.env.NOTIFY_TRANSPORT || "file").toLowerCase();
+const notificationPollMs = Math.max(Number(process.env.NOTIFY_POLL_MS || 5000), 1000);
 const bidRateWindowMs = 60_000;
 const bidRateLimit = 12;
 
 const dataDir = path.join(__dirname, "data");
+const outboxDir = path.join(dataDir, "notification-outbox");
 const uploadsDir = path.join(__dirname, "uploads");
 const imagesDir = path.join(uploadsDir, "images");
 const docsDir = path.join(uploadsDir, "documents");
 const legacyDbPath = path.join(dataDir, "auctions.json");
 const sqlitePath = path.join(dataDir, "auctions.sqlite");
 
-[dataDir, uploadsDir, imagesDir, docsDir].forEach((dir) => {
+[dataDir, outboxDir, uploadsDir, imagesDir, docsDir].forEach((dir) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -99,9 +102,11 @@ type NotificationQueueItem = {
   eventType: string;
   recipient: string;
   subject: string;
-  status: "pending";
+  status: "pending" | "sent" | "failed";
   payload: Record<string, string | number | boolean>;
   createdAt: string;
+  processedAt?: string;
+  errorMessage?: string;
 };
 
 type LegacyDatabase = {
@@ -191,7 +196,9 @@ db.exec(`
     subject TEXT NOT NULL,
     status TEXT NOT NULL,
     payload_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    processed_at TEXT,
+    error_message TEXT
   );
 
   CREATE TABLE IF NOT EXISTS categories (
@@ -208,6 +215,13 @@ db.exec(`
 const itemColumns = db.prepare("PRAGMA table_info(items)").all() as Array<{ name: string }>;
 if (!itemColumns.some((column) => column.name === "archived_at")) {
   db.exec("ALTER TABLE items ADD COLUMN archived_at TEXT");
+}
+const notificationColumns = db.prepare("PRAGMA table_info(notification_queue)").all() as Array<{ name: string }>;
+if (!notificationColumns.some((column) => column.name === "processed_at")) {
+  db.exec("ALTER TABLE notification_queue ADD COLUMN processed_at TEXT");
+}
+if (!notificationColumns.some((column) => column.name === "error_message")) {
+  db.exec("ALTER TABLE notification_queue ADD COLUMN error_message TEXT");
 }
 
 const allowDevAuth =
@@ -448,8 +462,61 @@ const insertAuditStmt = db.prepare(`
 `);
 const insertNotificationStmt = db.prepare(`
   INSERT INTO notification_queue (
-    id, channel, event_type, recipient, subject, status, payload_json, created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    id, channel, event_type, recipient, subject, status, payload_json, created_at, processed_at, error_message
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const updateNotificationStatusStmt = db.prepare(`
+  UPDATE notification_queue
+  SET status = ?, processed_at = ?, error_message = ?
+  WHERE id = ?
+`);
+const recentAuditsStmt = db.prepare(`
+  SELECT
+    id,
+    event_type as eventType,
+    entity_type as entityType,
+    entity_id as entityId,
+    actor,
+    actor_type as actorType,
+    request_id as requestId,
+    details_json as details,
+    created_at as createdAt
+  FROM audits
+  ORDER BY datetime(created_at) DESC
+  LIMIT ?
+`);
+const notificationQueueStmt = db.prepare(`
+  SELECT
+    id,
+    channel,
+    event_type as eventType,
+    recipient,
+    subject,
+    status,
+    payload_json as payload,
+    created_at as createdAt,
+    processed_at as processedAt,
+    error_message as errorMessage
+  FROM notification_queue
+  ORDER BY datetime(created_at) DESC
+  LIMIT ?
+`);
+const pendingNotificationQueueStmt = db.prepare(`
+  SELECT
+    id,
+    channel,
+    event_type as eventType,
+    recipient,
+    subject,
+    status,
+    payload_json as payload,
+    created_at as createdAt,
+    processed_at as processedAt,
+    error_message as errorMessage
+  FROM notification_queue
+  WHERE status = 'pending'
+  ORDER BY datetime(created_at) ASC
+  LIMIT 10
 `);
 
 const getActor = (req: express.Request) => getAuthContext(req).actor;
@@ -524,16 +591,95 @@ const queueNotification = (
     subject,
     "pending",
     JSON.stringify(payload),
-    new Date().toISOString()
+    new Date().toISOString(),
+    null,
+    null
   );
 };
 
 const getCategories = () => (getCategoriesStmt.all() as Array<{ name: string }>).map((row) => row.name);
+const getRecentAudits = (limit = 20) =>
+  (recentAuditsStmt.all(limit) as Array<Record<string, unknown>>).map((row) => ({
+    id: String(row.id),
+    eventType: String(row.eventType),
+    entityType: String(row.entityType),
+    entityId: String(row.entityId),
+    actor: String(row.actor),
+    actorType: String(row.actorType),
+    requestId: String(row.requestId),
+    details: String(row.details),
+    createdAt: String(row.createdAt)
+  }));
+const getNotificationQueue = (limit = 20) =>
+  (notificationQueueStmt.all(limit) as Array<Record<string, unknown>>).map((row) => ({
+    id: String(row.id),
+    channel: String(row.channel),
+    eventType: String(row.eventType),
+    recipient: String(row.recipient),
+    subject: String(row.subject),
+    status: String(row.status),
+    payload: String(row.payload),
+    createdAt: String(row.createdAt),
+    processedAt: row.processedAt ? String(row.processedAt) : "",
+    errorMessage: row.errorMessage ? String(row.errorMessage) : ""
+  }));
+const getPendingNotificationQueue = () =>
+  (pendingNotificationQueueStmt.all() as Array<Record<string, unknown>>).map((row) => ({
+    id: String(row.id),
+    channel: String(row.channel),
+    eventType: String(row.eventType),
+    recipient: String(row.recipient),
+    subject: String(row.subject),
+    status: String(row.status),
+    payload: String(row.payload),
+    createdAt: String(row.createdAt),
+    processedAt: row.processedAt ? String(row.processedAt) : "",
+    errorMessage: row.errorMessage ? String(row.errorMessage) : ""
+  }));
 
 const ensureCategory = (name: string) => {
   const value = name.trim();
   if (!value) return;
   insertCategoryStmt.run(value, new Date().toISOString());
+};
+
+const deliverNotification = (entry: ReturnType<typeof getPendingNotificationQueue>[number]) => {
+  const processedAt = new Date().toISOString();
+
+  if (notificationTransport === "noop") {
+    updateNotificationStatusStmt.run("sent", processedAt, null, entry.id);
+    return;
+  }
+
+  const filePath = path.join(outboxDir, `${processedAt.replace(/[:.]/g, "-")}-${entry.id}.json`);
+  fs.writeFileSync(filePath, JSON.stringify({
+    id: entry.id,
+    channel: entry.channel,
+    eventType: entry.eventType,
+    recipient: entry.recipient,
+    subject: entry.subject,
+    payload: JSON.parse(entry.payload || "{}"),
+    createdAt: entry.createdAt,
+    processedAt
+  }, null, 2));
+  updateNotificationStatusStmt.run("sent", processedAt, null, entry.id);
+};
+
+const processNotificationQueue = () => {
+  const entries = getPendingNotificationQueue();
+  for (const entry of entries) {
+    try {
+      deliverNotification(entry);
+    } catch (error) {
+      updateNotificationStatusStmt.run(
+        "failed",
+        new Date().toISOString(),
+        error instanceof Error ? error.message : "Notification processing failed.",
+        entry.id
+      );
+    }
+  }
+  return entries.length;
 };
 
 const removeStoredFile = (url: string) => {
@@ -1050,6 +1196,134 @@ app.get("/api/exports/audits.csv", requireAdminToken, (req, res) => {
   res.send(toCsv(rows));
 });
 
+app.get("/api/me/wins", (req, res) => {
+  const actor = getActor(req);
+  if (!actor || actor === "anonymous-client") {
+    res.json([]);
+    return;
+  }
+
+  const itemsById = new Map(getItems(true).map((item) => [item.id, item]));
+  const closedItems = Array.from(itemsById.values()).filter((item) => new Date(item.endTime).getTime() < Date.now());
+  const bidAudits = (db.prepare(`
+    SELECT entity_id as itemId, actor, details_json as details, created_at as createdAt
+    FROM audits
+    WHERE event_type = 'BID_PLACED'
+    ORDER BY datetime(created_at) ASC
+  `).all() as Array<Record<string, unknown>>).map((row) => {
+    let amount = 0;
+    try {
+      const parsed = JSON.parse(String(row.details || "{}")) as { amount?: number };
+      amount = Number(parsed.amount || 0);
+    } catch {
+      amount = 0;
+    }
+    return {
+      itemId: String(row.itemId),
+      actor: String(row.actor),
+      amount,
+      createdAt: String(row.createdAt)
+    };
+  });
+
+  const wins = closedItems.flatMap((item) => {
+    const itemAudits = bidAudits
+      .filter((entry) => entry.itemId === item.id)
+      .sort((left, right) => {
+        if (left.amount !== right.amount) return right.amount - left.amount;
+        return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+      });
+    const winner = itemAudits[0];
+    if (!winner || winner.actor !== actor || winner.amount !== item.currentBid) {
+      return [];
+    }
+    return [{
+      id: item.id,
+      title: item.title,
+      category: item.category,
+      lot: item.lot,
+      location: item.location,
+      currentBid: item.currentBid,
+      endTime: item.endTime,
+      wonAt: winner.createdAt
+    }];
+  });
+
+  res.json(wins);
+});
+
+app.get("/api/admin/operations", requireAdminToken, (req, res) => {
+  const items = getItems(true);
+  const nowTime = Date.now();
+  const closedCount = items.filter((item) => new Date(item.endTime).getTime() < nowTime && !item.archivedAt).length;
+  const liveCount = items.filter((item) => new Date(item.startTime).getTime() <= nowTime && new Date(item.endTime).getTime() >= nowTime && !item.archivedAt).length;
+  const archivedCount = items.filter((item) => item.archivedAt).length;
+  const pendingNotifications = Number((db.prepare("SELECT COUNT(*) as count FROM notification_queue WHERE status = 'pending'").get() as { count: number }).count);
+  const auditCount = Number((db.prepare("SELECT COUNT(*) as count FROM audits").get() as { count: number }).count);
+
+  res.json({
+    summary: {
+      totalItems: items.length,
+      liveCount,
+      closedCount,
+      archivedCount,
+      pendingNotifications,
+      auditCount
+    },
+    recentAudits: getRecentAudits(25),
+    notificationQueue: getNotificationQueue(25)
+  });
+});
+
+app.get("/api/admin/audits", requireAdminToken, (req, res) => {
+  const from = String(req.query.from || "").trim();
+  const to = String(req.query.to || "").trim();
+  const itemId = String(req.query.itemId || "").trim();
+  const limit = Math.min(Math.max(Number(req.query.limit || 250), 1), 1000);
+
+  const rows = (db.prepare(`
+    SELECT
+      id,
+      event_type as eventType,
+      entity_type as entityType,
+      entity_id as entityId,
+      actor,
+      actor_type as actorType,
+      request_id as requestId,
+      details_json as details,
+      created_at as createdAt
+    FROM audits
+    ORDER BY datetime(created_at) DESC
+  `).all() as Array<Record<string, unknown>>)
+    .map((row) => ({
+      id: String(row.id),
+      eventType: String(row.eventType),
+      entityType: String(row.entityType),
+      entityId: String(row.entityId),
+      actor: String(row.actor),
+      actorType: String(row.actorType),
+      requestId: String(row.requestId),
+      details: String(row.details),
+      createdAt: String(row.createdAt)
+    }))
+    .filter((row) => (!itemId || row.entityId === itemId))
+    .filter((row) => (!from || new Date(row.createdAt).getTime() >= new Date(from).getTime()))
+    .filter((row) => (!to || new Date(row.createdAt).getTime() <= new Date(to).getTime()))
+    .slice(0, limit);
+
+  res.json(rows);
+});
+
+app.get("/api/admin/notifications", requireAdminToken, (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit || 250), 1), 1000);
+  res.json(getNotificationQueue(limit));
+});
+
+app.post("/api/admin/notifications/process", requireAdminToken, (req, res) => {
+  const processed = processNotificationQueue();
+  res.json({ processed, transport: notificationTransport });
+});
+
 app.post(
   "/api/items",
   upload.fields([
@@ -1394,9 +1668,12 @@ const start = () => {
   migrateLegacyJson();
   seedIfEmpty();
   seedCategoriesIfEmpty();
+  processNotificationQueue();
+  setInterval(processNotificationQueue, notificationPollMs);
   app.listen(port, () => {
     console.log(`Auction API running at http://localhost:${port}`);
     console.log(`Storage backend: sqlite (${sqlitePath})`);
+    console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
   });
 };
 
