@@ -27,12 +27,11 @@ const renderSignupPage = () => {
                 <a href="/signin.html" class="rounded-full border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate">Sign in</a>
               </div>
 
-              <p class="mt-8 text-[11px] uppercase tracking-[0.34em] text-slate">Create account</p>
-              <h1 class="mt-4 font-display text-4xl font-bold leading-none text-ink md:text-[2.8rem]">Set up your portal account</h1>
+              <h3 class="mt-6 font-display text-xl font-bold leading-tight text-ink md:text-[1.4rem]">Set up your account</h3>
               <p class="mt-4 font-display text-base text-slate">Create your account first. We’ll send a verification link to your email before you can sign in.</p>
 
               <form id="signup-form" class="mt-8 grid gap-3">
-                <input id="signup-name" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Display name" />
+                <input id="signup-name" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Full name" />
                 <input id="signup-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
                 <input id="signup-password" type="password" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Password (min. 8 characters)" />
                 <button type="submit" class="rounded-full bg-[#ff9f1c] px-6 py-3.5 font-display text-base font-semibold text-white shadow-[0_18px_35px_rgba(255,159,28,0.32)]">Create account</button>
@@ -43,7 +42,6 @@ const renderSignupPage = () => {
                 <p class="mt-2 text-sm text-slate">1. Create your account. 2. Open the verification link from your email. 3. Return to sign in.</p>
               </div>
 
-              <p id="signup-note" class="mt-5 min-h-[1.25rem] rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">Use the same email address you want linked to your role in the database.</p>
             </div>
           </section>
         </main>
