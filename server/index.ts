@@ -4,7 +4,7 @@ import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
-import { randomUUID } from "crypto";
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 import { DatabaseSync } from "node:sqlite";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -13,9 +13,13 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = Number(process.env.PORT || 5174);
 const adminApiToken = process.env.ADMIN_API_TOKEN || "";
+const sessionCookieName = "fmdq_session";
+const sessionTtlMs = 7 * 24 * 60 * 60 * 1000;
+const emailVerificationTtlMs = 24 * 60 * 60 * 1000;
 const notificationRecipient = process.env.NOTIFY_TO || "operations@fmdq.example";
 const notificationTransport = (process.env.NOTIFY_TRANSPORT || "file").toLowerCase();
 const notificationPollMs = Math.max(Number(process.env.NOTIFY_POLL_MS || 5000), 1000);
+const appBaseUrl = (process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/+$/, "");
 const bidRateWindowMs = 60_000;
 const bidRateLimit = 12;
 
@@ -34,7 +38,10 @@ const sqlitePath = path.join(dataDir, "auctions.sqlite");
 });
 
 app.disable("x-powered-by");
-app.use(cors());
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
 app.use(express.json({ limit: "1mb" }));
 app.use((req, res, next) => {
   const requestId = randomUUID();
@@ -96,6 +103,15 @@ type AuditEntry = {
   createdAt: string;
 };
 
+type StoredUser = {
+  id: string;
+  email: string;
+  displayName: string;
+  status: "pending_verification" | "active" | "disabled";
+  createdAt: string;
+  lastLoginAt: string | null;
+};
+
 type NotificationQueueItem = {
   id: string;
   channel: "email";
@@ -127,11 +143,13 @@ const defaultCategories = [
 type Role = "Guest" | "Bidder" | "Observer" | "Admin";
 
 type AuthContext = {
+  userId?: string;
   actor: string;
   actorType: AuditEntry["actorType"];
   role: Role;
   trusted: boolean;
   adminAuthorized: boolean;
+  signedIn: boolean;
 };
 
 const db = new DatabaseSync(sqlitePath);
@@ -188,6 +206,43 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    last_login_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS roles (
+    name TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS user_roles (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role_name TEXT NOT NULL REFERENCES roles(name) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, role_name)
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS notification_queue (
     id TEXT PRIMARY KEY,
     channel TEXT NOT NULL,
@@ -210,6 +265,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_bids_item_created_at ON bids(item_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_item_files_item_kind ON item_files(item_id, kind);
   CREATE INDEX IF NOT EXISTS idx_audits_created_at ON audits(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+  CREATE INDEX IF NOT EXISTS idx_email_verification_expires_at ON email_verification_tokens(expires_at);
 `);
 
 const itemColumns = db.prepare("PRAGMA table_info(items)").all() as Array<{ name: string }>;
@@ -224,10 +281,6 @@ if (!notificationColumns.some((column) => column.name === "error_message")) {
   db.exec("ALTER TABLE notification_queue ADD COLUMN error_message TEXT");
 }
 
-const allowDevAuth =
-  process.env.ALLOW_DEV_AUTH === "true" ||
-  (typeof process.env.ALLOW_DEV_AUTH === "undefined" && process.env.NODE_ENV !== "production");
-
 const normalizeRole = (value: string): Role => {
   if (value === "Admin" || value === "Bidder" || value === "Observer" || value === "Guest") {
     return value;
@@ -235,38 +288,59 @@ const normalizeRole = (value: string): Role => {
   return "Guest";
 };
 
-const isLoopbackAddress = (value: string) =>
-  value === "::1" ||
-  value === "127.0.0.1" ||
-  value === "::ffff:127.0.0.1" ||
-  value === "::ffff:localhost" ||
-  value.endsWith("/127.0.0.1");
-
 const getAuthContext = (req: express.Request): AuthContext => {
+  const parseCookies = () =>
+    String(req.headers.cookie || "")
+      .split(";")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .reduce<Record<string, string>>((acc, entry) => {
+        const [key, ...rest] = entry.split("=");
+        if (!key) return acc;
+        acc[key] = decodeURIComponent(rest.join("="));
+        return acc;
+      }, {});
+
+  const resolveRoleFromNames = (roles: string[]): Role => {
+    if (roles.includes("Admin")) return "Admin";
+    if (roles.includes("Observer")) return "Observer";
+    if (roles.includes("Bidder")) return "Bidder";
+    return "Guest";
+  };
+
   if (adminApiToken && req.header("x-admin-token") === adminApiToken) {
     return {
+      userId: "admin-token",
       actor: "Admin API token",
       actorType: "integration",
       role: "Admin",
       trusted: true,
-      adminAuthorized: true
+      adminAuthorized: true,
+      signedIn: true
     };
   }
 
-  const remoteAddress = req.ip || req.socket.remoteAddress || "";
-  const authMode = String(req.header("x-auth-mode") || "").toLowerCase();
-  const userLabel = String(req.header("x-user") || "").trim();
-  const role = normalizeRole(String(req.header("x-role") || "Guest"));
-  const trustedLocalDevSession = allowDevAuth && authMode === "local" && isLoopbackAddress(remoteAddress);
-
-  if (trustedLocalDevSession && userLabel) {
-    return {
-      actor: userLabel,
-      actorType: "user",
-      role,
-      trusted: true,
-      adminAuthorized: role === "Admin"
-    };
+  const cookies = parseCookies();
+  const sessionId = cookies[sessionCookieName];
+  if (sessionId) {
+    const sessionRow = getSessionStmt.get(sessionId) as { id: string; userId: string; expiresAt: string } | undefined;
+    if (sessionRow && new Date(sessionRow.expiresAt).getTime() > Date.now()) {
+      const user = getUserByIdStmt.get(sessionRow.userId) as Record<string, unknown> | undefined;
+      if (user && String(user.status) === "active") {
+        const roleNames = (getUserRolesStmt.all(String(user.id)) as Array<{ roleName: string }>).map((row) => row.roleName);
+        const role = resolveRoleFromNames(roleNames);
+        return {
+          userId: String(user.id),
+          actor: String(user.displayName || user.email),
+          actorType: "user",
+          role,
+          trusted: true,
+          adminAuthorized: role === "Admin",
+          signedIn: true
+        };
+      }
+    }
+    deleteSessionStmt.run(sessionId);
   }
 
   return {
@@ -274,7 +348,8 @@ const getAuthContext = (req: express.Request): AuthContext => {
     actorType: "system",
     role: "Guest",
     trusted: false,
-    adminAuthorized: false
+    adminAuthorized: false,
+    signedIn: false
   };
 };
 
@@ -315,10 +390,99 @@ const upload = multer({
 
 const itemCountStmt = db.prepare("SELECT COUNT(*) as count FROM items");
 const categoryCountStmt = db.prepare("SELECT COUNT(*) as count FROM categories");
+const userCountStmt = db.prepare("SELECT COUNT(*) as count FROM users");
 const getCategoriesStmt = db.prepare(`
   SELECT name
   FROM categories
   ORDER BY LOWER(name) ASC
+`);
+const getUserByEmailStmt = db.prepare(`
+  SELECT
+    id,
+    email,
+    display_name as displayName,
+    password_hash as passwordHash,
+    status,
+    created_at as createdAt,
+    last_login_at as lastLoginAt
+  FROM users
+  WHERE LOWER(email) = LOWER(?)
+`);
+const getUserByIdStmt = db.prepare(`
+  SELECT
+    id,
+    email,
+    display_name as displayName,
+    status,
+    created_at as createdAt,
+    last_login_at as lastLoginAt
+  FROM users
+  WHERE id = ?
+`);
+const insertUserStmt = db.prepare(`
+  INSERT INTO users (id, email, password_hash, display_name, status, created_at, last_login_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+`);
+const updateUserLoginStmt = db.prepare(`
+  UPDATE users
+  SET last_login_at = ?
+  WHERE id = ?
+`);
+const updateUserStatusStmt = db.prepare(`
+  UPDATE users
+  SET status = ?
+  WHERE id = ?
+`);
+const insertRoleStmt = db.prepare(`
+  INSERT OR IGNORE INTO roles (name, created_at)
+  VALUES (?, ?)
+`);
+const assignUserRoleStmt = db.prepare(`
+  INSERT OR IGNORE INTO user_roles (user_id, role_name, created_at)
+  VALUES (?, ?, ?)
+`);
+const getUserRolesStmt = db.prepare(`
+  SELECT role_name as roleName
+  FROM user_roles
+  WHERE user_id = ?
+`);
+const insertSessionStmt = db.prepare(`
+  INSERT INTO sessions (id, user_id, created_at, expires_at)
+  VALUES (?, ?, ?, ?)
+`);
+const insertEmailVerificationTokenStmt = db.prepare(`
+  INSERT INTO email_verification_tokens (id, user_id, token, created_at, expires_at)
+  VALUES (?, ?, ?, ?, ?)
+`);
+const getEmailVerificationTokenStmt = db.prepare(`
+  SELECT id, user_id as userId, token, created_at as createdAt, expires_at as expiresAt
+  FROM email_verification_tokens
+  WHERE token = ?
+`);
+const getSessionStmt = db.prepare(`
+  SELECT session.id, session.user_id as userId, session.expires_at as expiresAt
+  FROM sessions session
+  WHERE session.id = ?
+`);
+const deleteSessionStmt = db.prepare(`
+  DELETE FROM sessions
+  WHERE id = ?
+`);
+const deleteEmailVerificationTokenStmt = db.prepare(`
+  DELETE FROM email_verification_tokens
+  WHERE token = ?
+`);
+const deleteEmailVerificationTokensForUserStmt = db.prepare(`
+  DELETE FROM email_verification_tokens
+  WHERE user_id = ?
+`);
+const deleteExpiredSessionsStmt = db.prepare(`
+  DELETE FROM sessions
+  WHERE datetime(expires_at) <= datetime(?)
+`);
+const deleteExpiredEmailVerificationTokensStmt = db.prepare(`
+  DELETE FROM email_verification_tokens
+  WHERE datetime(expires_at) <= datetime(?)
 `);
 const insertCategoryStmt = db.prepare(`
   INSERT OR IGNORE INTO categories (name, created_at)
@@ -522,8 +686,77 @@ const pendingNotificationQueueStmt = db.prepare(`
 const getActor = (req: express.Request) => getAuthContext(req).actor;
 const getActorRole = (req: express.Request) => getAuthContext(req).role;
 const getActorType = (req: express.Request) => getAuthContext(req).actorType;
+const getUserId = (req: express.Request) => getAuthContext(req).userId || "";
 const recentBidAttempts = new Map<string, number[]>();
 const processedBidKeys = new Map<string, string>();
+
+const hashPassword = (password: string) => {
+  const salt = randomBytes(16).toString("hex");
+  const hash = scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+};
+
+const verifyPassword = (password: string, storedHash: string) => {
+  const [salt, hash] = storedHash.split(":");
+  if (!salt || !hash) return false;
+  const derived = scryptSync(password, salt, 64);
+  const stored = Buffer.from(hash, "hex");
+  if (derived.length !== stored.length) return false;
+  return timingSafeEqual(derived, stored);
+};
+
+const normalizeEmail = (value: string) => value.trim().toLowerCase();
+const sanitizeDisplayName = (value: string) => value.trim().replace(/\s+/g, " ");
+const buildEmailVerificationUrl = (token: string) => `${appBaseUrl}/verify.html?token=${encodeURIComponent(token)}`;
+
+const serializeSession = (req: express.Request): StoredUser & { role: Role } | null => {
+  const context = getAuthContext(req);
+  if (!context.signedIn || !context.userId) return null;
+  const row = getUserByIdStmt.get(context.userId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    id: String(row.id),
+    email: String(row.email),
+    displayName: String(row.displayName),
+    status: String(row.status) as "active" | "disabled",
+    createdAt: String(row.createdAt),
+    lastLoginAt: row.lastLoginAt ? String(row.lastLoginAt) : null,
+    role: context.role
+  };
+};
+
+const setSessionCookie = (res: express.Response, sessionId: string, expiresAt: string) => {
+  const secure = process.env.NODE_ENV === "production";
+  res.setHeader(
+    "Set-Cookie",
+    `${sessionCookieName}=${encodeURIComponent(sessionId)}; Path=/; HttpOnly; SameSite=Lax; Expires=${new Date(expiresAt).toUTCString()}${secure ? "; Secure" : ""}`
+  );
+};
+
+const clearSessionCookie = (res: express.Response) => {
+  const secure = process.env.NODE_ENV === "production";
+  res.setHeader(
+    "Set-Cookie",
+    `${sessionCookieName}=; Path=/; HttpOnly; SameSite=Lax; Expires=${new Date(0).toUTCString()}${secure ? "; Secure" : ""}`
+  );
+};
+
+const createUserSession = (res: express.Response, userId: string) => {
+  const sessionId = randomUUID();
+  const createdAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + sessionTtlMs).toISOString();
+  insertSessionStmt.run(sessionId, userId, createdAt, expiresAt);
+  setSessionCookie(res, sessionId, expiresAt);
+};
+
+const createEmailVerificationToken = (userId: string) => {
+  const token = randomBytes(32).toString("hex");
+  const createdAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + emailVerificationTtlMs).toISOString();
+  deleteEmailVerificationTokensForUserStmt.run(userId);
+  insertEmailVerificationTokenStmt.run(randomUUID(), userId, token, createdAt, expiresAt);
+  return { token, createdAt, expiresAt, verifyUrl: buildEmailVerificationUrl(token) };
+};
 
 const mapItem = (row: Record<string, unknown>): StoredItem => {
   const files = getItemFilesStmt.all(String(row.id)) as Array<{ kind: string; name: string; url: string }>;
@@ -805,7 +1038,7 @@ const requireAdminToken = (req: express.Request, res: express.Response, next: ex
     res.status(403).json({
       error: adminApiToken
         ? "Admin token required."
-        : "Admin access is only available in trusted local testing or with an admin token."
+        : "Admin access requires an authenticated account with the Admin role."
     });
     return;
   }
@@ -897,7 +1130,9 @@ const migrateLegacyJson = () => {
         notification.subject,
         notification.status,
         JSON.stringify(notification.payload),
-        notification.createdAt
+        notification.createdAt,
+        null,
+        null
       );
     }
 
@@ -1022,6 +1257,11 @@ const seedCategoriesIfEmpty = () => {
   }
 };
 
+const seedRoles = () => {
+  const createdAt = new Date().toISOString();
+  ["Admin", "Bidder", "Observer"].forEach((role) => insertRoleStmt.run(role, createdAt));
+};
+
 app.get("/api/health", (req, res) => {
   const itemsCount = Number((itemCountStmt.get() as { count: number }).count);
   const auditsCount = Number((db.prepare("SELECT COUNT(*) as count FROM audits").get() as { count: number }).count);
@@ -1033,6 +1273,160 @@ app.get("/api/health", (req, res) => {
     audits: auditsCount,
     notificationQueue: queueCount
   });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  const session = serializeSession(req);
+  if (!session) {
+    res.json({ signedIn: false, user: null });
+    return;
+  }
+  res.json({ signedIn: true, user: session });
+});
+
+app.post("/api/auth/register", express.json({ limit: "128kb" }), (req, res) => {
+  const email = normalizeEmail(String(req.body?.email || ""));
+  const password = String(req.body?.password || "");
+  const displayName = sanitizeDisplayName(String(req.body?.displayName || ""));
+
+  if (!email || !displayName || !password) {
+    res.status(400).json({ error: "Display name, email, and password are required." });
+    return;
+  }
+  if (password.length < 8) {
+    res.status(400).json({ error: "Password must be at least 8 characters." });
+    return;
+  }
+  const existing = getUserByEmailStmt.get(email) as Record<string, unknown> | undefined;
+  if (existing) {
+    res.status(409).json({ error: "An account with that email already exists." });
+    return;
+  }
+
+  const userId = randomUUID();
+  const createdAt = new Date().toISOString();
+  insertUserStmt.run(userId, email, hashPassword(password), displayName, "pending_verification", createdAt, null);
+  assignUserRoleStmt.run(userId, "Bidder", createdAt);
+  const verification = createEmailVerificationToken(userId);
+  queueNotification("ACCOUNT_VERIFICATION", `Confirm your FMDQ Auctions account`, {
+    email,
+    displayName,
+    verifyUrl: verification.verifyUrl
+  });
+  appendAudit(req, {
+    eventType: "ACCOUNT_REGISTERED",
+    entityType: "system",
+    entityId: userId,
+    actor: displayName,
+    actorType: "user",
+    details: { email, status: "pending_verification" }
+  });
+
+  res.status(201).json({
+    registered: true,
+    verificationRequired: true,
+    email,
+    message: "Account created. Check your email to verify your account, then sign in."
+  });
+});
+
+app.post("/api/auth/login", express.json({ limit: "128kb" }), (req, res) => {
+  const email = normalizeEmail(String(req.body?.email || ""));
+  const password = String(req.body?.password || "");
+  const user = getUserByEmailStmt.get(email) as Record<string, unknown> | undefined;
+
+  if (!user || !verifyPassword(password, String(user.passwordHash || ""))) {
+    res.status(401).json({ error: "Invalid email or password." });
+    return;
+  }
+  if (String(user.status) === "pending_verification") {
+    res.status(403).json({ error: "Please verify your email before signing in." });
+    return;
+  }
+  if (String(user.status) !== "active") {
+    res.status(403).json({ error: "This account is not active." });
+    return;
+  }
+
+  const lastLoginAt = new Date().toISOString();
+  updateUserLoginStmt.run(lastLoginAt, String(user.id));
+  createUserSession(res, String(user.id));
+  const roles = (getUserRolesStmt.all(String(user.id)) as Array<{ roleName: string }>).map((row) => row.roleName);
+  const role: Role = roles.includes("Admin") ? "Admin" : roles.includes("Observer") ? "Observer" : roles.includes("Bidder") ? "Bidder" : "Guest";
+
+  res.json({
+    signedIn: true,
+    user: {
+      id: String(user.id),
+      email: String(user.email),
+      displayName: String(user.displayName),
+      status: String(user.status),
+      createdAt: String(user.createdAt),
+      lastLoginAt,
+      role
+    }
+  });
+});
+
+app.post("/api/auth/verify-email", express.json({ limit: "64kb" }), (req, res) => {
+  const token = String(req.body?.token || "").trim();
+  if (!token) {
+    res.status(400).json({ error: "Verification token is required." });
+    return;
+  }
+
+  const row = getEmailVerificationTokenStmt.get(token) as
+    | { id: string; userId: string; token: string; createdAt: string; expiresAt: string }
+    | undefined;
+  if (!row) {
+    res.status(404).json({ error: "Verification link is invalid or has already been used." });
+    return;
+  }
+  if (new Date(row.expiresAt).getTime() <= Date.now()) {
+    deleteEmailVerificationTokenStmt.run(token);
+    res.status(410).json({ error: "Verification link has expired. Please create your account again or request a new link." });
+    return;
+  }
+
+  const user = getUserByIdStmt.get(row.userId) as Record<string, unknown> | undefined;
+  if (!user) {
+    deleteEmailVerificationTokenStmt.run(token);
+    res.status(404).json({ error: "Account not found for this verification link." });
+    return;
+  }
+
+  updateUserStatusStmt.run("active", row.userId);
+  deleteEmailVerificationTokensForUserStmt.run(row.userId);
+  queueNotification("ACCOUNT_VERIFIED", `FMDQ Auctions account verified`, {
+    email: String(user.email),
+    displayName: String(user.displayName)
+  });
+  appendAudit(req, {
+    eventType: "ACCOUNT_VERIFIED",
+    entityType: "system",
+    entityId: row.userId,
+    actor: String(user.displayName),
+    actorType: "user",
+    details: { email: String(user.email), status: "active" }
+  });
+
+  res.json({
+    verified: true,
+    message: "Your account has been verified. You can now sign in."
+  });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  const rawCookies = String(req.headers.cookie || "");
+  const sessionCookie = rawCookies
+    .split(";")
+    .map((entry) => entry.trim())
+    .find((entry) => entry.startsWith(`${sessionCookieName}=`));
+  if (sessionCookie) {
+    deleteSessionStmt.run(decodeURIComponent(sessionCookie.split("=").slice(1).join("=")));
+  }
+  clearSessionCookie(res);
+  res.json({ ok: true });
 });
 
 app.get("/api/items", (req, res) => {
@@ -1591,6 +1985,15 @@ app.post("/api/items/:id/restore", (req, res) => {
 });
 
 app.post("/api/items/:id/bids", (req, res) => {
+  const auth = getAuthContext(req);
+  if (!auth.signedIn) {
+    res.status(401).json({ error: "Sign in to place a bid." });
+    return;
+  }
+  if (!(auth.role === "Bidder" || auth.role === "Admin")) {
+    res.status(403).json({ error: "Your account does not have bidding permission." });
+    return;
+  }
   const actor = getActor(req);
   const idempotencyKey = String(req.header("x-idempotency-key") || "");
 
@@ -1665,9 +2068,12 @@ app.post("/api/items/:id/bids", (req, res) => {
 });
 
 const start = () => {
+  seedRoles();
   migrateLegacyJson();
   seedIfEmpty();
   seedCategoriesIfEmpty();
+  deleteExpiredSessionsStmt.run(new Date().toISOString());
+  deleteExpiredEmailVerificationTokensStmt.run(new Date().toISOString());
   processNotificationQueue();
   setInterval(processNotificationQueue, notificationPollMs);
   app.listen(port, () => {

@@ -1,4 +1,5 @@
 import "./styles.css";
+import { apiFetch } from "./auth";
 
 type FileRef = {
   name: string;
@@ -16,8 +17,6 @@ type AuctionItem = {
   images: FileRef[];
 };
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
-
 const revealApp = () => {
   window.requestAnimationFrame(() => {
     document.body.removeAttribute("data-app-loading");
@@ -26,6 +25,7 @@ const revealApp = () => {
 
 const formatMoney = (value: number) => `NGN ${value.toLocaleString("en-NG")}`;
 const formatDate = (value: string) => new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
 const resolveMediaUrl = (url: string) => (url.startsWith("http") ? url : `${API_BASE_URL}${url}`);
 
 const renderShell = (content: string) => {
@@ -88,7 +88,7 @@ const renderClosed = (items: AuctionItem[]) => {
 
 const init = async () => {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/items`);
+    const response = await apiFetch("/api/items");
     if (!response.ok) throw new Error();
     const items = ((await response.json()) as AuctionItem[])
       .filter((item) => new Date(item.endTime).getTime() < Date.now())

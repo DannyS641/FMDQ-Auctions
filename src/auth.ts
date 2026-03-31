@@ -1,19 +1,21 @@
-export type AuthMode = "ad" | "local" | "demo";
+export type AuthMode = "account";
+export type Role = "Guest" | "Bidder" | "Observer" | "Admin";
 
 export type AuthSession = {
   mode: AuthMode;
   signedIn: boolean;
   displayName: string;
-  role: string;
+  role: Role;
+  email?: string;
+  userId?: string;
 };
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
 const authSessionKey = "fmdq_auth_session";
-const localAuthKey = "fmdq_local_auth";
-const demoAuthKey = "fmdq_demo_auth";
 const agreementsAcceptedKey = "fmdq_agreements_accepted";
 
 const defaultSession: AuthSession = {
-  mode: "demo",
+  mode: "account",
   signedIn: false,
   displayName: "Guest",
   role: "Guest"
@@ -24,10 +26,17 @@ export const readAuthSession = (): AuthSession => {
   if (!raw) return defaultSession;
   try {
     const parsed = JSON.parse(raw) as Partial<AuthSession>;
-    if (!parsed.mode || typeof parsed.signedIn !== "boolean" || !parsed.displayName || !parsed.role) {
+    if (typeof parsed.signedIn !== "boolean" || !parsed.displayName || !parsed.role) {
       return defaultSession;
     }
-    return parsed as AuthSession;
+    return {
+      mode: "account",
+      signedIn: parsed.signedIn,
+      displayName: parsed.displayName,
+      role: parsed.role as Role,
+      email: parsed.email,
+      userId: parsed.userId
+    };
   } catch {
     return defaultSession;
   }
@@ -42,27 +51,107 @@ export const clearAuthSession = () => {
   sessionStorage.removeItem(agreementsAcceptedKey);
 };
 
-export const isLocalSignedIn = () => sessionStorage.getItem(localAuthKey) === "true";
-export const setLocalSignedIn = (value: boolean) => {
-  sessionStorage.setItem(localAuthKey, value ? "true" : "false");
-};
-
-export const isDemoSignedIn = () => sessionStorage.getItem(demoAuthKey) === "true";
-export const setDemoSignedIn = (value: boolean) => {
-  sessionStorage.setItem(demoAuthKey, value ? "true" : "false");
-};
-
 export const hasAcceptedAgreements = () => sessionStorage.getItem(agreementsAcceptedKey) === "true";
 export const setAcceptedAgreements = (value: boolean) => {
   sessionStorage.setItem(agreementsAcceptedKey, value ? "true" : "false");
 };
 
-export const getAuditHeaders = (role?: string) => {
-  const session = readAuthSession();
-  const headers: Record<string, string> = {
-    "x-user": session.displayName,
-    "x-auth-mode": session.mode,
-    "x-role": role || session.role
+export const apiFetch = (path: string, init?: RequestInit) =>
+  fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    credentials: "include",
+    headers: {
+      ...(init?.headers || {})
+    }
+  });
+
+const sessionFromPayload = (payload: {
+  signedIn: boolean;
+  user: null | {
+    id: string;
+    email: string;
+    displayName: string;
+    role: string;
   };
-  return headers;
+}): AuthSession => {
+  if (!payload.signedIn || !payload.user) return defaultSession;
+  return {
+    mode: "account",
+    signedIn: true,
+    displayName: payload.user.displayName,
+    role: (payload.user.role as Role) || "Guest",
+    email: payload.user.email,
+    userId: payload.user.id
+  };
 };
+
+export const fetchCurrentSession = async () => {
+  const response = await apiFetch("/api/auth/me");
+  const payload = (await response.json()) as {
+    signedIn: boolean;
+    user: null | { id: string; email: string; displayName: string; role: string };
+  };
+  const session = sessionFromPayload(payload);
+  writeAuthSession(session);
+  return session;
+};
+
+export const loginWithAccount = async (email: string, password: string) => {
+  const response = await apiFetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password })
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { error?: string; signedIn?: boolean; user?: { id: string; email: string; displayName: string; role: string } | null }
+    | null;
+  if (!response.ok || !payload) {
+    throw new Error(payload?.error || "Unable to sign in.");
+  }
+  const session = sessionFromPayload({
+    signedIn: Boolean(payload.signedIn),
+    user: payload.user || null
+  });
+  writeAuthSession(session);
+  return session;
+};
+
+export const registerAccount = async (displayName: string, email: string, password: string) => {
+  const response = await apiFetch("/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ displayName, email, password })
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { error?: string; registered?: boolean; verificationRequired?: boolean; email?: string; message?: string }
+    | null;
+  if (!response.ok || !payload) {
+    throw new Error(payload?.error || "Unable to create account.");
+  }
+  return payload;
+};
+
+export const logoutAccount = async () => {
+  try {
+    await apiFetch("/api/auth/logout", { method: "POST" });
+  } finally {
+    clearAuthSession();
+  }
+};
+
+export const verifyEmailToken = async (token: string) => {
+  const response = await apiFetch("/api/auth/verify-email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token })
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { error?: string; verified?: boolean; message?: string }
+    | null;
+  if (!response.ok || !payload) {
+    throw new Error(payload?.error || "Unable to verify email.");
+  }
+  return payload;
+};
+
+export const getAuditHeaders = () => ({});

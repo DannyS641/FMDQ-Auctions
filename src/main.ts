@@ -1,15 +1,12 @@
 ﻿import "./styles.css";
-import { PublicClientApplication, AccountInfo } from "@azure/msal-browser";
 import {
-  clearAuthSession,
+  apiFetch,
+  fetchCurrentSession,
   getAuditHeaders,
   hasAcceptedAgreements,
-  isDemoSignedIn,
-  isLocalSignedIn,
+  logoutAccount,
   readAuthSession,
   setAcceptedAgreements,
-  setDemoSignedIn,
-  setLocalSignedIn,
   writeAuthSession
 } from "./auth";
 
@@ -257,35 +254,6 @@ const adLogin = document.querySelector<HTMLButtonElement>("#ad-login");
 const adLogout = document.querySelector<HTMLButtonElement>("#ad-logout");
 const activeRoleLabel = document.querySelector<HTMLSpanElement>("#active-role-label");
 
-const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
-
-const adConfig = {
-  auth: {
-    clientId: import.meta.env.VITE_AAD_CLIENT_ID || "",
-    authority: import.meta.env.VITE_AAD_AUTHORITY || "",
-    redirectUri: `${window.location.origin}/signin.html`
-  },
-  cache: {
-    cacheLocation: "sessionStorage" as const
-  }
-};
-
-const adEnabled = authMode === "ad" && Boolean(adConfig.auth.clientId && adConfig.auth.authority);
-let msalClient: PublicClientApplication | null = null;
-let activeAccount: AccountInfo | null = null;
-let demoSignedIn = false;
-
-const parseGroupEnv = (value: string) =>
-  value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-const adminGroups = parseGroupEnv(import.meta.env.VITE_AAD_ADMIN_GROUPS || "");
-const bidderGroups = parseGroupEnv(import.meta.env.VITE_AAD_BIDDER_GROUPS || "");
-const observerGroups = parseGroupEnv(import.meta.env.VITE_AAD_OBSERVER_GROUPS || "");
-const devRole = (import.meta.env.VITE_DEV_ROLE || "").trim() as Role;
-
 const revealApp = () => {
   window.requestAnimationFrame(() => {
     document.body.removeAttribute("data-app-loading");
@@ -317,34 +285,8 @@ const resolveMediaUrl = (url: string) =>
 const canViewReserve = () => state.role === "Admin";
 
 const resolveRole = () => {
-  if (authMode === "local") {
-    if (!isLocalSignedIn()) return "Guest";
-    const session = readAuthSession();
-    return (session.role as Role) || devRole || "Bidder";
-  }
-  if (!adEnabled) return devRole || "Guest";
-  if (!activeAccount) return "Guest";
-
-  const claims = (activeAccount.idTokenClaims || {}) as Record<string, unknown>;
-  const toList = (value: unknown): string[] => {
-    if (!value) return [];
-    if (Array.isArray(value)) return value.map((entry) => String(entry));
-    return [String(value)];
-  };
-
-  const claimValues = new Set([
-    ...toList(claims.groups),
-    ...toList(claims.roles),
-    ...toList(claims.role)
-  ].map((entry) => entry.toLowerCase()));
-
-  const hasMatch = (values: string[]) =>
-    values.some((value) => claimValues.has(value.toLowerCase()));
-
-  if (hasMatch(adminGroups) || claimValues.has("admin")) return "Admin";
-  if (hasMatch(observerGroups) || claimValues.has("observer")) return "Observer";
-  if (hasMatch(bidderGroups) || claimValues.has("bidder")) return "Bidder";
-  return "Bidder";
+  const session = readAuthSession();
+  return (session.role as Role) || "Guest";
 };
 
 const formatStatusClass = (status: Status) => {
@@ -392,9 +334,8 @@ const formatDuration = (ms: number) => {
 const canBid = (item?: AuctionItem) => {
   const session = readAuthSession();
   if (!state.agreementsAccepted) return false;
-  if (state.role !== "Bidder") return false;
-  if (authMode === "local" && !isLocalSignedIn()) return false;
-  if (authMode === "ad" && !session.signedIn) return false;
+  if (!session.signedIn) return false;
+  if (!(state.role === "Bidder" || state.role === "Admin")) return false;
   if (item && getStatus(item) !== "Live") return false;
   return true;
 };
@@ -500,7 +441,7 @@ const syncCategoriesFromItems = () => {
 
 const fetchCategories = async () => {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/categories`);
+    const response = await apiFetch("/api/categories");
     if (!response.ok) throw new Error("Failed to load categories");
     const data = (await response.json()) as string[];
     categories = data.length ? data : Array.from(new Set(seedItems.map((item) => item.category)));
@@ -511,7 +452,7 @@ const fetchCategories = async () => {
 
 const fetchItems = async () => {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/items`);
+    const response = await apiFetch("/api/items");
     if (!response.ok) throw new Error("Failed to load items");
     const data = (await response.json()) as AuctionItem[];
     items = data.length ? data : [...seedItems];
@@ -604,7 +545,7 @@ const renderDetail = () => {
   const bidNotice = canBid(item)
     ? `Minimum next bid: ${formatMoney(minBid)}`
     : getStatus(item) === "Live"
-      ? "Sign agreements, choose Bidder role, and sign in to place bids."
+      ? "Accept the agreements and sign in with a bidder-enabled account to place bids."
       : "Bidding is closed or not yet open for this item.";
 
   const reserveLine = item.reserve > 0
@@ -749,7 +690,7 @@ const renderDetail = () => {
     bidForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!canBid(item)) {
-        bidHint.textContent = "Bidding disabled. Ensure AD sign-in and agreements are complete.";
+        bidHint.textContent = "Bidding disabled. Ensure you are signed in and the agreements are complete.";
         return;
       }
       const value = Number(bidInput.value);
@@ -764,11 +705,11 @@ const renderDetail = () => {
       }
       bidHint.textContent = "Submitting bid...";
       try {
-        const response = await fetch(`${API_BASE_URL}/api/items/${item.id}/bids`, {
+        const response = await apiFetch(`/api/items/${item.id}/bids`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            ...getAuditHeaders(state.role),
+            ...getAuditHeaders(),
             "x-idempotency-key": crypto.randomUUID()
           },
           body: JSON.stringify({
@@ -856,23 +797,26 @@ const updateAgreementState = () => {
 const updateRoleUi = () => {
   state.role = resolveRole();
   const session = readAuthSession();
-  if (session.signedIn) {
-    writeAuthSession({ ...session, role: state.role });
-  }
   if (roleBadge) roleBadge.textContent = state.role;
   if (activeRoleLabel) {
     activeRoleLabel.textContent = state.role;
   }
+  if (adStatus) {
+    adStatus.textContent = session.signedIn ? "Signed in" : "Signed out";
+  }
+  if (adUser) {
+    adUser.textContent = session.signedIn ? session.displayName : "No active session";
+  }
+  if (adLogin) {
+    adLogin.classList.toggle("hidden", session.signedIn);
+  }
+  if (adLogout) {
+    adLogout.classList.toggle("hidden", !session.signedIn);
+  }
   if (accessNote) {
-    accessNote.textContent = adEnabled
-      ? activeAccount
-        ? "Role assigned from Entra ID groups."
-        : "Sign in with AD to resolve your role."
-      : authMode === "local"
-        ? `Local testing mode enabled. Active role: ${state.role}.`
-        : devRole
-          ? `Dev role override active: ${devRole}.`
-          : "AD not configured. Demo mode enabled.";
+    accessNote.textContent = session.signedIn
+      ? `Signed in as ${session.displayName}. Current database role: ${state.role}.`
+      : "Create an account and sign in to enable bidding access.";
   }
   if (adminPanel) {
     adminPanel.classList.toggle("hidden", state.role !== "Admin");
@@ -882,157 +826,29 @@ const updateRoleUi = () => {
   renderHistory();
 };
 
-const initAd = async () => {
+const initSessionUi = async () => {
   if (!adStatus || !adUser || !adLogin || !adLogout) return;
-
-  if (authMode === "local") {
-    const signedIn = isLocalSignedIn();
-    const persistedRole = (readAuthSession().role as Role) || devRole || "Bidder";
-    adStatus.textContent = signedIn ? "Local signed in" : "Local mode";
-    adUser.textContent = signedIn ? `${persistedRole} tester` : "Not signed in";
-    adLogin.disabled = false;
-    adLogin.classList.remove("opacity-50", "cursor-not-allowed");
-    if (signedIn) {
-      writeAuthSession({ mode: "local", signedIn: true, displayName: `${persistedRole} tester`, role: persistedRole });
-      adLogin.classList.add("hidden");
-      adLogout.classList.remove("hidden");
-    } else {
-      adLogin.classList.remove("hidden");
-      adLogout.classList.add("hidden");
-    }
-    adLogin.addEventListener("click", () => {
-      const role = ((readAuthSession().role as Role) || devRole || "Bidder");
-      setLocalSignedIn(true);
-      adStatus.textContent = "Local signed in";
-      adUser.textContent = `${role} tester`;
-      writeAuthSession({ mode: "local", signedIn: true, displayName: `${role} tester`, role });
-      adLogin.classList.add("hidden");
-      adLogout.classList.remove("hidden");
-      updateRoleUi();
-    });
-    adLogout.addEventListener("click", () => {
-      setLocalSignedIn(false);
-      clearAuthSession();
-      adStatus.textContent = "Local mode";
-      adUser.textContent = "Not signed in";
-      adLogin.classList.remove("hidden");
-      adLogout.classList.add("hidden");
-      updateRoleUi();
-    });
-    updateRoleUi();
-    return;
-  }
-
-  if (!adEnabled) {
-    demoSignedIn = isDemoSignedIn();
-    adStatus.textContent = demoSignedIn ? "Demo signed in" : "Demo mode";
-    adUser.textContent = demoSignedIn ? "Demo user" : "No AD config";
-    adLogin.disabled = false;
-    adLogin.classList.remove("opacity-50", "cursor-not-allowed");
-    if (demoSignedIn) {
-      writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user", role: state.role });
-      adLogin.classList.add("hidden");
-      adLogout.classList.remove("hidden");
-    } else {
-      adLogin.classList.remove("hidden");
-      adLogout.classList.add("hidden");
-    }
-    adLogin.addEventListener("click", () => {
-      demoSignedIn = !demoSignedIn;
-      setDemoSignedIn(demoSignedIn);
-      adStatus.textContent = demoSignedIn ? "Demo signed in" : "Demo mode";
-      adUser.textContent = demoSignedIn ? "Demo user" : "No AD config";
-      if (demoSignedIn) {
-        writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user", role: state.role });
-        adLogin.classList.add("hidden");
-        adLogout.classList.remove("hidden");
-      } else {
-        clearAuthSession();
-        adLogin.classList.remove("hidden");
-        adLogout.classList.add("hidden");
-      }
-      updateRoleUi();
-    });
-    adLogout.addEventListener("click", () => {
-      demoSignedIn = false;
-      setDemoSignedIn(false);
-      clearAuthSession();
-      adStatus.textContent = "Demo mode";
-      adUser.textContent = "No AD config";
-      adLogin.classList.remove("hidden");
-      adLogout.classList.add("hidden");
-      updateRoleUi();
-    });
-    updateRoleUi();
-    return;
-  }
-
-  msalClient = new PublicClientApplication(adConfig);
-
   try {
-    await msalClient.initialize();
-    activeAccount = msalClient.getActiveAccount() ?? msalClient.getAllAccounts()[0] ?? null;
-    if (activeAccount) {
-      msalClient.setActiveAccount(activeAccount);
-    }
-  } catch (error) {
-    console.error("Failed to initialize MSAL", error);
+    const session = await fetchCurrentSession();
+    writeAuthSession(session);
+  } catch {
+    writeAuthSession(readAuthSession());
   }
-
-  if (activeAccount) {
-    adStatus.textContent = "Connected";
-    adUser.textContent = activeAccount.name || activeAccount.username;
-    writeAuthSession({
-      mode: "ad",
-      signedIn: true,
-      displayName: activeAccount.name || activeAccount.username || "Signed in",
-      role: state.role
-    });
-    adLogin.classList.add("hidden");
-    adLogout.classList.remove("hidden");
-  } else {
-    adStatus.textContent = "Ready";
-    adUser.textContent = "No active session";
-    adLogin.classList.remove("hidden");
-    adLogout.classList.add("hidden");
-  }
-
   updateRoleUi();
-
-  adLogin.addEventListener("click", async () => {
-    if (!msalClient) return;
-    try {
-      const result = await msalClient.loginPopup({ scopes: ["User.Read"] });
-      activeAccount = result.account;
-      if (activeAccount) {
-        msalClient.setActiveAccount(activeAccount);
-      }
-      adStatus.textContent = "Connected";
-      adUser.textContent = activeAccount?.name || activeAccount?.username || "Signed in";
-      writeAuthSession({
-        mode: "ad",
-        signedIn: true,
-        displayName: activeAccount?.name || activeAccount?.username || "Signed in",
-        role: state.role
-      });
-      adLogin.classList.add("hidden");
-      adLogout.classList.remove("hidden");
-      updateRoleUi();
-    } catch (error) {
-      console.error("AD login failed", error);
-    }
+  adLogin.addEventListener("click", () => {
+    window.location.href = "/signin.html";
   });
-
   adLogout.addEventListener("click", async () => {
-    if (!msalClient || !activeAccount) return;
-    await msalClient.logoutPopup({ account: activeAccount });
-    activeAccount = null;
-    clearAuthSession();
-    adStatus.textContent = "Ready";
-    adUser.textContent = "No active session";
-    adLogin.classList.remove("hidden");
-    adLogout.classList.add("hidden");
-    updateRoleUi();
+    adLogout.disabled = true;
+    adLogout.textContent = "Signing out...";
+    try {
+      await logoutAccount();
+      updateRoleUi();
+      window.location.href = "/signin.html";
+    } finally {
+      adLogout.disabled = false;
+      adLogout.textContent = "Sign out";
+    }
   });
 };
 
@@ -1130,7 +946,7 @@ const init = async () => {
   renderDetail();
   renderHistory();
   wireEvents();
-  initAd();
+  initSessionUi();
   updateRoleUi();
   revealApp();
   setInterval(updateCountdowns, 1000);

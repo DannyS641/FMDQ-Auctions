@@ -1,22 +1,10 @@
 import "./styles.css";
-import { PublicClientApplication, AccountInfo } from "@azure/msal-browser";
 import {
-  clearAuthSession,
-  isDemoSignedIn,
-  isLocalSignedIn,
-  readAuthSession,
-  setDemoSignedIn,
-  setLocalSignedIn,
-  writeAuthSession
+  fetchCurrentSession,
+  loginWithAccount,
+  logoutAccount,
+  readAuthSession
 } from "./auth";
-
-type LocalTestRole = "Admin" | "Bidder" | "Observer";
-
-const localRoleOptions: LocalTestRole[] = ["Admin", "Bidder", "Observer"];
-const normalizeLocalRole = (value: string): LocalTestRole =>
-  localRoleOptions.includes(value as LocalTestRole) ? (value as LocalTestRole) : "Bidder";
-const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
-const devRole = normalizeLocalRole((import.meta.env.VITE_DEV_ROLE || "Bidder").trim() || "Bidder");
 
 const revealApp = () => {
   window.requestAnimationFrame(() => {
@@ -25,20 +13,15 @@ const revealApp = () => {
 };
 
 const renderSigninPage = () => {
+  const session = readAuthSession();
   document.body.innerHTML = `
     <div class="h-screen overflow-hidden bg-[linear-gradient(135deg,#f8fafc_0%,#eef4f1_45%,#ffffff_100%)] p-3 md:p-4">
       <div class="relative mx-auto flex h-full w-full max-w-7xl overflow-hidden rounded-[2rem] border border-white/70 bg-white/55 shadow-[0_24px_70px_rgba(148,163,184,0.28)] backdrop-blur-xl md:rounded-[2.75rem]">
         <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.88),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(226,232,240,0.5),transparent_30%)]"></div>
-
         <main class="relative z-10 grid h-full w-full items-center gap-4 p-3 md:gap-6 md:p-6 xl:grid-cols-[0.8fr_1.2fr]">
           <aside class="relative hidden h-full xl:block">
             <div class="relative h-full min-h-[640px] w-full overflow-hidden rounded-3xl bg-white">
-              <div class="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,232,142,0.9)_0%,rgba(255,172,43,0.35)_42%,rgba(14,58,18,0.08)_100%)]"></div>
-              <img
-                src="/slides/slide-2.jpg"
-                alt="Auction showcase"
-                class="absolute inset-0 h-full w-full object-cover object-center"
-              />
+              <img src="/slides/slide-2.jpg" alt="Auction showcase" class="absolute inset-0 h-full w-full object-cover object-center" />
               <div class="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.14)_0%,rgba(255,255,255,0.08)_38%,rgba(15,23,42,0.18)_100%)]"></div>
             </div>
           </aside>
@@ -47,31 +30,16 @@ const renderSigninPage = () => {
             <div class="w-full max-w-md">
               <div class="flex items-center justify-between gap-4">
                 <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
-                <a
-                  href="/index.html"
-                  class="rounded-full border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate transition hover:border-ink/20 hover:text-ink"
-                >
-                  Back
-                </a>
+                <a href="/index.html" class="rounded-full border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate">Back</a>
               </div>
 
               <p class="mt-8 text-[11px] uppercase tracking-[0.34em] text-slate">FMDQ Auctions Portal</p>
               <h1 class="mt-4 font-display text-4xl font-bold leading-none text-ink md:text-[2.8rem]">Welcome back</h1>
-              <p class="mt-4 font-display text-base text-slate">Please sign in to continue to the bidding desk.</p>
+              <p class="mt-4 font-display text-base text-slate">Sign in to continue to the bidding desk.</p>
 
-              <div class="mt-8 grid gap-3">
-                <div class="rounded-full border border-ink/10 bg-[#faf9f7] px-5 py-4">
-                  <p class="text-[11px] uppercase tracking-[0.28em] text-slate">User</p>
-                  <p id="ad-user" class="mt-1 font-display text-base font-semibold text-ink">No active session</p>
-                </div>
-                <label id="local-role-wrap" class="hidden rounded-[1.5rem] border border-ink/10 bg-[#faf9f7] px-5 py-4">
-                  <span class="text-[11px] uppercase tracking-[0.28em] text-slate">Test role</span>
-                  <select id="local-role" class="mt-2 w-full bg-transparent font-display text-base font-semibold text-ink">
-                    ${localRoleOptions
-                      .map((role) => `<option value="${role}" ${role === normalizeLocalRole(devRole) ? "selected" : ""}>${role}</option>`)
-                      .join("")}
-                  </select>
-                </label>
+              <div class="mt-8 rounded-full border border-ink/10 bg-[#faf9f7] px-5 py-4">
+                <p class="text-[11px] uppercase tracking-[0.28em] text-slate">User</p>
+                <p id="session-user" class="mt-1 font-display text-base font-semibold text-ink">${session.signedIn ? session.displayName : "No active session"}</p>
               </div>
 
               <div class="my-6 flex items-center gap-4">
@@ -80,29 +48,29 @@ const renderSigninPage = () => {
                 <span class="h-px flex-1 bg-ink/10"></span>
               </div>
 
-              <div class="grid gap-3">
-                <button
-                  id="ad-login"
-                  class="rounded-full border border-ink/15 bg-white px-6 py-3.5 font-display text-base font-semibold text-ink shadow-[0_8px_25px_rgba(11,14,18,0.07)] transition hover:-translate-y-0.5 hover:shadow-[0_12px_30px_rgba(11,14,18,0.12)]"
-                >
-                  Sign in with AD
-                </button>
-                <button
-                  id="ad-logout"
-                  class="hidden rounded-full border border-ink/15 bg-white px-6 py-3.5 font-display text-base font-semibold text-ink shadow-[0_8px_25px_rgba(11,14,18,0.05)] transition hover:-translate-y-0.5 hover:shadow-[0_12px_30px_rgba(11,14,18,0.1)]"
-                >
-                  Sign out
-                </button>
-                <button
-                  id="continue-btn"
-                  class="rounded-full bg-[#ff9f1c] px-6 py-3.5 font-display text-base font-semibold text-white shadow-[0_18px_35px_rgba(255,159,28,0.32)] transition hover:-translate-y-0.5 hover:bg-[#ff9410] disabled:hover:translate-y-0 disabled:hover:bg-[#ff9f1c]"
-                  disabled
-                >
-                  Continue to bidding
-                </button>
-              </div>
+              ${
+                session.signedIn
+                  ? `
+                    <div class="grid gap-3">
+                      <button id="logout-btn" class="rounded-full border border-ink/15 bg-white px-6 py-3.5 font-display text-base font-semibold text-ink">Sign out</button>
+                      <button id="continue-btn" class="rounded-full bg-ink px-6 py-3.5 font-display text-base font-semibold text-white">Continue to bidding</button>
+                    </div>
+                  `
+                  : `
+                    <form id="login-form" class="grid gap-3">
+                      <p class="text-xs uppercase tracking-[0.28em] text-slate">Sign in</p>
+                      <input id="login-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
+                      <input id="login-password" type="password" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Password" />
+                      <button type="submit" class="rounded-full bg-[#ff9f1c] px-6 py-3.5 font-display text-base font-semibold text-white shadow-[0_18px_35px_rgba(255,159,28,0.32)]">Sign in</button>
+                    </form>
+                    <div class="mt-6 grid gap-3">
+                      <a href="/signup.html" class="rounded-full border border-ink/15 bg-white px-6 py-3.5 text-center font-display text-base font-semibold text-ink shadow-[0_8px_25px_rgba(11,14,18,0.07)]">Create account</a>
+                    </div>
+                    <button id="continue-btn" class="mt-3 rounded-full bg-ink px-6 py-3.5 font-display text-base font-semibold text-white disabled:opacity-60" disabled>Continue to bidding</button>
+                  `
+              }
 
-              <p id="signin-note" class="mt-5 min-h-[1.25rem] rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]"></p>
+              <p id="signin-note" class="mt-5 min-h-[1.25rem] rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">${session.signedIn ? `Signed in as ${session.displayName} (${session.role}).` : "New users should create an account first, verify their email, then sign in."}</p>
             </div>
           </section>
         </main>
@@ -111,211 +79,49 @@ const renderSigninPage = () => {
   `;
 };
 
-renderSigninPage();
-revealApp();
+const bindEvents = () => {
+  const loginForm = document.querySelector<HTMLFormElement>("#login-form");
+  const note = document.querySelector<HTMLParagraphElement>("#signin-note");
+  const continueBtn = document.querySelector<HTMLButtonElement>("#continue-btn");
+  const logoutBtn = document.querySelector<HTMLButtonElement>("#logout-btn");
 
-const adUser = document.querySelector<HTMLParagraphElement>("#ad-user");
-const adLogin = document.querySelector<HTMLButtonElement>("#ad-login");
-const adLogout = document.querySelector<HTMLButtonElement>("#ad-logout");
-const continueBtn = document.querySelector<HTMLButtonElement>("#continue-btn");
-const signInNote = document.querySelector<HTMLParagraphElement>("#signin-note");
-const localRoleWrap = document.querySelector<HTMLLabelElement>("#local-role-wrap");
-const localRoleSelect = document.querySelector<HTMLSelectElement>("#local-role");
-
-const adConfig = {
-  auth: {
-    clientId: import.meta.env.VITE_AAD_CLIENT_ID || "",
-    authority: import.meta.env.VITE_AAD_AUTHORITY || "",
-    redirectUri: `${window.location.origin}/signin.html`
-  },
-  cache: {
-    cacheLocation: "sessionStorage" as const
-  }
-};
-
-const adEnabled = authMode === "ad" && Boolean(adConfig.auth.clientId && adConfig.auth.authority);
-let msalClient: PublicClientApplication | null = null;
-let activeAccount: AccountInfo | null = null;
-let demoSignedIn = false;
-
-const getSelectedLocalRole = () => normalizeLocalRole(localRoleSelect?.value || devRole);
-const getLocalDisplayName = (role: LocalTestRole) => `${role} tester`;
-
-const updateContinueState = (signedIn: boolean) => {
-  if (!continueBtn) return;
-  continueBtn.disabled = !signedIn;
-};
-
-const updateStatus = (signedIn: boolean, userLabel: string) => {
-  if (adUser) adUser.textContent = userLabel;
-  updateContinueState(signedIn);
-};
-
-const updateNote = (message: string) => {
-  if (signInNote) signInNote.textContent = message;
-};
-
-const setSignedOutUi = () => {
-  clearAuthSession();
-  adLogin?.classList.remove("hidden");
-  adLogout?.classList.add("hidden");
-};
-
-const setSignedInUi = () => {
-  adLogin?.classList.add("hidden");
-  adLogout?.classList.remove("hidden");
-};
-
-const handleContinue = () => {
-  if (continueBtn?.disabled) {
-    updateNote("Please sign in before continuing to the bidding desk.");
-    return;
-  }
-  window.location.href = "/bidding.html";
-};
-
-const initDemoMode = () => {
-  demoSignedIn = isDemoSignedIn();
-  updateStatus(demoSignedIn, demoSignedIn ? "Demo user" : "No AD config");
-  updateNote("Demo mode is active for this environment.");
-  if (demoSignedIn) {
-    writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user", role: "Bidder" });
-    setSignedInUi();
-  } else {
-    setSignedOutUi();
-  }
-
-  adLogin?.addEventListener("click", () => {
-    demoSignedIn = !demoSignedIn;
-    setDemoSignedIn(demoSignedIn);
-    updateStatus(demoSignedIn, demoSignedIn ? "Demo user" : "No AD config");
-    updateNote(demoSignedIn ? "Demo mode is active. You can continue." : "Demo mode is active for this environment.");
-    if (demoSignedIn) {
-      writeAuthSession({ mode: "demo", signedIn: true, displayName: "Demo user", role: "Bidder" });
-      setSignedInUi();
-    } else {
-      setSignedOutUi();
-    }
-  });
-
-  adLogout?.addEventListener("click", () => {
-    demoSignedIn = false;
-    setDemoSignedIn(false);
-    updateStatus(false, "No AD config");
-    updateNote("Demo mode is active for this environment.");
-    setSignedOutUi();
-  });
-};
-
-const initAd = async () => {
-  if (!adLogin || !adLogout) return;
-
-  if (authMode === "local") {
-    localRoleWrap?.classList.remove("hidden");
-    const persistedRole = normalizeLocalRole(readAuthSession().role || devRole);
-    if (localRoleSelect) localRoleSelect.value = persistedRole;
-    const signedIn = isLocalSignedIn();
-    const selectedRole = getSelectedLocalRole();
-    updateStatus(signedIn, signedIn ? getLocalDisplayName(selectedRole) : "Not signed in");
-    updateNote(`Local testing mode is active. Selected role: ${selectedRole}.`);
-    if (signedIn) {
-      writeAuthSession({ mode: "local", signedIn: true, displayName: getLocalDisplayName(selectedRole), role: selectedRole });
-      setSignedInUi();
-    } else {
-      setSignedOutUi();
-    }
-
-    localRoleSelect?.addEventListener("change", () => {
-      const role = getSelectedLocalRole();
-      updateStatus(isLocalSignedIn(), isLocalSignedIn() ? getLocalDisplayName(role) : "Not signed in");
-      updateNote(`Local testing mode is active. Selected role: ${role}.`);
-      if (isLocalSignedIn()) {
-        writeAuthSession({ mode: "local", signedIn: true, displayName: getLocalDisplayName(role), role });
-      }
-    });
-
-    adLogin.addEventListener("click", () => {
-      const role = getSelectedLocalRole();
-      setLocalSignedIn(true);
-      updateStatus(true, getLocalDisplayName(role));
-      updateNote(`Local testing mode is active. Signed in as ${role}.`);
-      writeAuthSession({ mode: "local", signedIn: true, displayName: getLocalDisplayName(role), role });
-      setSignedInUi();
-    });
-
-    adLogout.addEventListener("click", () => {
-      setLocalSignedIn(false);
-      updateStatus(false, "Not signed in");
-      updateNote("Local testing mode is active. Sign in again to continue.");
-      setSignedOutUi();
-    });
-
-    return;
-  }
-
-  if (!adEnabled) {
-    initDemoMode();
-    return;
-  }
-
-  msalClient = new PublicClientApplication(adConfig);
-
-  try {
-    await msalClient.initialize();
-    const accounts = msalClient.getAllAccounts();
-    activeAccount = accounts[0] ?? null;
-  } catch (error) {
-    console.error("Failed to initialize MSAL", error);
-  }
-
-  if (activeAccount) {
-    updateStatus(true, activeAccount.name || activeAccount.username || "Signed in");
-    updateNote("You can continue to the bidding desk.");
-    writeAuthSession({
-      mode: "ad",
-      signedIn: true,
-      displayName: activeAccount.name || activeAccount.username || "Signed in",
-      role: "Bidder"
-    });
-    setSignedInUi();
-  } else {
-    updateStatus(false, "No active session");
-    updateNote("Sign in with AD to continue.");
-    setSignedOutUi();
-  }
-
-  adLogin.addEventListener("click", async () => {
-    if (!msalClient) return;
-  try {
-      const result = await msalClient.loginPopup({ scopes: ["User.Read"] });
-      activeAccount = result.account;
-      if (activeAccount) {
-        msalClient.setActiveAccount(activeAccount);
-      }
-      updateStatus(true, activeAccount?.name || activeAccount?.username || "Signed in");
-      updateNote("You can continue to the bidding desk.");
-      writeAuthSession({
-        mode: "ad",
-        signedIn: true,
-        displayName: activeAccount?.name || activeAccount?.username || "Signed in",
-        role: "Bidder"
-      });
-      setSignedInUi();
+  loginForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const email = (document.querySelector<HTMLInputElement>("#login-email")?.value || "").trim();
+    const password = document.querySelector<HTMLInputElement>("#login-password")?.value || "";
+    try {
+      await loginWithAccount(email, password);
+      renderSigninPage();
+      bindEvents();
     } catch (error) {
-      console.error("AD login failed", error);
-      updateNote("Sign-in failed. Please try again.");
+      if (note) note.textContent = error instanceof Error ? error.message : "Unable to sign in.";
     }
   });
 
-  adLogout.addEventListener("click", async () => {
-    if (!msalClient || !activeAccount) return;
-    await msalClient.logoutPopup({ account: activeAccount });
-    activeAccount = null;
-    updateStatus(false, "No active session");
-    updateNote("Signed out. Sign in again to continue.");
-    setSignedOutUi();
+  logoutBtn?.addEventListener("click", async () => {
+    await logoutAccount();
+    renderSigninPage();
+    bindEvents();
+  });
+
+  continueBtn?.addEventListener("click", () => {
+    if (continueBtn.disabled && note) {
+      note.textContent = "Please sign in before continuing to the bidding desk.";
+      return;
+    }
+    window.location.href = "/bidding.html";
   });
 };
 
-continueBtn?.addEventListener("click", handleContinue);
-void initAd();
+const init = async () => {
+  try {
+    await fetchCurrentSession();
+  } catch {
+    // Ignore and render the unauthenticated state.
+  }
+  renderSigninPage();
+  bindEvents();
+  revealApp();
+};
+
+void init();

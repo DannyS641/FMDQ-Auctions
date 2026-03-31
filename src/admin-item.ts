@@ -1,5 +1,5 @@
 import "./styles.css";
-import { getAuditHeaders, readAuthSession } from "./auth";
+import { apiFetch, fetchCurrentSession, getAuditHeaders, readAuthSession } from "./auth";
 
 type FileRef = {
   name: string;
@@ -553,11 +553,11 @@ const bindManagerEvents = () => {
     }
     categoryFeedback.textContent = "Adding category...";
     try {
-      const response = await fetch(`${API_BASE_URL}/api/categories`, {
+      const response = await apiFetch("/api/categories", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...getAuditHeaders("Admin")
+          ...getAuditHeaders()
         },
         body: JSON.stringify({ name })
       });
@@ -651,11 +651,11 @@ const bindManagerEvents = () => {
     feedback.textContent = isEdit ? "Saving item changes..." : "Creating item...";
 
     try {
-      const response = await fetch(
-        isEdit ? `${API_BASE_URL}/api/items/${state.selectedItemId}` : `${API_BASE_URL}/api/items`,
+      const response = await apiFetch(
+        isEdit ? `/api/items/${state.selectedItemId}` : "/api/items",
         {
           method: isEdit ? "PATCH" : "POST",
-          headers: getAuditHeaders("Admin"),
+          headers: getAuditHeaders(),
           body: formData
         }
       );
@@ -682,9 +682,9 @@ const deleteItem = async (itemId: string) => {
   const feedback = document.querySelector<HTMLParagraphElement>("#admin-feedback");
   if (feedback) feedback.textContent = "Archiving item...";
   try {
-    const response = await fetch(`${API_BASE_URL}/api/items/${itemId}`, {
+    const response = await apiFetch(`/api/items/${itemId}`, {
       method: "DELETE",
-      headers: getAuditHeaders("Admin")
+      headers: getAuditHeaders()
     });
     if (!response.ok) {
       const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -709,9 +709,9 @@ const restoreItem = async (itemId: string) => {
   const feedback = document.querySelector<HTMLParagraphElement>("#admin-feedback");
   if (feedback) feedback.textContent = "Restoring item...";
   try {
-    const response = await fetch(`${API_BASE_URL}/api/items/${itemId}/restore`, {
+    const response = await apiFetch(`/api/items/${itemId}/restore`, {
       method: "POST",
-      headers: getAuditHeaders("Admin")
+      headers: getAuditHeaders()
     });
     const payload = (await response.json().catch(() => null)) as { error?: string } | AuctionItem | null;
     if (!response.ok) {
@@ -737,9 +737,9 @@ const deleteCategory = async (category: string) => {
   const feedback = document.querySelector<HTMLParagraphElement>("#category-feedback");
   if (feedback) feedback.textContent = "Deleting category...";
   try {
-    const response = await fetch(`${API_BASE_URL}/api/categories/${encodeURIComponent(category)}`, {
+    const response = await apiFetch(`/api/categories/${encodeURIComponent(category)}`, {
       method: "DELETE",
-      headers: getAuditHeaders("Admin")
+      headers: getAuditHeaders()
     });
     if (!response.ok) {
       const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -756,8 +756,8 @@ const deleteCategory = async (category: string) => {
 };
 
 const loadItems = async () => {
-  const response = await fetch(`${API_BASE_URL}/api/items?includeArchived=1`, {
-    headers: getAuditHeaders("Admin")
+  const response = await apiFetch("/api/items?includeArchived=1", {
+    headers: getAuditHeaders()
   });
   if (!response.ok) {
     throw new Error("Unable to load auction items.");
@@ -767,7 +767,7 @@ const loadItems = async () => {
 };
 
 const loadCategories = async () => {
-  const response = await fetch(`${API_BASE_URL}/api/categories`);
+  const response = await apiFetch("/api/categories");
   if (!response.ok) {
     throw new Error("Unable to load categories.");
   }
@@ -799,6 +799,7 @@ const refreshData = async (feedbackMessage?: string) => {
 };
 
 const init = async () => {
+  await fetchCurrentSession().catch(() => undefined);
   const session = readAuthSession();
   if (!session.signedIn || session.role !== "Admin") {
     renderAccessDenied();

@@ -1,11 +1,10 @@
 ﻿import "./styles.css";
 import {
+  apiFetch,
+  fetchCurrentSession,
   getAuditHeaders,
   hasAcceptedAgreements,
-  isLocalSignedIn,
-  readAuthSession,
-  setLocalSignedIn,
-  writeAuthSession
+  readAuthSession
 } from "./auth";
 
 type FileRef = {
@@ -40,9 +39,6 @@ type AuctionItem = {
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
-const authMode = (import.meta.env.VITE_AUTH_MODE || "ad").toLowerCase();
-const adEnabled = authMode === "ad" && Boolean(import.meta.env.VITE_AAD_CLIENT_ID && import.meta.env.VITE_AAD_AUTHORITY);
-const devRole = (import.meta.env.VITE_DEV_ROLE || "Bidder").trim() || "Bidder";
 
 const revealApp = () => {
   window.requestAnimationFrame(() => {
@@ -79,33 +75,19 @@ const canBid = (item: AuctionItem) => {
       message: "Accept the Terms and Conditions and Auction Rules on the listings page before placing a bid."
     };
   }
-  if (authMode === "local") {
-    return isLocalSignedIn()
-      ? { allowed: true, message: "" }
-      : { allowed: false, message: "Sign in to place a bid." };
+  if (!session.signedIn) {
+    return { allowed: false, message: "Sign in to place a bid." };
   }
-  if (adEnabled) {
-    return session.signedIn
-      ? { allowed: true, message: "" }
-      : { allowed: false, message: "Sign in with AD to place a bid." };
+  if (!(session.role === "Bidder" || session.role === "Admin")) {
+    return { allowed: false, message: "Your account role does not allow bidding." };
   }
-  return session.signedIn
-    ? { allowed: true, message: "" }
-    : { allowed: false, message: "Sign in to place a bid." };
+  return { allowed: true, message: "" };
 };
 
 const getQuery = () => {
   const params = new URLSearchParams(window.location.search);
   return params.get("id");
 };
-
-const getLocalTestingRole = () => {
-  const session = readAuthSession();
-  if (session.role && session.role !== "Guest") return session.role;
-  return devRole;
-};
-
-const getLocalDisplayName = (role: string) => `${role} tester`;
 
 const renderEmpty = (message: string) => {
   const container = document.querySelector<HTMLDivElement>("#item-view");
@@ -251,11 +233,7 @@ const renderItem = (item: AuctionItem) => {
           >
             Place bid
           </button>
-          ${
-            authMode === "local" && !isLocalSignedIn()
-              ? `<button id="local-signin" type="button" class="w-full rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Sign in</button>`
-              : ""
-          }
+          ${!readAuthSession().signedIn ? `<a href="/signin.html" class="block w-full rounded-full border border-ink/20 px-5 py-3 text-center text-sm font-semibold text-ink">Sign in</a>` : ""}
           <p id="bid-hint" class="text-xs text-slate">${bidState.message}</p>
         </form>
       </div>
@@ -284,7 +262,6 @@ const renderItem = (item: AuctionItem) => {
   const bidInput = container.querySelector<HTMLInputElement>("#bid-amount");
   const bidHint = container.querySelector<HTMLParagraphElement>("#bid-hint");
   const bidStep = container.querySelector<HTMLButtonElement>("#bid-step");
-  const localSignin = container.querySelector<HTMLButtonElement>("#local-signin");
 
   const refreshBidState = () => {
     const state = canBid(item);
@@ -299,13 +276,6 @@ const renderItem = (item: AuctionItem) => {
     const currentValue = Number(bidInput?.value || 0);
     const nextValue = currentValue >= minBid ? currentValue + item.increment : minBid;
     if (bidInput) bidInput.value = String(nextValue);
-  });
-
-  localSignin?.addEventListener("click", () => {
-    const role = getLocalTestingRole();
-    setLocalSignedIn(true);
-    writeAuthSession({ mode: "local", signedIn: true, displayName: getLocalDisplayName(role), role });
-    refreshBidState();
   });
 
   bidForm?.addEventListener("submit", async (event) => {
@@ -327,11 +297,11 @@ const renderItem = (item: AuctionItem) => {
     }
     if (bidHint) bidHint.textContent = "Submitting bid...";
     try {
-      const response = await fetch(`${API_BASE_URL}/api/items/${item.id}/bids`, {
+      const response = await apiFetch(`/api/items/${item.id}/bids`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...getAuditHeaders("Bidder"),
+          ...getAuditHeaders(),
           "x-idempotency-key": crypto.randomUUID()
         },
         body: JSON.stringify({
@@ -359,7 +329,8 @@ const init = async () => {
   }
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/items/${id}`);
+    await fetchCurrentSession().catch(() => undefined);
+    const response = await apiFetch(`/api/items/${id}`);
     if (!response.ok) {
       renderEmpty("Unable to load item details.");
       return;

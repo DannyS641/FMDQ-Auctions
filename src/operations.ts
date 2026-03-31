@@ -1,5 +1,5 @@
 import "./styles.css";
-import { getAuditHeaders, readAuthSession } from "./auth";
+import { apiFetch, fetchCurrentSession, getAuditHeaders, readAuthSession } from "./auth";
 
 type OperationsPayload = {
   summary: {
@@ -61,8 +61,6 @@ type WonAuction = {
   wonAt: string;
 };
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
-
 const revealApp = () => {
   window.requestAnimationFrame(() => {
     document.body.removeAttribute("data-app-loading");
@@ -110,8 +108,8 @@ const renderShell = (content: string) => {
 };
 
 const downloadExport = async (path: string, filename: string) => {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: getAuditHeaders("Admin")
+  const response = await apiFetch(path, {
+    headers: getAuditHeaders()
   });
   if (!response.ok) throw new Error("Export failed.");
   const blob = await response.blob();
@@ -123,8 +121,8 @@ const renderError = (message: string) => {
 };
 
 const fetchJson = async <T>(path: string) => {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: getAuditHeaders("Admin")
+  const response = await apiFetch(path, {
+    headers: getAuditHeaders()
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -215,9 +213,9 @@ const wireActions = (items: AuctionItem[], wins: WonAuction[]) => {
   document.querySelector<HTMLButtonElement>("#process-notification-queue")?.addEventListener("click", async () => {
     const feedback = document.querySelector<HTMLParagraphElement>("#spool-feedback");
     if (feedback) feedback.textContent = "Processing notification queue...";
-    const response = await fetch(`${API_BASE_URL}/api/admin/notifications/process`, {
+    const response = await apiFetch("/api/admin/notifications/process", {
       method: "POST",
-      headers: getAuditHeaders("Admin")
+      headers: getAuditHeaders()
     });
     if (!response.ok) {
       if (feedback) feedback.textContent = "Unable to process the notification queue.";
@@ -229,6 +227,7 @@ const wireActions = (items: AuctionItem[], wins: WonAuction[]) => {
 };
 
 const init = async () => {
+  await fetchCurrentSession().catch(() => undefined);
   const session = readAuthSession();
   if (!session.signedIn || session.role !== "Admin") {
     renderError("Admin access is required to view the operations desk.");
@@ -239,7 +238,7 @@ const init = async () => {
     const [operations, items, wins] = await Promise.all([
       fetchJson<OperationsPayload>("/api/admin/operations"),
       fetchJson<AuctionItem[]>("/api/items?includeArchived=1"),
-      fetch(`${API_BASE_URL}/api/me/wins`, { headers: getAuditHeaders("Admin") })
+      apiFetch("/api/me/wins", { headers: getAuditHeaders() })
         .then(async (response) => (response.ok ? ((await response.json()) as WonAuction[]) : []))
     ]);
 

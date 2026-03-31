@@ -1,5 +1,5 @@
 import "./styles.css";
-import { getAuditHeaders, readAuthSession } from "./auth";
+import { apiFetch, fetchCurrentSession, getAuditHeaders, readAuthSession } from "./auth";
 
 type WonAuction = {
   id: string;
@@ -11,8 +11,6 @@ type WonAuction = {
   endTime: string;
   wonAt: string;
 };
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
 
 const revealApp = () => {
   window.requestAnimationFrame(() => {
@@ -44,6 +42,7 @@ const renderShell = (content: string) => {
 };
 
 const init = async () => {
+  await fetchCurrentSession().catch(() => undefined);
   const session = readAuthSession();
   if (!session.signedIn) {
     renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">Sign in first to review auctions won by your current user.</div>`);
@@ -51,8 +50,8 @@ const init = async () => {
   }
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/me/wins`, {
-      headers: getAuditHeaders(session.role)
+    const response = await apiFetch("/api/me/wins", {
+      headers: getAuditHeaders()
     });
     if (!response.ok) throw new Error();
     const wins = (await response.json()) as WonAuction[];

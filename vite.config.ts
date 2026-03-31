@@ -16,6 +16,8 @@ export default defineConfig({
         bidding: resolve(__dirname, "bidding.html"),
         item: resolve(__dirname, "item.html"),
         signin: resolve(__dirname, "signin.html"),
+        signup: resolve(__dirname, "signup.html"),
+        verify: resolve(__dirname, "verify.html"),
         adminItem: resolve(__dirname, "admin-item.html"),
         closed: resolve(__dirname, "closed.html"),
         won: resolve(__dirname, "won.html"),
