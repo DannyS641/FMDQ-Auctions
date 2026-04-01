@@ -12,3 +12,4 @@ Thumbs.db
 tools/ffmpeg/ffmpeg.zip
 *.tsbuildinfo
 server/uploads/
+server/data/notification-outbox/
