@@ -1,1 +1,1 @@
-{"root":["./src/admin-item.ts","./src/auth.ts","./src/closed.ts","./src/item.ts","./src/landing.ts","./src/main.ts","./src/operations.ts","./src/signin.ts","./src/signup.ts","./src/verify.ts","./src/won.ts"],"version":"5.9.3"}
+{"root":["./src/admin-item.ts","./src/auth.ts","./src/closed.ts","./src/item.ts","./src/landing.ts","./src/main.ts","./src/operations.ts","./src/reset-password.ts","./src/signin.ts","./src/signup.ts","./src/verify.ts","./src/won.ts"],"version":"5.9.3"}

@@ -12,7 +12,6 @@ export type AuthSession = {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
 const authSessionKey = "fmdq_auth_session";
-const agreementsAcceptedKey = "fmdq_agreements_accepted";
 
 const defaultSession: AuthSession = {
   mode: "account",
@@ -48,12 +47,6 @@ export const writeAuthSession = (session: AuthSession) => {
 
 export const clearAuthSession = () => {
   sessionStorage.removeItem(authSessionKey);
-  sessionStorage.removeItem(agreementsAcceptedKey);
-};
-
-export const hasAcceptedAgreements = () => sessionStorage.getItem(agreementsAcceptedKey) === "true";
-export const setAcceptedAgreements = (value: boolean) => {
-  sessionStorage.setItem(agreementsAcceptedKey, value ? "true" : "false");
 };
 
 export const apiFetch = (path: string, init?: RequestInit) =>
@@ -150,6 +143,36 @@ export const verifyEmailToken = async (token: string) => {
     | null;
   if (!response.ok || !payload) {
     throw new Error(payload?.error || "Unable to verify email.");
+  }
+  return payload;
+};
+
+export const requestPasswordReset = async (email: string) => {
+  const response = await apiFetch("/api/auth/request-password-reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email })
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { error?: string; requested?: boolean; message?: string }
+    | null;
+  if (!response.ok || !payload) {
+    throw new Error(payload?.error || "Unable to request password reset.");
+  }
+  return payload;
+};
+
+export const resetPassword = async (token: string, password: string) => {
+  const response = await apiFetch("/api/auth/reset-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, password })
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { error?: string; reset?: boolean; message?: string }
+    | null;
+  if (!response.ok || !payload) {
+    throw new Error(payload?.error || "Unable to reset password.");
   }
   return payload;
 };

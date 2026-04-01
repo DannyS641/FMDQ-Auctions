@@ -33,7 +33,7 @@ const renderSignupPage = () => {
               <form id="signup-form" class="mt-8 grid gap-3">
                 <input id="signup-name" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Full name" />
                 <input id="signup-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
-                <input id="signup-password" type="password" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Password (min. 8 characters)" />
+                <input id="signup-password" type="password" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Password (8+ chars, upper, lower, number, symbol)" />
                 <button type="submit" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Create account</button>
               </form>
 
@@ -89,6 +89,10 @@ const bindEvents = () => {
     const displayName = (document.querySelector<HTMLInputElement>("#signup-name")?.value || "").trim();
     const email = (document.querySelector<HTMLInputElement>("#signup-email")?.value || "").trim();
     const password = document.querySelector<HTMLInputElement>("#signup-password")?.value || "";
+    if (password.length < 8) {
+      if (note) note.textContent = "Password must include uppercase, lowercase, number, and symbol.";
+      return;
+    }
     pendingSubmission = { displayName, email, password };
     if (note) note.textContent = "Confirm the popup agreement to finish creating your account.";
     openModal();

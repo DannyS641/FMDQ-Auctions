@@ -14,6 +14,16 @@ type OperationsPayload = {
   notificationQueue: NotificationEntry[];
 };
 
+type AdminUser = {
+  id: string;
+  email: string;
+  displayName: string;
+  status: string;
+  createdAt: string;
+  lastLoginAt?: string | null;
+  roles: string[];
+};
+
 type AuditEntry = {
   id: string;
   eventType: string;
@@ -131,7 +141,7 @@ const fetchJson = async <T>(path: string) => {
   return (await response.json()) as T;
 };
 
-const wireActions = (items: AuctionItem[], wins: WonAuction[]) => {
+const wireActions = (items: AuctionItem[], wins: WonAuction[], users: AdminUser[]) => {
   document.querySelector<HTMLButtonElement>("#download-items-export")?.addEventListener("click", async () => {
     await downloadExport("/api/exports/items.csv", "items-export.csv");
   });
@@ -224,6 +234,78 @@ const wireActions = (items: AuctionItem[], wins: WonAuction[]) => {
     const payload = (await response.json()) as { processed: number; transport: string };
     if (feedback) feedback.textContent = `Processed ${payload.processed} queued notifications using ${payload.transport} transport. Refresh the page to see updated statuses.`;
   });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-user-reset]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const userId = button.dataset.userReset;
+      const feedback = document.querySelector<HTMLParagraphElement>("#reset-feedback");
+      if (!userId) return;
+      button.disabled = true;
+      if (feedback) feedback.textContent = "Sending reset email...";
+      const response = await apiFetch(`/api/admin/users/${userId}/password-reset`, {
+        method: "POST",
+        headers: getAuditHeaders()
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+      if (feedback) feedback.textContent = response.ok ? (payload?.message || "Reset email sent.") : (payload?.error || "Unable to send reset email.");
+      button.disabled = false;
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-user-disable]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const userId = button.dataset.userDisable;
+      const feedback = document.querySelector<HTMLParagraphElement>("#reset-feedback");
+      if (!userId) return;
+      button.disabled = true;
+      if (feedback) feedback.textContent = "Disabling user...";
+      const response = await apiFetch(`/api/admin/users/${userId}/disable`, {
+        method: "POST",
+        headers: getAuditHeaders()
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+      if (feedback) feedback.textContent = response.ok ? (payload?.message || "User disabled.") : (payload?.error || "Unable to disable user.");
+      button.disabled = false;
+      if (response.ok) window.location.reload();
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-user-enable]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const userId = button.dataset.userEnable;
+      const feedback = document.querySelector<HTMLParagraphElement>("#reset-feedback");
+      if (!userId) return;
+      button.disabled = true;
+      if (feedback) feedback.textContent = "Enabling user...";
+      const response = await apiFetch(`/api/admin/users/${userId}/enable`, {
+        method: "POST",
+        headers: getAuditHeaders()
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+      if (feedback) feedback.textContent = response.ok ? (payload?.message || "User enabled.") : (payload?.error || "Unable to enable user.");
+      button.disabled = false;
+      if (response.ok) window.location.reload();
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-bulk-reset]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const scope = button.dataset.bulkReset || "selected";
+      const role = button.dataset.bulkRole || "";
+      const feedback = document.querySelector<HTMLParagraphElement>("#reset-feedback");
+      if (feedback) feedback.textContent = "Queueing bulk password reset emails...";
+      const response = await apiFetch("/api/admin/users/password-resets", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuditHeaders()
+        },
+        body: JSON.stringify({ scope, role })
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string; message?: string } | null;
+      if (feedback) feedback.textContent = response.ok ? (payload?.message || "Bulk reset queued.") : (payload?.error || "Unable to queue bulk reset.");
+    });
+  });
 };
 
 const init = async () => {
@@ -235,11 +317,12 @@ const init = async () => {
   }
 
   try {
-    const [operations, items, wins] = await Promise.all([
+    const [operations, items, wins, users] = await Promise.all([
       fetchJson<OperationsPayload>("/api/admin/operations"),
       fetchJson<AuctionItem[]>("/api/items?includeArchived=1"),
       apiFetch("/api/me/wins", { headers: getAuditHeaders() })
-        .then(async (response) => (response.ok ? ((await response.json()) as WonAuction[]) : []))
+        .then(async (response) => (response.ok ? ((await response.json()) as WonAuction[]) : [])),
+      fetchJson<AdminUser[]>("/api/admin/users")
     ]);
 
     renderShell(`
@@ -358,9 +441,47 @@ const init = async () => {
             </div>
           </section>
         </div>
+
+        <section class="mt-10 rounded-3xl border border-ink/10 bg-white p-6">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p class="text-xs uppercase tracking-[0.3em] text-slate">User security</p>
+              <h2 class="mt-2 text-2xl font-semibold text-ink">Password reset management</h2>
+              <p class="mt-2 text-sm text-slate">Send password reset emails to one user or trigger them in bulk for selected role groups.</p>
+            </div>
+            <div class="flex flex-wrap gap-3">
+              <button data-bulk-reset="all" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">Reset all users</button>
+              <button data-bulk-reset="role" data-bulk-role="Bidder" class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Reset all bidders</button>
+              <button data-bulk-reset="role" data-bulk-role="Admin" class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Reset all admins</button>
+            </div>
+          </div>
+          <p id="reset-feedback" class="mt-4 rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">Use these controls to issue password reset emails from the operations desk.</p>
+          <div class="mt-6 grid gap-3">
+            ${users.length
+              ? users.map((user) => `
+                  <div class="rounded-2xl border border-ink/10 bg-ink/5 p-4">
+                    <div class="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <p class="text-sm font-semibold text-ink">${user.displayName}</p>
+                        <p class="mt-1 text-xs text-slate">${user.email}</p>
+                        <p class="mt-2 text-xs text-slate">Roles: ${user.roles.length ? user.roles.join(", ") : "None"} · Status: ${user.status}</p>
+                        <p class="mt-1 text-xs text-slate">Last login: ${user.lastLoginAt ? formatDate(user.lastLoginAt) : "Never"}</p>
+                      </div>
+                      <div class="flex flex-wrap gap-2">
+                        <button data-user-reset="${user.id}" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Send reset</button>
+                        ${user.status === "disabled"
+                          ? `<button data-user-enable="${user.id}" class="rounded-full border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800">Enable user</button>`
+                          : `<button data-user-disable="${user.id}" class="rounded-full border border-rose-200 px-4 py-2 text-xs font-semibold text-rose-700">Disable user</button>`}
+                      </div>
+                    </div>
+                  </div>
+                `).join("")
+              : `<p class="text-sm text-slate">No users available.</p>`}
+          </div>
+        </section>
       </section>
     `);
-    wireActions(items, wins);
+    wireActions(items, wins, users);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     const hint = message.includes("404")

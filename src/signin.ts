@@ -61,6 +61,7 @@ const renderSigninPage = () => {
                       <p class="text-xs uppercase tracking-[0.28em] text-slate">Sign in</p>
                       <input id="login-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
                       <input id="login-password" type="password" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Password" />
+                      <a href="/reset-password.html" class="text-right text-xs font-semibold text-[#1d326c]">Forgot password?</a>
                       <button type="submit" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Sign in</button>
                     </form>
                     <div class="mt-6 grid gap-3">

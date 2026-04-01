@@ -4,7 +4,7 @@ import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
+import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import nodemailer from "nodemailer";
 
@@ -33,6 +33,7 @@ const port = Number(process.env.PORT || 5174);
 const sessionCookieName = "fmdq_session";
 const sessionTtlMs = 7 * 24 * 60 * 60 * 1000;
 const emailVerificationTtlMs = 24 * 60 * 60 * 1000;
+const passwordResetTtlMs = 60 * 60 * 1000;
 const adminApiToken = process.env.ADMIN_API_TOKEN || "";
 const notificationRecipient = process.env.NOTIFY_TO || "operations@fmdq.example";
 const notificationTransport = (process.env.NOTIFY_TRANSPORT || "file").toLowerCase();
@@ -46,6 +47,7 @@ const smtpSecure = String(process.env.SMTP_SECURE || "").toLowerCase() === "true
 const appBaseUrl = (process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/+$/, "");
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const tokenSigningSecret = process.env.APP_SECRET || supabaseServiceRoleKey;
 const bidRateWindowMs = 60_000;
 const bidRateLimit = 12;
 
@@ -115,7 +117,7 @@ type StoredItem = {
 };
 type AuditEntry = {
   eventType: string;
-  entityType: "item" | "bid" | "system" | "export";
+  entityType: "item" | "bid" | "user" | "system" | "export";
   entityId: string;
   actor: string;
   actorType: "system" | "user" | "integration";
@@ -300,6 +302,34 @@ const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "-");
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 const sanitizeDisplayName = (value: string) => value.trim().replace(/\s+/g, " ");
 const buildEmailVerificationUrl = (token: string) => `${appBaseUrl}/verify.html?token=${encodeURIComponent(token)}`;
+const buildPasswordResetUrl = (token: string) => `${appBaseUrl}/reset-password.html?token=${encodeURIComponent(token)}`;
+const isStrongPassword = (value: string) =>
+  value.length >= 8 &&
+  /[A-Z]/.test(value) &&
+  /[a-z]/.test(value) &&
+  /\d/.test(value) &&
+  /[^A-Za-z0-9]/.test(value);
+const passwordRuleMessage = "Password must be at least 8 characters and include an uppercase letter, lowercase letter, number, and special character.";
+const base64UrlEncode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
+const base64UrlDecode = (value: string) => Buffer.from(value, "base64url").toString("utf8");
+const signTokenValue = (value: string) => createHmac("sha256", tokenSigningSecret).update(value).digest("base64url");
+const passwordHashFingerprint = (passwordHash: string) => createHmac("sha256", tokenSigningSecret).update(passwordHash).digest("hex").slice(0, 24);
+const buildSignedToken = (payload: Record<string, unknown>) => {
+  const body = base64UrlEncode(JSON.stringify(payload));
+  const signature = signTokenValue(body);
+  return `${body}.${signature}`;
+};
+const parseSignedToken = <T>(token: string): T | null => {
+  const [body, signature] = token.split(".");
+  if (!body || !signature) return null;
+  const expected = signTokenValue(body);
+  if (signature !== expected) return null;
+  try {
+    return JSON.parse(base64UrlDecode(body)) as T;
+  } catch {
+    return null;
+  }
+};
 
 const allowedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const allowedDocumentTypes = new Set([
@@ -408,6 +438,37 @@ const getUserById = async (id: string) =>
     true
   );
 
+const getUserByIdWithPassword = async (id: string) =>
+  handleSupabaseMaybe<UserRow>(
+    await supabase
+      .from("users")
+      .select("id,email,password_hash,display_name,status,created_at,last_login_at")
+      .eq("id", id)
+      .maybeSingle(),
+    true
+  );
+
+const listUsersWithRoles = async () => {
+  const users = handleSupabase(
+    await supabase
+      .from("users")
+      .select("id,email,display_name,status,created_at,last_login_at")
+      .order("created_at", { ascending: false })
+  ) as Array<Omit<UserRow, "password_hash">>;
+  const roles = handleSupabase(
+    await supabase.from("user_roles").select("user_id,role_name")
+  ) as Array<{ user_id: string; role_name: string }>;
+  return users.map((user) => ({
+    id: user.id,
+    email: user.email,
+    displayName: user.display_name,
+    status: user.status,
+    createdAt: user.created_at,
+    lastLoginAt: user.last_login_at,
+    roles: roles.filter((role) => role.user_id === user.id).map((role) => role.role_name)
+  }));
+};
+
 const getUserRoles = async (userId: string) =>
   handleSupabase(
     await supabase.from("user_roles").select("role_name").eq("user_id", userId)
@@ -454,6 +515,35 @@ const createEmailVerificationToken = async (userId: string) => {
       .insert({ id: randomUUID(), user_id: userId, token, created_at: createdAt, expires_at: expiresAt })
   );
   return { token, createdAt, expiresAt, verifyUrl: buildEmailVerificationUrl(token) };
+};
+
+const createPasswordResetToken = (user: UserRow & { password_hash?: string }) => {
+  const expiresAt = new Date(Date.now() + passwordResetTtlMs).toISOString();
+  const token = buildSignedToken({
+    type: "password-reset",
+    sub: user.id,
+    email: user.email,
+    exp: expiresAt,
+    fp: passwordHashFingerprint(user.password_hash || "")
+  });
+  return { token, expiresAt, resetUrl: buildPasswordResetUrl(token) };
+};
+
+const queuePasswordReset = async (user: UserRow & { password_hash?: string }, triggeredBy?: string) => {
+  const reset = createPasswordResetToken(user);
+  await queueNotification(
+    "PASSWORD_RESET",
+    "Reset your FMDQ Auctions password",
+    {
+      email: user.email,
+      displayName: user.display_name,
+      resetUrl: reset.resetUrl,
+      expiresAt: reset.expiresAt,
+      triggeredBy: triggeredBy || "self-service"
+    },
+    user.email
+  );
+  return reset;
 };
 
 const getAuthContext = async (req: express.Request): Promise<AuthContext> => {
@@ -539,6 +629,16 @@ const queueNotification = async (
         .from("notification_queue")
         .delete()
         .eq("event_type", "ACCOUNT_VERIFICATION")
+        .eq("recipient", recipient)
+        .eq("status", "pending")
+    );
+  }
+  if (eventType === "PASSWORD_RESET") {
+    await handleSupabase(
+      await supabase
+        .from("notification_queue")
+        .delete()
+        .eq("event_type", "PASSWORD_RESET")
         .eq("recipient", recipient)
         .eq("status", "pending")
     );
@@ -731,6 +831,22 @@ const renderNotificationContent = (entry: NotificationQueueItem) => {
           <p>Hello ${displayName},</p>
           <p>Your FMDQ Auctions account has been verified.</p>
           <p>You can now sign in here: <a href="${escapeHtml(signInUrl)}">${escapeHtml(signInUrl)}</a></p>
+        </div>
+      `
+    };
+  }
+
+  if (entry.eventType === "PASSWORD_RESET") {
+    const displayName = escapeHtml(entry.payload.displayName || "there");
+    const resetUrl = String(entry.payload.resetUrl || "");
+    return {
+      text: `Hello ${displayName},\n\nUse the link below to reset your FMDQ Auctions password:\n${resetUrl}\n\nThis link expires in 1 hour.`,
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
+          <p>Hello ${displayName},</p>
+          <p>Use the link below to reset your FMDQ Auctions password:</p>
+          <p><a href="${escapeHtml(resetUrl)}">${escapeHtml(resetUrl)}</a></p>
+          <p>This link expires in 1 hour.</p>
         </div>
       `
     };
@@ -984,8 +1100,8 @@ app.post("/api/auth/register", express.json({ limit: "128kb" }), asyncHandler(as
     res.status(400).json({ error: "Display name, email, and password are required." });
     return;
   }
-  if (password.length < 8) {
-    res.status(400).json({ error: "Password must be at least 8 characters." });
+  if (!isStrongPassword(password)) {
+    res.status(400).json({ error: passwordRuleMessage });
     return;
   }
   const existing = await getUserByEmail(email);
@@ -1110,6 +1226,72 @@ app.post("/api/auth/verify-email", express.json({ limit: "64kb" }), asyncHandler
     details: { email: user.email, status: "active" }
   });
   res.json({ verified: true, message: "Your account has been verified. You can now sign in." });
+}));
+
+app.post("/api/auth/request-password-reset", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
+  const email = normalizeEmail(String(req.body?.email || ""));
+  if (!email) {
+    res.status(400).json({ error: "Email is required." });
+    return;
+  }
+  const user = await getUserByEmail(email);
+  if (user && user.status === "active") {
+    await queuePasswordReset(user, "self-service");
+    await appendAudit(req, {
+      eventType: "PASSWORD_RESET_REQUESTED",
+      entityType: "system",
+      entityId: user.id,
+      actor: user.display_name,
+      actorType: "user",
+      details: { email: user.email, channel: "email" }
+    });
+  }
+  res.json({
+    requested: true,
+    message: "If an active account exists for that email, a password reset link has been sent."
+  });
+}));
+
+app.post("/api/auth/reset-password", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
+  const token = String(req.body?.token || "").trim();
+  const password = String(req.body?.password || "");
+  if (!token || !password) {
+    res.status(400).json({ error: "Token and new password are required." });
+    return;
+  }
+  if (!isStrongPassword(password)) {
+    res.status(400).json({ error: passwordRuleMessage });
+    return;
+  }
+  const payload = parseSignedToken<{ type: string; sub: string; exp: string; fp: string }>(token);
+  if (!payload || payload.type !== "password-reset") {
+    res.status(400).json({ error: "Password reset link is invalid." });
+    return;
+  }
+  if (new Date(payload.exp).getTime() <= Date.now()) {
+    res.status(410).json({ error: "Password reset link has expired." });
+    return;
+  }
+  const user = await getUserByIdWithPassword(payload.sub);
+  if (!user || user.status !== "active") {
+    res.status(404).json({ error: "Account not found for this reset link." });
+    return;
+  }
+  if (passwordHashFingerprint(user.password_hash || "") !== payload.fp) {
+    res.status(409).json({ error: "This reset link is no longer valid. Request a new one." });
+    return;
+  }
+  await handleSupabase(await supabase.from("users").update({ password_hash: hashPassword(password) }).eq("id", user.id));
+  await handleSupabase(await supabase.from("sessions").delete().eq("user_id", user.id));
+  await appendAudit(req, {
+    eventType: "PASSWORD_RESET_COMPLETED",
+    entityType: "system",
+    entityId: user.id,
+    actor: user.display_name,
+    actorType: "user",
+    details: { email: user.email }
+  });
+  res.json({ reset: true, message: "Password updated successfully. You can now sign in." });
 }));
 
 app.post("/api/auth/logout", asyncHandler(async (req, res) => {
@@ -1336,6 +1518,137 @@ app.get("/api/admin/notifications", requireAdminToken, asyncHandler(async (req, 
 app.post("/api/admin/notifications/process", requireAdminToken, asyncHandler(async (req, res) => {
   const processed = await processNotificationQueue();
   res.json({ processed, transport: notificationTransport });
+}));
+
+app.get("/api/admin/users", requireAdminToken, asyncHandler(async (req, res) => {
+  res.json(await listUsersWithRoles());
+}));
+
+app.post("/api/admin/users/:id/disable", requireAdminToken, asyncHandler(async (req, res) => {
+  const userId = String(req.params.id || "").trim();
+  const auth = await getAuthContext(req);
+  if (!userId) {
+    res.status(400).json({ error: "User ID is required." });
+    return;
+  }
+  if (auth.userId && auth.userId === userId) {
+    res.status(400).json({ error: "You cannot disable your own account." });
+    return;
+  }
+  const user = await getUserByIdWithPassword(userId);
+  if (!user) {
+    res.status(404).json({ error: "User not found." });
+    return;
+  }
+  if (user.status === "disabled") {
+    res.json({ updated: true, message: `${user.display_name} is already disabled.` });
+    return;
+  }
+  await handleSupabase(
+    await supabase
+      .from("users")
+      .update({ status: "disabled" })
+      .eq("id", user.id)
+  );
+  await handleSupabase(await supabase.from("sessions").delete().eq("user_id", user.id));
+  await appendAudit(req, {
+    eventType: "USER_DISABLED",
+    entityType: "user",
+    entityId: user.id,
+    actor: auth.actor,
+    actorType: auth.actorType,
+    details: { email: user.email, target: user.display_name }
+  });
+  res.json({ updated: true, message: `${user.display_name} has been disabled and signed out everywhere.` });
+}));
+
+app.post("/api/admin/users/:id/enable", requireAdminToken, asyncHandler(async (req, res) => {
+  const userId = String(req.params.id || "").trim();
+  if (!userId) {
+    res.status(400).json({ error: "User ID is required." });
+    return;
+  }
+  const user = await getUserByIdWithPassword(userId);
+  if (!user) {
+    res.status(404).json({ error: "User not found." });
+    return;
+  }
+  if (user.status === "active") {
+    res.json({ updated: true, message: `${user.display_name} is already active.` });
+    return;
+  }
+  await handleSupabase(
+    await supabase
+      .from("users")
+      .update({ status: "active" })
+      .eq("id", user.id)
+  );
+  const auth = await getAuthContext(req);
+  await appendAudit(req, {
+    eventType: "USER_ENABLED",
+    entityType: "user",
+    entityId: user.id,
+    actor: auth.actor,
+    actorType: auth.actorType,
+    details: { email: user.email, target: user.display_name }
+  });
+  res.json({ updated: true, message: `${user.display_name} has been re-enabled.` });
+}));
+
+app.post("/api/admin/users/:id/password-reset", requireAdminToken, asyncHandler(async (req, res) => {
+  const user = await getUserByIdWithPassword(String(req.params.id || "").trim());
+  if (!user || user.status !== "active") {
+    res.status(404).json({ error: "Active user not found." });
+    return;
+  }
+  const auth = await getAuthContext(req);
+  await queuePasswordReset(user, auth.actor);
+  await appendAudit(req, {
+    eventType: "PASSWORD_RESET_FORCED",
+    entityType: "system",
+    entityId: user.id,
+    actor: auth.actor,
+    actorType: auth.actorType,
+    details: { email: user.email, target: user.display_name }
+  });
+  res.json({ queued: true, count: 1, message: `Password reset sent to ${user.email}.` });
+}));
+
+app.post("/api/admin/users/password-resets", requireAdminToken, express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
+  const scope = String(req.body?.scope || "selected");
+  const role = String(req.body?.role || "").trim();
+  const selectedIds = Array.isArray(req.body?.userIds) ? req.body.userIds.map((value: unknown) => String(value).trim()).filter(Boolean) : [];
+  const users = (await listUsersWithRoles()).filter((user) => user.status === "active");
+  const targets = users.filter((user) => {
+    if (scope === "all") return true;
+    if (scope === "role") return role ? user.roles.includes(role) : false;
+    return selectedIds.includes(user.id);
+  });
+  if (!targets.length) {
+    res.status(400).json({ error: "No users matched the selected bulk reset criteria." });
+    return;
+  }
+  const auth = await getAuthContext(req);
+  for (const target of targets) {
+    await queuePasswordReset({
+      id: target.id,
+      email: target.email,
+      display_name: target.displayName,
+      status: target.status,
+      created_at: target.createdAt,
+      last_login_at: target.lastLoginAt,
+      password_hash: (await getUserByIdWithPassword(target.id))?.password_hash
+    }, auth.actor);
+  }
+  await appendAudit(req, {
+    eventType: "PASSWORD_RESET_BULK_FORCED",
+    entityType: "system",
+    entityId: scope === "role" ? role || "bulk" : scope,
+    actor: auth.actor,
+    actorType: auth.actorType,
+    details: { scope, count: targets.length, role: role || "n/a" }
+  });
+  res.json({ queued: true, count: targets.length, message: `Queued password resets for ${targets.length} user(s).` });
 }));
 
 app.post("/api/items", requireAdminToken, upload.fields([{ name: "images", maxCount: 8 }, { name: "documents", maxCount: 8 }]), asyncHandler(async (req, res) => {

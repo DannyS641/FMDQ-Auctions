@@ -239,9 +239,6 @@ const detailCard = document.querySelector<HTMLDivElement>("#detail-card");
 const historyList = document.querySelector<HTMLDivElement>("#history-list");
 const historyCount = document.querySelector<HTMLParagraphElement>("#history-count");
 
-const roleBadge = document.querySelector<HTMLParagraphElement>("#role-badge");
-const accessNote = document.querySelector<HTMLDivElement>("#access-note");
-
 const adminPanel = document.querySelector<HTMLElement>("#admin");
 
 const adStatus = document.querySelector<HTMLSpanElement>("#ad-status");
@@ -781,7 +778,6 @@ const updateCountdowns = () => {
 const updateRoleUi = () => {
   state.role = resolveRole();
   const session = readAuthSession();
-  if (roleBadge) roleBadge.textContent = state.role;
   if (activeRoleLabel) {
     activeRoleLabel.textContent = state.role;
   }
@@ -796,11 +792,6 @@ const updateRoleUi = () => {
   }
   if (adLogout) {
     adLogout.classList.toggle("hidden", !session.signedIn);
-  }
-  if (accessNote) {
-    accessNote.textContent = session.signedIn
-      ? `Signed in as ${session.displayName}. Current database role: ${state.role}.`
-      : "Create an account and sign in to enable bidding access.";
   }
   if (adminPanel) {
     adminPanel.classList.toggle("hidden", state.role !== "Admin");

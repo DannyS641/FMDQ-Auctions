@@ -17,6 +17,7 @@ export default defineConfig({
         item: resolve(__dirname, "item.html"),
         signin: resolve(__dirname, "signin.html"),
         signup: resolve(__dirname, "signup.html"),
+        resetPassword: resolve(__dirname, "reset-password.html"),
         verify: resolve(__dirname, "verify.html"),
         adminItem: resolve(__dirname, "admin-item.html"),
         closed: resolve(__dirname, "closed.html"),
