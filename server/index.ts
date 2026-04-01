@@ -7,6 +7,8 @@ import fs from "fs";
 import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import nodemailer from "nodemailer";
+import { execFile } from "child_process";
+import { promisify } from "util";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,11 +67,13 @@ const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
 
 const dataDir = path.join(__dirname, "data");
 const outboxDir = path.join(dataDir, "notification-outbox");
+const importsDir = path.join(dataDir, "imports");
 const uploadsDir = path.join(__dirname, "uploads");
 const imagesDir = path.join(uploadsDir, "images");
 const docsDir = path.join(uploadsDir, "documents");
+const execFileAsync = promisify(execFile);
 
-[dataDir, outboxDir, uploadsDir, imagesDir, docsDir].forEach((dir) => {
+[dataDir, outboxDir, importsDir, uploadsDir, imagesDir, docsDir].forEach((dir) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -355,6 +359,16 @@ const upload = multer({
   }
 });
 
+const bulkImportStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, importsDir),
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${safeFileName(file.originalname)}`)
+});
+
+const bulkImportUpload = multer({
+  storage: bulkImportStorage,
+  limits: { files: 2, fileSize: 25 * 1024 * 1024 }
+});
+
 const hashPassword = (password: string) => {
   const salt = randomBytes(16).toString("hex");
   const hash = scryptSync(password, salt, 64).toString("hex");
@@ -390,6 +404,10 @@ const removeStoredFile = (url: string) => {
   if (!url.startsWith("/uploads/")) return;
   const filePath = path.normalize(path.join(__dirname, url.replace(/^\/+/, "")));
   if (!filePath.startsWith(uploadsDir)) return;
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+};
+
+const removeFileIfExists = (filePath: string) => {
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 };
 
@@ -964,6 +982,184 @@ const validateCategoryName = (value: string) => {
   if (!name) return { ok: false as const, error: "Category name is required." };
   if (name.length > 60) return { ok: false as const, error: "Category name must be 60 characters or fewer." };
   return { ok: true as const, value: name };
+};
+
+const parseCsv = (content: string) => {
+  const rows: string[][] = [];
+  let current = "";
+  let row: string[] = [];
+  let inQuotes = false;
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    const next = content[index + 1];
+    if (char === "\"") {
+      if (inQuotes && next === "\"") {
+        current += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (char === "," && !inQuotes) {
+      row.push(current);
+      current = "";
+      continue;
+    }
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(current);
+      current = "";
+      if (row.some((cell) => cell.trim() !== "")) rows.push(row);
+      row = [];
+      continue;
+    }
+    current += char;
+  }
+  if (current.length || row.length) {
+    row.push(current);
+    if (row.some((cell) => cell.trim() !== "")) rows.push(row);
+  }
+  if (!rows.length) return [];
+  const headers = rows[0].map((value) => value.trim());
+  return rows.slice(1).map((values) =>
+    headers.reduce<Record<string, string>>((acc, header, index) => {
+      acc[header] = (values[index] || "").trim();
+      return acc;
+    }, {})
+  );
+};
+
+const normalizeImportKey = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+
+const getImportValue = (row: Record<string, string>, candidates: string[]) => {
+  const normalized = Object.entries(row).reduce<Record<string, string>>((acc, [key, value]) => {
+    acc[normalizeImportKey(key)] = value;
+    return acc;
+  }, {});
+  for (const candidate of candidates) {
+    const value = normalized[normalizeImportKey(candidate)];
+    if (typeof value === "string") return value;
+  }
+  return "";
+};
+
+const splitImportList = (value: string) =>
+  value
+    .split(/[;,|]/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+const collectImportFiles = (rootDir: string) => {
+  const map = new Map<string, string>();
+  const walk = (currentDir: string) => {
+    for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else {
+        map.set(entry.name.toLowerCase(), fullPath);
+      }
+    }
+  };
+  walk(rootDir);
+  return map;
+};
+
+const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+const documentExtensions = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx"]);
+
+const copyImportedFile = (sourcePath: string, kind: "image" | "document") => {
+  const extension = path.extname(sourcePath).toLowerCase();
+  if (kind === "image" && !imageExtensions.has(extension)) {
+    throw new Error(`Unsupported image file type for ${path.basename(sourcePath)}.`);
+  }
+  if (kind === "document" && !documentExtensions.has(extension)) {
+    throw new Error(`Unsupported document file type for ${path.basename(sourcePath)}.`);
+  }
+  const destinationDir = kind === "image" ? imagesDir : docsDir;
+  const fileName = `${Date.now()}-${randomUUID()}-${safeFileName(path.basename(sourcePath))}`;
+  const destinationPath = path.join(destinationDir, fileName);
+  fs.copyFileSync(sourcePath, destinationPath);
+  return {
+    id: randomUUID(),
+    kind,
+    name: path.basename(sourcePath),
+    url: `/uploads/${kind === "image" ? "images" : "documents"}/${fileName}`
+  };
+};
+
+const createItemRecord = async (
+  req: express.Request,
+  validation: Extract<ReturnType<typeof validateNewItem>, { ok: true }>["value"],
+  auth: AuthContext,
+  extra?: { images?: Array<{ id: string; kind: "image" | "document"; name: string; url: string }>; documents?: Array<{ id: string; kind: "image" | "document"; name: string; url: string }>; currentBid?: number }
+) => {
+  const itemId = randomUUID();
+  const createdAt = new Date().toISOString();
+  const images = extra?.images || [];
+  const documents = extra?.documents || [];
+  await handleSupabase(await supabase.from("categories").upsert({ name: validation.category }, { onConflict: "name" }));
+  await handleSupabase(await supabase.from("items").insert({
+    id: itemId,
+    title: validation.title,
+    category: validation.category,
+    lot: validation.lot,
+    sku: validation.sku,
+    condition: validation.condition,
+    location: validation.location,
+    start_bid: validation.startBid,
+    reserve: validation.reserve,
+    increment_amount: validation.increment,
+    current_bid: extra?.currentBid || 0,
+    start_time: validation.startTime,
+    end_time: validation.endTime,
+    description: validation.description,
+    created_at: createdAt
+  }));
+  if (images.length) {
+    await handleSupabase(await supabase.from("item_files").insert(
+      images.map((image) => ({
+        id: image.id,
+        item_id: itemId,
+        kind: image.kind,
+        name: image.name,
+        url: image.url
+      }))
+    ));
+  }
+  if (documents.length) {
+    await handleSupabase(await supabase.from("item_files").insert(
+      documents.map((document) => ({
+        id: document.id,
+        item_id: itemId,
+        kind: document.kind,
+        name: document.name,
+        url: document.url
+      }))
+    ));
+  }
+  await appendAudit(req, {
+    eventType: "ITEM_CREATED",
+    entityType: "item",
+    entityId: itemId,
+    actor: auth.actor,
+    actorType: auth.actorType,
+    details: { title: validation.title, category: validation.category, lot: validation.lot, sku: validation.sku }
+  });
+  await queueNotification("ITEM_CREATED", `Auction item created: ${validation.title}`, { itemId, title: validation.title });
+  return itemId;
+};
+
+const findExistingItemByLotOrSku = async (lot: string, sku: string) => {
+  const rows = handleSupabase(
+    await supabase
+      .from("items")
+      .select("id,title,lot,sku")
+      .or(`lot.eq.${lot},sku.eq.${sku}`)
+      .limit(10)
+  ) as Array<{ id: string; title: string; lot: string; sku: string }>;
+  return rows.find((row) => row.lot === lot || row.sku === sku) || null;
 };
 
 const validateBid = (item: StoredItem, amount: number) => {
@@ -1651,68 +1847,151 @@ app.post("/api/admin/users/password-resets", requireAdminToken, express.json({ l
   res.json({ queued: true, count: targets.length, message: `Queued password resets for ${targets.length} user(s).` });
 }));
 
+app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{ name: "csv", maxCount: 1 }, { name: "bundle", maxCount: 1 }]), asyncHandler(async (req, res) => {
+  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+  const csvFile = files?.csv?.[0];
+  const zipFile = files?.bundle?.[0];
+  if (!csvFile) {
+    res.status(400).json({ error: "Upload a CSV file first." });
+    return;
+  }
+
+  const auth = await getAuthContext(req);
+  const tempExtractDir = fs.mkdtempSync(path.join(importsDir, "bulk-"));
+  const createdIds: string[] = [];
+  const report: {
+    created: number;
+    skipped: number;
+    failed: number;
+    items: Array<{ row: number; status: "created" | "skipped" | "failed"; title: string; itemId?: string; message: string }>;
+  } = {
+    created: 0,
+    skipped: 0,
+    failed: 0,
+    items: []
+  };
+
+  try {
+    const csvRows = parseCsv(fs.readFileSync(csvFile.path, "utf8"));
+    if (!csvRows.length) {
+      res.status(400).json({ error: "The uploaded CSV is empty." });
+      return;
+    }
+
+    let extractedFiles = new Map<string, string>();
+    if (zipFile) {
+      await execFileAsync("/usr/bin/unzip", ["-oq", zipFile.path, "-d", tempExtractDir]);
+      extractedFiles = collectImportFiles(tempExtractDir);
+    }
+
+    for (const [index, row] of csvRows.entries()) {
+      const title = getImportValue(row, ["title", "item_title"]);
+      try {
+        const payload = {
+          title,
+          category: getImportValue(row, ["category"]),
+          lot: getImportValue(row, ["lot", "lot_number"]),
+          sku: getImportValue(row, ["sku", "asset_code", "sku_asset_code"]),
+          condition: getImportValue(row, ["condition"]),
+          location: getImportValue(row, ["location"]),
+          startBid: getImportValue(row, ["start_bid", "starting_bid"]),
+          reserve: getImportValue(row, ["reserve", "reserve_price"]),
+          increment: getImportValue(row, ["increment", "bid_increment"]),
+          startTime: getImportValue(row, ["start_time", "auction_start", "start"]),
+          endTime: getImportValue(row, ["end_time", "auction_end", "end"]),
+          description: getImportValue(row, ["description", "item_description"])
+        };
+        const validation = validateNewItem(payload);
+        if (!validation.ok) {
+          report.failed += 1;
+          report.items.push({ row: index + 2, status: "failed", title: title || `Row ${index + 2}`, message: validation.error });
+          continue;
+        }
+
+        const duplicate = await findExistingItemByLotOrSku(validation.value.lot, validation.value.sku);
+        if (duplicate) {
+          report.skipped += 1;
+          report.items.push({ row: index + 2, status: "skipped", title: validation.value.title, itemId: duplicate.id, message: `Skipped because lot or SKU already exists on ${duplicate.title}.` });
+          continue;
+        }
+
+        const normalizedRow = Object.entries(row).reduce<Record<string, string>>((acc, [key, value]) => {
+          acc[normalizeImportKey(key)] = value;
+          return acc;
+        }, {});
+        const imageNames = Object.entries(normalizedRow)
+          .filter(([key, value]) => key.startsWith("image") && value.trim())
+          .flatMap(([, value]) => splitImportList(value));
+        const documentNames = Object.entries(normalizedRow)
+          .filter(([key, value]) => (key.startsWith("document") || key.startsWith("doc")) && value.trim())
+          .flatMap(([, value]) => splitImportList(value));
+
+        const imageFiles = imageNames.map((name) => {
+          const sourcePath = extractedFiles.get(name.toLowerCase());
+          if (!sourcePath) throw new Error(`Image file "${name}" was not found in the ZIP.`);
+          return copyImportedFile(sourcePath, "image");
+        });
+        const documentFiles = documentNames.map((name) => {
+          const sourcePath = extractedFiles.get(name.toLowerCase());
+          if (!sourcePath) throw new Error(`Document file "${name}" was not found in the ZIP.`);
+          return copyImportedFile(sourcePath, "document");
+        });
+
+        const itemId = await createItemRecord(req, validation.value, auth, { images: imageFiles, documents: documentFiles });
+        createdIds.push(itemId);
+        report.created += 1;
+        report.items.push({ row: index + 2, status: "created", title: validation.value.title, itemId, message: "Imported successfully." });
+      } catch (error) {
+        report.failed += 1;
+        report.items.push({
+          row: index + 2,
+          status: "failed",
+          title: title || `Row ${index + 2}`,
+          message: error instanceof Error ? error.message : "Import failed."
+        });
+      }
+    }
+
+    await appendAudit(req, {
+      eventType: "ITEM_BULK_IMPORTED",
+      entityType: "system",
+      entityId: "bulk-import",
+      actor: auth.actor,
+      actorType: auth.actorType,
+      details: { created: report.created, skipped: report.skipped, failed: report.failed }
+    });
+    res.json(report);
+  } finally {
+    removeFileIfExists(csvFile.path);
+    if (zipFile) removeFileIfExists(zipFile.path);
+    fs.rmSync(tempExtractDir, { recursive: true, force: true });
+  }
+}));
+
 app.post("/api/items", requireAdminToken, upload.fields([{ name: "images", maxCount: 8 }, { name: "documents", maxCount: 8 }]), asyncHandler(async (req, res) => {
   const validation = validateNewItem(req.body as Record<string, string>);
   if (!validation.ok) {
     res.status(400).json({ error: validation.error });
     return;
   }
-  const itemId = randomUUID();
-  const createdAt = new Date().toISOString();
   const files = req.files as Record<string, Express.Multer.File[]> | undefined;
   const images = files?.images || [];
   const documents = files?.documents || [];
   const auth = await getAuthContext(req);
-
-  await handleSupabase(await supabase.from("categories").upsert({ name: validation.value.category }, { onConflict: "name" }));
-  await handleSupabase(await supabase.from("items").insert({
-    id: itemId,
-    title: validation.value.title,
-    category: validation.value.category,
-    lot: validation.value.lot,
-    sku: validation.value.sku,
-    condition: validation.value.condition,
-    location: validation.value.location,
-    start_bid: validation.value.startBid,
-    reserve: validation.value.reserve,
-    increment_amount: validation.value.increment,
-    current_bid: 0,
-    start_time: validation.value.startTime,
-    end_time: validation.value.endTime,
-    description: validation.value.description,
-    created_at: createdAt
-  }));
-  if (images.length) {
-    await handleSupabase(await supabase.from("item_files").insert(
-      images.map((image) => ({
-        id: randomUUID(),
-        item_id: itemId,
-        kind: "image",
-        name: image.originalname,
-        url: `/uploads/images/${path.basename(image.path)}`
-      }))
-    ));
-  }
-  if (documents.length) {
-    await handleSupabase(await supabase.from("item_files").insert(
-      documents.map((document) => ({
-        id: randomUUID(),
-        item_id: itemId,
-        kind: "document",
-        name: document.originalname,
-        url: `/uploads/documents/${path.basename(document.path)}`
-      }))
-    ));
-  }
-  await appendAudit(req, {
-    eventType: "ITEM_CREATED",
-    entityType: "item",
-    entityId: itemId,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { title: validation.value.title, category: validation.value.category, lot: validation.value.lot, sku: validation.value.sku }
+  const itemId = await createItemRecord(req, validation.value, auth, {
+    images: images.map((image) => ({
+      id: randomUUID(),
+      kind: "image" as const,
+      name: image.originalname,
+      url: `/uploads/images/${path.basename(image.path)}`
+    })),
+    documents: documents.map((document) => ({
+      id: randomUUID(),
+      kind: "document" as const,
+      name: document.originalname,
+      url: `/uploads/documents/${path.basename(document.path)}`
+    }))
   });
-  await queueNotification("ITEM_CREATED", `Auction item created: ${validation.value.title}`, { itemId, title: validation.value.title });
   res.status(201).json(await getItemById(itemId, true));
 }));
 

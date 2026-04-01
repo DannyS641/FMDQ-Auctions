@@ -26,6 +26,19 @@ type AuctionItem = {
   archivedAt?: string | null;
 };
 
+type BulkImportReport = {
+  created: number;
+  skipped: number;
+  failed: number;
+  items: Array<{
+    row: number;
+    status: "created" | "skipped" | "failed";
+    title: string;
+    itemId?: string;
+    message: string;
+  }>;
+};
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
 const defaultCategories = ["Cars", "Furniture", "Household Appliances", "Kitchen Appliances", "Phones", "Other"];
 const conditions = ["New", "Used", "Fair", "Damaged"];
@@ -88,6 +101,7 @@ const state: {
         message: string;
       }
     | null;
+  bulkImportReport: BulkImportReport | null;
 } = {
   items: [],
   categories: [...defaultCategories],
@@ -96,7 +110,8 @@ const state: {
   listPage: 1,
   listFilter: "all",
   confirmation: null,
-  actionStatus: null
+  actionStatus: null,
+  bulkImportReport: null
 };
 
 const getSelectedItemIdFromQuery = () => new URLSearchParams(window.location.search).get("id");
@@ -175,6 +190,16 @@ const getVisibleItems = () => {
 
 let actionStatusTimer: number | null = null;
 
+const updateFileSelectionLabel = (inputId: string, labelId: string, emptyText: string) => {
+  const input = document.querySelector<HTMLInputElement>(`#${inputId}`);
+  const label = document.querySelector<HTMLSpanElement>(`#${labelId}`);
+  if (!label) return;
+  const files = input?.files ? Array.from(input.files) : [];
+  const fileName = files.length === 1 ? files[0].name : files.length > 1 ? `${files.length} files selected` : "";
+  label.textContent = fileName || emptyText;
+  label.className = fileName ? "text-sm font-medium text-ink" : "text-sm text-slate";
+};
+
 const showActionStatus = (tone: "success" | "error", icon: "✓" | "❌", message: string) => {
   state.actionStatus = { tone, icon, message };
   if (actionStatusTimer) window.clearTimeout(actionStatusTimer);
@@ -247,6 +272,66 @@ const renderManager = () => {
               <p class="mt-2 text-sm text-slate">${formSummary}</p>
             </div>
             ${selectedItem ? `<a href="/item.html?id=${selectedItem.id}" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">View item</a>` : ""}
+          </div>
+
+          <div class="mt-6 rounded-3xl border border-ink/10 bg-white p-5">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p class="text-xs uppercase tracking-[0.3em] text-slate">Bulk import</p>
+                <h3 class="mt-2 text-xl font-semibold text-ink">Upload CSV + ZIP bundle</h3>
+                <p class="mt-2 text-sm text-slate">Import many items at once. Put one row per item in the CSV, then add matching image/document filenames in the ZIP.</p>
+              </div>
+              <button id="download-import-template" type="button" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Download template</button>
+            </div>
+            <div class="mt-5 grid gap-4 md:grid-cols-2">
+              <label class="grid gap-3 rounded-3xl border border-ink/10 bg-ink/5 p-4">
+                <span class="text-xs font-semibold uppercase tracking-[0.24em] text-slate">Items CSV</span>
+                <input id="bulk-import-csv" type="file" accept=".csv,text/csv" class="hidden" />
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <span id="bulk-import-csv-name" class="text-sm text-slate">No CSV selected</span>
+                  <span class="rounded-full border border-ink/20 bg-white px-4 py-2 text-xs font-semibold text-ink">Choose CSV</span>
+                </div>
+              </label>
+              <label class="grid gap-3 rounded-3xl border border-ink/10 bg-ink/5 p-4">
+                <span class="text-xs font-semibold uppercase tracking-[0.24em] text-slate">Media ZIP</span>
+                <input id="bulk-import-zip" type="file" accept=".zip,application/zip" class="hidden" />
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <span id="bulk-import-zip-name" class="text-sm text-slate">Optional ZIP bundle</span>
+                  <span class="rounded-full border border-ink/20 bg-white px-4 py-2 text-xs font-semibold text-ink">Choose ZIP</span>
+                </div>
+              </label>
+            </div>
+            <div class="mt-5 flex flex-wrap items-center gap-3">
+              <button id="bulk-import-submit" type="button" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">Import items</button>
+              <p id="bulk-import-feedback" class="text-sm text-slate"></p>
+            </div>
+            ${state.bulkImportReport ? `
+              <div class="mt-5 rounded-2xl border border-ink/10 bg-ink/5 p-4">
+                <div class="flex flex-wrap gap-4 text-sm text-ink">
+                  <p><span class="font-semibold">${state.bulkImportReport.created}</span> created</p>
+                  <p><span class="font-semibold">${state.bulkImportReport.skipped}</span> skipped</p>
+                  <p><span class="font-semibold">${state.bulkImportReport.failed}</span> failed</p>
+                </div>
+                <div class="mt-4 max-h-56 space-y-2 overflow-y-auto">
+                  ${state.bulkImportReport.items.map((entry) => `
+                    <div class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm">
+                      <div class="flex items-center justify-between gap-3">
+                        <p class="font-semibold text-ink">${entry.title}</p>
+                        <span class="rounded-full px-3 py-1 text-xs font-semibold ${
+                          entry.status === "created"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : entry.status === "skipped"
+                              ? "bg-[#fff7e8] text-[#9a6408]"
+                              : "bg-rose-100 text-rose-800"
+                        }">${entry.status}</span>
+                      </div>
+                      <p class="mt-1 text-xs text-slate">Row ${entry.row}${entry.itemId ? ` · ${entry.itemId}` : ""}</p>
+                      <p class="mt-1 text-sm text-slate">${entry.message}</p>
+                    </div>
+                  `).join("")}
+                </div>
+              </div>
+            ` : ""}
           </div>
 
           <form id="admin-item-form" class="mt-6 grid gap-4 md:grid-cols-2">
@@ -357,8 +442,24 @@ const renderManager = () => {
                 </div>
               </div>
             </div>
-            <input id="admin-images" type="file" multiple accept="image/*" class="md:col-span-2 rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" />
-            <input id="admin-documents" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx" class="md:col-span-2 rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" />
+            <div class="md:col-span-2 grid gap-4 md:grid-cols-2">
+              <label class="grid gap-3 rounded-2xl border border-ink/10 bg-white p-4">
+                <span class="text-xs font-semibold uppercase tracking-[0.24em] text-slate">Upload images</span>
+                <input id="admin-images" type="file" multiple accept="image/*" class="hidden" />
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <span id="admin-images-name" class="text-sm text-slate">No images selected</span>
+                  <span class="rounded-full border border-ink/20 bg-ink/5 px-4 py-2 text-xs font-semibold text-ink">Choose images</span>
+                </div>
+              </label>
+              <label class="grid gap-3 rounded-2xl border border-ink/10 bg-white p-4">
+                <span class="text-xs font-semibold uppercase tracking-[0.24em] text-slate">Upload documents</span>
+                <input id="admin-documents" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx" class="hidden" />
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <span id="admin-documents-name" class="text-sm text-slate">No documents selected</span>
+                  <span class="rounded-full border border-ink/20 bg-ink/5 px-4 py-2 text-xs font-semibold text-ink">Choose documents</span>
+                </div>
+              </label>
+            </div>
             <div class="md:col-span-2 flex flex-wrap items-center gap-3">
               <button type="submit" class="rounded-full bg-ink px-6 py-3 text-sm font-semibold text-white">${state.mode === "edit" ? "Save changes" : "Create item"}</button>
               ${selectedItem?.archivedAt
@@ -470,6 +571,32 @@ const bindManagerEvents = () => {
   const nextPageButton = document.querySelector<HTMLButtonElement>("#items-next-page");
   const modalCancelButton = document.querySelector<HTMLButtonElement>("#modal-cancel-btn");
   const modalConfirmButton = document.querySelector<HTMLButtonElement>("#modal-confirm-btn");
+  const bulkImportFeedback = document.querySelector<HTMLParagraphElement>("#bulk-import-feedback");
+  const bulkImportCsvInput = document.querySelector<HTMLInputElement>("#bulk-import-csv");
+  const bulkImportZipInput = document.querySelector<HTMLInputElement>("#bulk-import-zip");
+  const adminImagesInput = document.querySelector<HTMLInputElement>("#admin-images");
+  const adminDocumentsInput = document.querySelector<HTMLInputElement>("#admin-documents");
+
+  updateFileSelectionLabel("bulk-import-csv", "bulk-import-csv-name", "No CSV selected");
+  updateFileSelectionLabel("bulk-import-zip", "bulk-import-zip-name", "Optional ZIP bundle");
+  updateFileSelectionLabel("admin-images", "admin-images-name", "No images selected");
+  updateFileSelectionLabel("admin-documents", "admin-documents-name", "No documents selected");
+
+  bulkImportCsvInput?.addEventListener("change", () => {
+    updateFileSelectionLabel("bulk-import-csv", "bulk-import-csv-name", "No CSV selected");
+  });
+
+  bulkImportZipInput?.addEventListener("change", () => {
+    updateFileSelectionLabel("bulk-import-zip", "bulk-import-zip-name", "Optional ZIP bundle");
+  });
+
+  adminImagesInput?.addEventListener("change", () => {
+    updateFileSelectionLabel("admin-images", "admin-images-name", "No images selected");
+  });
+
+  adminDocumentsInput?.addEventListener("change", () => {
+    updateFileSelectionLabel("admin-documents", "admin-documents-name", "No documents selected");
+  });
 
   createButton?.addEventListener("click", () => {
     state.mode = "create";
@@ -481,6 +608,60 @@ const bindManagerEvents = () => {
 
   refreshButton?.addEventListener("click", () => {
     window.location.href = "/admin-item.html";
+  });
+
+  document.querySelector<HTMLButtonElement>("#download-import-template")?.addEventListener("click", () => {
+    const template = [
+      "title,category,lot,sku,condition,location,start_bid,reserve,increment,start_time,end_time,description,image_1,image_2,document_1",
+      "\"Toyota Corolla 2015\",Cars,CAR-501,FMDQ-CAR-501,Used,Lagos Warehouse,1000000,1200000,50000,2026-04-01T10:00,2026-04-01T18:00,\"Well-maintained sedan\",toyota-front.jpg,toyota-side.jpg,inspection-report.pdf"
+    ].join("\n");
+    const blob = new Blob([template], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "fmdq-bulk-import-template.csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  document.querySelector<HTMLButtonElement>("#bulk-import-submit")?.addEventListener("click", async () => {
+    const csvInput = document.querySelector<HTMLInputElement>("#bulk-import-csv");
+    const zipInput = document.querySelector<HTMLInputElement>("#bulk-import-zip");
+    const csvFile = csvInput?.files?.[0];
+    const zipFile = zipInput?.files?.[0];
+    if (!bulkImportFeedback) return;
+    if (!csvFile) {
+      bulkImportFeedback.textContent = "Choose the CSV file first.";
+      return;
+    }
+    const formData = new FormData();
+    formData.append("csv", csvFile);
+    if (zipFile) formData.append("bundle", zipFile);
+    bulkImportFeedback.textContent = "Importing items...";
+    try {
+      const response = await apiFetch("/api/items/bulk-import", {
+        method: "POST",
+        headers: getAuditHeaders(),
+        body: formData
+      });
+      const payload = (await response.json().catch(() => null)) as ({ error?: string } & BulkImportReport) | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Unable to import items.");
+      }
+      state.bulkImportReport = payload as BulkImportReport;
+      if (csvInput) csvInput.value = "";
+      if (zipInput) zipInput.value = "";
+      updateFileSelectionLabel("bulk-import-csv", "bulk-import-csv-name", "No CSV selected");
+      updateFileSelectionLabel("bulk-import-zip", "bulk-import-zip-name", "Optional ZIP bundle");
+      await refreshData(`Bulk import finished. ${state.bulkImportReport.created} item(s) created.`);
+    } catch (error) {
+      bulkImportFeedback.textContent = error instanceof Error ? error.message : "Unable to import items.";
+      state.bulkImportReport = null;
+      renderManager();
+      bindManagerEvents();
+    }
   });
 
   previousPageButton?.addEventListener("click", () => {
