@@ -3,7 +3,6 @@ import {
   apiFetch,
   fetchCurrentSession,
   getAuditHeaders,
-  hasAcceptedAgreements,
   readAuthSession
 } from "./auth";
 
@@ -68,12 +67,6 @@ const canBid = (item: AuctionItem) => {
   const session = readAuthSession();
   if (getStatus(item) !== "Live") {
     return { allowed: false, message: "Bidding is closed or not yet open for this item." };
-  }
-  if (!hasAcceptedAgreements()) {
-    return {
-      allowed: false,
-      message: "Accept the Terms and Conditions and Auction Rules on the listings page before placing a bid."
-    };
   }
   if (!session.signedIn) {
     return { allowed: false, message: "Sign in to place a bid." };

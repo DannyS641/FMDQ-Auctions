@@ -3,10 +3,8 @@ import {
   apiFetch,
   fetchCurrentSession,
   getAuditHeaders,
-  hasAcceptedAgreements,
   logoutAccount,
   readAuthSession,
-  setAcceptedAgreements,
   writeAuthSession
 } from "./auth";
 
@@ -241,8 +239,6 @@ const detailCard = document.querySelector<HTMLDivElement>("#detail-card");
 const historyList = document.querySelector<HTMLDivElement>("#history-list");
 const historyCount = document.querySelector<HTMLParagraphElement>("#history-count");
 
-const agreements = Array.from(document.querySelectorAll<HTMLInputElement>("[data-agreement]"));
-const agreementHint = document.querySelector<HTMLParagraphElement>("#agreement-hint");
 const roleBadge = document.querySelector<HTMLParagraphElement>("#role-badge");
 const accessNote = document.querySelector<HTMLDivElement>("#access-note");
 
@@ -265,7 +261,6 @@ const state = {
   selectedConditions: new Set<Condition>(),
   search: "",
   selectedItemId: items[0]?.id ?? "",
-  agreementsAccepted: hasAcceptedAgreements(),
   role: "Guest" as Role
 };
 
@@ -333,7 +328,6 @@ const formatDuration = (ms: number) => {
 
 const canBid = (item?: AuctionItem) => {
   const session = readAuthSession();
-  if (!state.agreementsAccepted) return false;
   if (!session.signedIn) return false;
   if (!(state.role === "Bidder" || state.role === "Admin")) return false;
   if (item && getStatus(item) !== "Live") return false;
@@ -784,16 +778,6 @@ const updateCountdowns = () => {
   updateSummaryCounts();
 };
 
-
-const updateAgreementState = () => {
-  state.agreementsAccepted = agreements.every((checkbox) => checkbox.checked);
-  setAcceptedAgreements(state.agreementsAccepted);
-  if (agreementHint) {
-    agreementHint.classList.toggle("hidden", state.agreementsAccepted);
-  }
-  renderDetail();
-};
-
 const updateRoleUi = () => {
   state.role = resolveRole();
   const session = readAuthSession();
@@ -922,20 +906,9 @@ const wireEvents = () => {
     renderHistory();
   });
 
-  agreements.forEach((checkbox) => {
-    checkbox.addEventListener("change", updateAgreementState);
-  });
-
 };
 
 const init = async () => {
-  agreements.forEach((checkbox) => {
-    checkbox.checked = state.agreementsAccepted;
-  });
-  if (agreementHint) {
-    agreementHint.classList.toggle("hidden", state.agreementsAccepted);
-  }
-
   await fetchItems();
   await fetchCategories();
   categories = Array.from(new Set([...categories, ...items.map((item) => item.category)])).sort((a, b) => a.localeCompare(b));

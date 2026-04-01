@@ -123,7 +123,7 @@ export const registerAccount = async (displayName: string, email: string, passwo
     body: JSON.stringify({ displayName, email, password })
   });
   const payload = (await response.json().catch(() => null)) as
-    | { error?: string; registered?: boolean; verificationRequired?: boolean; email?: string; message?: string }
+    | { error?: string; registered?: boolean; verificationRequired?: boolean; email?: string; message?: string; verificationUrl?: string }
     | null;
   if (!response.ok || !payload) {
     throw new Error(payload?.error || "Unable to create account.");

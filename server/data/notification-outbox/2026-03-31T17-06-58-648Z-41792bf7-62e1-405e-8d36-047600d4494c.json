@@ -1,0 +1,14 @@
+{
+  "id": "41792bf7-62e1-405e-8d36-047600d4494c",
+  "channel": "email",
+  "eventType": "ACCOUNT_VERIFICATION",
+  "recipient": "oluwalonimi.omolayo@fmdqgroup.com",
+  "subject": "Confirm your FMDQ Auctions account",
+  "payload": {
+    "email": "oluwalonimi.omolayo@fmdqgroup.com",
+    "verifyUrl": "http://localhost:5173/verify.html?token=49f4a45a8187eb034d8f6a8481d37f954c95c4c17a128d287ba2dbde367b1ca7",
+    "displayName": "Oluwalonimi Omolayo"
+  },
+  "createdAt": "2026-03-31T17:06:58.21+00:00",
+  "processedAt": "2026-03-31T17:06:58.648Z"
+}

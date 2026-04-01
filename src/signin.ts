@@ -34,7 +34,7 @@ const renderSigninPage = () => {
               </div>
 
               <p class="mt-8 text-[11px] uppercase tracking-[0.34em] text-slate">FMDQ Auctions Portal</p>
-              <h1 class="mt-4 font-display text-4xl font-bold leading-none text-ink md:text-[2.8rem]">Welcome back</h1>
+              <h3 class="mt-6 font-display text-xl font-bold leading-tight text-ink md:text-[1.4rem]">Welcome back</h3>
               <p class="mt-4 font-display text-base text-slate">Sign in to continue to the bidding desk.</p>
 
               <div class="mt-8 rounded-full border border-ink/10 bg-[#faf9f7] px-5 py-4">
@@ -53,7 +53,7 @@ const renderSigninPage = () => {
                   ? `
                     <div class="grid gap-3">
                       <button id="logout-btn" class="rounded-full border border-ink/15 bg-white px-6 py-3.5 font-display text-base font-semibold text-ink">Sign out</button>
-                      <button id="continue-btn" class="rounded-full bg-ink px-6 py-3.5 font-display text-base font-semibold text-white">Continue to bidding</button>
+                      <button id="continue-btn" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Continue to bidding</button>
                     </div>
                   `
                   : `
@@ -61,12 +61,11 @@ const renderSigninPage = () => {
                       <p class="text-xs uppercase tracking-[0.28em] text-slate">Sign in</p>
                       <input id="login-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
                       <input id="login-password" type="password" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Password" />
-                      <button type="submit" class="rounded-full bg-[#ff9f1c] px-6 py-3.5 font-display text-base font-semibold text-white shadow-[0_18px_35px_rgba(255,159,28,0.32)]">Sign in</button>
+                      <button type="submit" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Sign in</button>
                     </form>
                     <div class="mt-6 grid gap-3">
                       <a href="/signup.html" class="rounded-full border border-ink/15 bg-white px-6 py-3.5 text-center font-display text-base font-semibold text-ink shadow-[0_8px_25px_rgba(11,14,18,0.07)]">Create account</a>
                     </div>
-                    <button id="continue-btn" class="mt-3 rounded-full bg-ink px-6 py-3.5 font-display text-base font-semibold text-white disabled:opacity-60" disabled>Continue to bidding</button>
                   `
               }
 

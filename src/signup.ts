@@ -34,8 +34,10 @@ const renderSignupPage = () => {
                 <input id="signup-name" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Full name" />
                 <input id="signup-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
                 <input id="signup-password" type="password" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Password (min. 8 characters)" />
-                <button type="submit" class="rounded-full bg-[#ff9f1c] px-6 py-3.5 font-display text-base font-semibold text-white shadow-[0_18px_35px_rgba(255,159,28,0.32)]">Create account</button>
+                <button type="submit" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Create account</button>
               </form>
+
+              <p id="signup-note" class="mt-4 min-h-[1.25rem] rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">Create your account to receive a verification link.</p>
 
               <div class="mt-6 rounded-[1.5rem] border border-ink/10 bg-[#faf9f7] px-5 py-4">
                 <p class="text-[11px] uppercase tracking-[0.28em] text-slate">What happens next</p>
@@ -46,6 +48,18 @@ const renderSignupPage = () => {
           </section>
         </main>
       </div>
+
+      <div id="signup-consent-modal" class="pointer-events-none fixed inset-0 z-50 hidden items-center justify-center bg-[#0f172a]/45 p-4">
+        <div class="w-full max-w-md rounded-[2rem] border border-white/70 bg-white p-6 shadow-[0_24px_70px_rgba(15,23,42,0.2)]">
+          <p class="text-[11px] uppercase tracking-[0.28em] text-slate">Before you continue</p>
+          <h4 class="mt-3 font-display text-2xl font-semibold text-ink">Confirm your agreement</h4>
+          <p class="mt-4 text-sm leading-6 text-slate">By clicking this, you agree to the <a href="/terms.html" target="_blank" rel="noreferrer" class="font-semibold text-ink underline underline-offset-4">Terms &amp; Conditions</a>, <a href="/auction-rules.html" target="_blank" rel="noreferrer" class="font-semibold text-ink underline underline-offset-4">Auction Rules</a>, and <a href="/declaration.html" target="_blank" rel="noreferrer" class="font-semibold text-ink underline underline-offset-4">Declaration</a> for the FMDQ Auctions Portal.</p>
+          <div class="mt-6 flex flex-wrap items-center justify-end gap-3">
+            <button id="signup-consent-cancel" type="button" class="rounded-full border border-ink/15 px-5 py-3 text-sm font-semibold text-ink">Cancel</button>
+            <button id="signup-consent-confirm" type="button" class="rounded-full bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">I agree, create account</button>
+          </div>
+        </div>
+      </div>
     </div>
   `;
 };
@@ -53,18 +67,61 @@ const renderSignupPage = () => {
 const bindEvents = () => {
   const form = document.querySelector<HTMLFormElement>("#signup-form");
   const note = document.querySelector<HTMLParagraphElement>("#signup-note");
+  const modal = document.querySelector<HTMLDivElement>("#signup-consent-modal");
+  const confirmBtn = document.querySelector<HTMLButtonElement>("#signup-consent-confirm");
+  const cancelBtn = document.querySelector<HTMLButtonElement>("#signup-consent-cancel");
+  let pendingSubmission: { displayName: string; email: string; password: string } | null = null;
+
+  const closeModal = () => {
+    if (!modal) return;
+    modal.classList.add("hidden", "pointer-events-none");
+    modal.classList.remove("flex");
+  };
+
+  const openModal = () => {
+    if (!modal) return;
+    modal.classList.remove("hidden", "pointer-events-none");
+    modal.classList.add("flex");
+  };
 
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const displayName = (document.querySelector<HTMLInputElement>("#signup-name")?.value || "").trim();
     const email = (document.querySelector<HTMLInputElement>("#signup-email")?.value || "").trim();
     const password = document.querySelector<HTMLInputElement>("#signup-password")?.value || "";
+    pendingSubmission = { displayName, email, password };
+    if (note) note.textContent = "Confirm the popup agreement to finish creating your account.";
+    openModal();
+  });
+
+  cancelBtn?.addEventListener("click", () => {
+    closeModal();
+    pendingSubmission = null;
+    if (note) note.textContent = "Account creation was cancelled.";
+  });
+
+  modal?.addEventListener("click", (event) => {
+    if (event.target === modal) {
+      closeModal();
+      pendingSubmission = null;
+      if (note) note.textContent = "Account creation was cancelled.";
+    }
+  });
+
+  confirmBtn?.addEventListener("click", async () => {
+    if (!pendingSubmission) return;
+    const { displayName, email, password } = pendingSubmission;
+    closeModal();
     if (note) note.textContent = "Creating account...";
+    confirmBtn.disabled = true;
     try {
       await registerAccount(displayName, email, password);
       window.location.href = `/verify.html?email=${encodeURIComponent(email)}`;
     } catch (error) {
       if (note) note.textContent = error instanceof Error ? error.message : "Unable to create account.";
+    } finally {
+      confirmBtn.disabled = false;
+      pendingSubmission = null;
     }
   });
 };
