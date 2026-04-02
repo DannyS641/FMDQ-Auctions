@@ -40,6 +40,7 @@ const adminApiToken = process.env.ADMIN_API_TOKEN || "";
 const notificationRecipient = process.env.NOTIFY_TO || "operations@fmdq.example";
 const notificationTransport = (process.env.NOTIFY_TRANSPORT || "file").toLowerCase();
 const notificationPollMs = Math.max(Number(process.env.NOTIFY_POLL_MS || 5000), 1000);
+const notificationWorkerMode = (process.env.NOTIFICATION_WORKER_MODE || "both").toLowerCase();
 const smtpHost = process.env.SMTP_HOST || "";
 const smtpPort = Number(process.env.SMTP_PORT || 587);
 const smtpUser = process.env.SMTP_USER || "";
@@ -57,6 +58,10 @@ const authRateLimit = 10;
 const maxImportArchiveEntries = 150;
 const maxImportExtractedBytes = 100 * 1024 * 1024;
 const notificationClaimTtlMs = 10 * 60_000;
+const imageBucket = process.env.SUPABASE_IMAGE_BUCKET || "auction-images";
+const documentBucket = process.env.SUPABASE_DOCUMENT_BUCKET || "auction-documents";
+const malwareScanMode = (process.env.MALWARE_SCAN_MODE || "off").toLowerCase();
+const malwareScanCommand = process.env.MALWARE_SCAN_COMMAND || "";
 const allowedOrigins = new Set(
   (process.env.CORS_ORIGINS || [appBaseUrl, "http://localhost:5173", "http://127.0.0.1:5173"].join(","))
     .split(",")
@@ -82,11 +87,13 @@ const dataDir = path.join(__dirname, "data");
 const outboxDir = path.join(dataDir, "notification-outbox");
 const importsDir = path.join(dataDir, "imports");
 const uploadsDir = path.join(__dirname, "uploads");
+const tempUploadsDir = path.join(uploadsDir, "temp");
+const quarantineDir = path.join(uploadsDir, "quarantine");
 const imagesDir = path.join(uploadsDir, "images");
 const docsDir = path.join(uploadsDir, "documents");
 const execFileAsync = promisify(execFile);
 
-[dataDir, outboxDir, importsDir, uploadsDir, imagesDir, docsDir].forEach((dir) => {
+[dataDir, outboxDir, importsDir, uploadsDir, tempUploadsDir, quarantineDir, imagesDir, docsDir].forEach((dir) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -166,8 +173,6 @@ app.use((req, res, next) => {
     next();
   })().catch(next);
 });
-app.use("/uploads/images", express.static(imagesDir));
-
 type StoredFileRef = { name: string; url: string };
 type StoredBid = { bidder: string; amount: number; time: string; createdAt: string };
 type StoredItem = {
@@ -381,6 +386,18 @@ const normalizeRole = (roles: string[]): Role => {
 };
 
 const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "-");
+const guessContentType = (name: string, fallback = "application/octet-stream") => {
+  const extension = path.extname(name).toLowerCase();
+  if ([".jpg", ".jpeg"].includes(extension)) return "image/jpeg";
+  if (extension === ".png") return "image/png";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".pdf") return "application/pdf";
+  if (extension === ".doc") return "application/msword";
+  if (extension === ".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (extension === ".xls") return "application/vnd.ms-excel";
+  if (extension === ".xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  return fallback;
+};
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 const sanitizeDisplayName = (value: string) => value.trim().replace(/\s+/g, " ");
 const buildEmailVerificationUrl = (token: string) => `${appBaseUrl}/verify.html?token=${encodeURIComponent(token)}`;
@@ -424,7 +441,7 @@ const allowedDocumentTypes = new Set([
 ]);
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, file.fieldname === "documents" ? docsDir : imagesDir),
+  destination: (req, file, cb) => cb(null, tempUploadsDir),
   filename: (req, file, cb) => cb(null, `${Date.now()}-${safeFileName(file.originalname)}`)
 });
 
@@ -484,6 +501,91 @@ const removeStoredFile = (url: string) => {
   const filePath = path.normalize(path.join(__dirname, url.replace(/^\/+/, "")));
   if (!filePath.startsWith(uploadsDir)) return;
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+};
+
+const buildStoragePath = (kind: "image" | "document", originalName: string) =>
+  `${kind}s/${new Date().toISOString().slice(0, 10)}/${Date.now()}-${randomUUID()}-${safeFileName(originalName)}`;
+
+const buildStoredFileUrl = (kind: "image" | "document", storagePath: string) =>
+  `/uploads/${kind === "image" ? "images" : "documents"}/${encodeURIComponent(Buffer.from(storagePath, "utf8").toString("base64url"))}`;
+
+const decodeStoredFilePath = (encodedPath: string) => {
+  try {
+    return Buffer.from(decodeURIComponent(encodedPath), "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
+};
+
+const runMalwareScan = async (filePath: string) => {
+  const quarantinePath = path.join(quarantineDir, `${Date.now()}-${safeFileName(path.basename(filePath))}`);
+  fs.copyFileSync(filePath, quarantinePath);
+  try {
+    if (malwareScanMode === "command" && malwareScanCommand) {
+      const parts = malwareScanCommand.split(/\s+/).filter(Boolean);
+      const [command, ...args] = parts;
+      if (!command) throw new Error("MALWARE_SCAN_COMMAND is not configured.");
+      await execFileAsync(command, [...args, quarantinePath], { maxBuffer: 10 * 1024 * 1024 });
+    }
+    return quarantinePath;
+  } catch (error) {
+    throw new Error(error instanceof Error ? `Malware scan failed: ${error.message}` : "Malware scan failed.");
+  }
+};
+
+const uploadFileToManagedStorage = async (sourcePath: string, kind: "image" | "document", originalName: string) => {
+  const storagePath = buildStoragePath(kind, originalName);
+  const bucket = kind === "image" ? imageBucket : documentBucket;
+  const fileBuffer = fs.readFileSync(sourcePath);
+  const uploadResult = await supabase.storage.from(bucket).upload(storagePath, fileBuffer, {
+    contentType: guessContentType(originalName),
+    upsert: false
+  });
+  if (uploadResult.error) throw new Error(uploadResult.error.message);
+  return {
+    storagePath,
+    bucket,
+    url: buildStoredFileUrl(kind, storagePath)
+  };
+};
+
+const removeManagedStoredFile = async (url: string) => {
+  const documentMatch = url.match(/^\/uploads\/documents\/(.+)$/);
+  const imageMatch = url.match(/^\/uploads\/images\/(.+)$/);
+  const kind = documentMatch ? "document" : imageMatch ? "image" : null;
+  const encodedPath = documentMatch?.[1] || imageMatch?.[1] || "";
+  if (!kind || !encodedPath) {
+    removeStoredFile(url);
+    return;
+  }
+  const storagePath = decodeStoredFilePath(encodedPath);
+  if (!storagePath) {
+    removeStoredFile(url);
+    return;
+  }
+  const bucket = kind === "image" ? imageBucket : documentBucket;
+  const result = await supabase.storage.from(bucket).remove([storagePath]);
+  if (result.error && !result.error.message.toLowerCase().includes("not found")) {
+    throw new Error(result.error.message);
+  }
+};
+
+const ensureStorageBucket = async (bucketName: string, publicBucket: boolean) => {
+  const listResult = await supabase.storage.listBuckets();
+  if (listResult.error) throw new Error(listResult.error.message);
+  if (listResult.data?.some((bucket) => bucket.name === bucketName)) return;
+  const createResult = await supabase.storage.createBucket(bucketName, {
+    public: publicBucket,
+    fileSizeLimit: "25MB"
+  });
+  if (createResult.error && !createResult.error.message.toLowerCase().includes("already exists")) {
+    throw new Error(createResult.error.message);
+  }
+};
+
+const ensureStorageBuckets = async () => {
+  await ensureStorageBucket(imageBucket, false);
+  await ensureStorageBucket(documentBucket, false);
 };
 
 const removeFileIfExists = (filePath: string) => {
@@ -1226,6 +1328,17 @@ const processNotificationQueue = async () => {
   }
 };
 
+const shouldRunApiServer = notificationWorkerMode === "api" || notificationWorkerMode === "both";
+const shouldRunNotificationWorker = notificationWorkerMode === "worker" || notificationWorkerMode === "both";
+
+const startNotificationWorkerLoop = async () => {
+  if (!shouldRunNotificationWorker) return;
+  await processNotificationQueue();
+  setInterval(() => {
+    void processNotificationQueue().catch((error) => console.error("Notification processing failed.", error));
+  }, notificationPollMs);
+};
+
 const validateNewItem = (body: Record<string, string>) => {
   const title = (body.title || "").trim();
   const category = (body.category || "").trim();
@@ -1376,7 +1489,7 @@ const collectImportFiles = (rootDir: string) => {
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const documentExtensions = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx"]);
 
-const copyImportedFile = (sourcePath: string, kind: "image" | "document") => {
+const prepareManagedFile = async (sourcePath: string, kind: "image" | "document", originalName = path.basename(sourcePath)) => {
   const extension = path.extname(sourcePath).toLowerCase();
   if (kind === "image" && !imageExtensions.has(extension)) {
     throw new Error(`Unsupported image file type for ${path.basename(sourcePath)}.`);
@@ -1384,16 +1497,30 @@ const copyImportedFile = (sourcePath: string, kind: "image" | "document") => {
   if (kind === "document" && !documentExtensions.has(extension)) {
     throw new Error(`Unsupported document file type for ${path.basename(sourcePath)}.`);
   }
-  const destinationDir = kind === "image" ? imagesDir : docsDir;
-  const fileName = `${Date.now()}-${randomUUID()}-${safeFileName(path.basename(sourcePath))}`;
-  const destinationPath = path.join(destinationDir, fileName);
-  fs.copyFileSync(sourcePath, destinationPath);
-  return {
-    id: randomUUID(),
-    kind,
-    name: path.basename(sourcePath),
-    url: `/uploads/${kind === "image" ? "images" : "documents"}/${fileName}`
-  };
+  const scannedPath = await runMalwareScan(sourcePath);
+  try {
+    const stored = await uploadFileToManagedStorage(scannedPath, kind, originalName);
+    return {
+      id: randomUUID(),
+      kind,
+      name: originalName,
+      url: stored.url
+    };
+  } finally {
+    removeFileIfExists(scannedPath);
+  }
+};
+
+const copyImportedFile = async (sourcePath: string, kind: "image" | "document") => {
+  return prepareManagedFile(sourcePath, kind, path.basename(sourcePath));
+};
+
+const prepareUploadedMulterFile = async (file: Express.Multer.File, kind: "image" | "document") => {
+  try {
+    return await prepareManagedFile(file.path, kind, file.originalname);
+  } finally {
+    removeFileIfExists(file.path);
+  }
 };
 
 const createItemRecord = async (
@@ -1979,18 +2106,42 @@ app.get("/api/me/bids", asyncHandler(async (req, res) => {
   res.json(await getUserBidRecords(auth.userId, auth.actor));
 }));
 
+app.get("/uploads/images/:file", asyncHandler(async (req, res) => {
+  const rawFile = String(req.params.file || "");
+  const localFileName = safeFileName(rawFile);
+  const localPath = path.join(imagesDir, localFileName);
+  if (localFileName && fs.existsSync(localPath)) {
+    res.sendFile(localPath);
+    return;
+  }
+  const storagePath = decodeStoredFilePath(rawFile);
+  if (!storagePath) {
+    res.status(404).json({ error: "Image not found." });
+    return;
+  }
+  const result = await supabase.storage.from(imageBucket).download(storagePath);
+  if (result.error || !result.data) {
+    res.status(404).json({ error: "Image not found." });
+    return;
+  }
+  const buffer = Buffer.from(await result.data.arrayBuffer());
+  res.setHeader("Content-Type", result.data.type || guessContentType(storagePath, "image/jpeg"));
+  res.setHeader("Cache-Control", "private, max-age=300");
+  res.send(buffer);
+}));
+
 app.get("/uploads/documents/:file", asyncHandler(async (req, res) => {
   const auth = await getAuthContext(req);
   if (!auth.signedIn) {
     res.status(401).json({ error: "Sign in required to access documents." });
     return;
   }
-  const fileName = safeFileName(String(req.params.file || ""));
-  if (!fileName) {
+  const rawFile = String(req.params.file || "");
+  if (!rawFile) {
     res.status(404).json({ error: "Document not found." });
     return;
   }
-  const publicUrl = `/uploads/documents/${fileName}`;
+  const publicUrl = `/uploads/documents/${rawFile}`;
   const row = handleSupabaseMaybe<ItemFileRow>(
     await supabase.from("item_files").select("item_id,kind,name,url").eq("kind", "document").eq("url", publicUrl).maybeSingle(),
     true
@@ -2004,12 +2155,26 @@ app.get("/uploads/documents/:file", asyncHandler(async (req, res) => {
     res.status(403).json({ error: "You do not have access to this document." });
     return;
   }
-  const filePath = path.join(docsDir, fileName);
-  if (!fs.existsSync(filePath)) {
+  const localFileName = safeFileName(rawFile);
+  const localPath = path.join(docsDir, localFileName);
+  if (localFileName && fs.existsSync(localPath)) {
+    res.sendFile(localPath);
+    return;
+  }
+  const storagePath = decodeStoredFilePath(rawFile);
+  if (!storagePath) {
     res.status(404).json({ error: "Document file not found." });
     return;
   }
-  res.sendFile(filePath);
+  const result = await supabase.storage.from(documentBucket).download(storagePath);
+  if (result.error || !result.data) {
+    res.status(404).json({ error: "Document file not found." });
+    return;
+  }
+  const buffer = Buffer.from(await result.data.arrayBuffer());
+  res.setHeader("Content-Type", result.data.type || guessContentType(row.name, "application/octet-stream"));
+  res.setHeader("Content-Disposition", `inline; filename="${safeFileName(row.name)}"`);
+  res.send(buffer);
 }));
 
 app.get("/api/items", asyncHandler(async (req, res) => {
@@ -2622,16 +2787,16 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
           .filter(([key, value]) => (key.startsWith("document") || key.startsWith("doc")) && value.trim())
           .flatMap(([, value]) => splitImportList(value));
 
-        const imageFiles = imageNames.map((name) => {
+        const imageFiles = await Promise.all(imageNames.map(async (name) => {
           const sourcePath = extractedFiles.get(name.toLowerCase());
           if (!sourcePath) throw new Error(`Image file "${name}" was not found in the ZIP.`);
           return copyImportedFile(sourcePath, "image");
-        });
-        const documentFiles = documentNames.map((name) => {
+        }));
+        const documentFiles = await Promise.all(documentNames.map(async (name) => {
           const sourcePath = extractedFiles.get(name.toLowerCase());
           if (!sourcePath) throw new Error(`Document file "${name}" was not found in the ZIP.`);
           return copyImportedFile(sourcePath, "document");
-        });
+        }));
 
         const itemId = await createItemRecord(req, validation.value, auth, { images: imageFiles, documents: documentFiles });
         createdIds.push(itemId);
@@ -2674,19 +2839,11 @@ app.post("/api/items", requireAdminToken, upload.fields([{ name: "images", maxCo
   const images = files?.images || [];
   const documents = files?.documents || [];
   const auth = await getAuthContext(req);
+  const preparedImages = await Promise.all(images.map((image) => prepareUploadedMulterFile(image, "image")));
+  const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document")));
   const itemId = await createItemRecord(req, validation.value, auth, {
-    images: images.map((image) => ({
-      id: randomUUID(),
-      kind: "image" as const,
-      name: image.originalname,
-      url: `/uploads/images/${path.basename(image.path)}`
-    })),
-    documents: documents.map((document) => ({
-      id: randomUUID(),
-      kind: "document" as const,
-      name: document.originalname,
-      url: `/uploads/documents/${path.basename(document.path)}`
-    }))
+    images: preparedImages,
+    documents: preparedDocuments
   });
   res.status(201).json(await getItemById(itemId, true));
 }));
@@ -2706,6 +2863,8 @@ app.patch("/api/items/:id", requireAdminToken, upload.fields([{ name: "images", 
   const images = files?.images || [];
   const documents = files?.documents || [];
   const auth = await getAuthContext(req);
+  const preparedImages = await Promise.all(images.map((image) => prepareUploadedMulterFile(image, "image")));
+  const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document")));
 
   await handleSupabase(await supabase.from("categories").upsert({ name: validation.value.category }, { onConflict: "name" }));
   await handleSupabase(
@@ -2726,23 +2885,23 @@ app.patch("/api/items/:id", requireAdminToken, upload.fields([{ name: "images", 
   );
   if (images.length) {
     await handleSupabase(await supabase.from("item_files").insert(
-      images.map((image) => ({
+      preparedImages.map((image) => ({
         id: randomUUID(),
         item_id: existing.id,
         kind: "image",
-        name: image.originalname,
-        url: `/uploads/images/${path.basename(image.path)}`
+        name: image.name,
+        url: image.url
       }))
     ));
   }
   if (documents.length) {
     await handleSupabase(await supabase.from("item_files").insert(
-      documents.map((document) => ({
+      preparedDocuments.map((document) => ({
         id: randomUUID(),
         item_id: existing.id,
         kind: "document",
-        name: document.originalname,
-        url: `/uploads/documents/${path.basename(document.path)}`
+        name: document.name,
+        url: document.url
       }))
     ));
   }
@@ -2868,6 +3027,7 @@ app.use((error: unknown, req: express.Request, res: express.Response, next: expr
 
 const start = async () => {
   await handleSupabase(await supabase.from("roles").select("name").limit(1));
+  await ensureStorageBuckets();
   await seedRoles();
   await seedCategoriesIfEmpty();
   await seedItemsIfEmpty();
@@ -2879,13 +3039,16 @@ const start = async () => {
     }
     await smtpTransporter.verify();
   }
-  await processNotificationQueue();
-  setInterval(() => {
-    void processNotificationQueue().catch((error) => console.error("Notification processing failed.", error));
-  }, notificationPollMs);
+  await startNotificationWorkerLoop();
+  if (!shouldRunApiServer) {
+    console.log(`Notification worker running in ${notificationWorkerMode} mode.`);
+    console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
+    return;
+  }
   app.listen(port, () => {
     console.log(`Auction API running at http://localhost:${port}`);
     console.log("Storage backend: supabase-js");
+    console.log(`Notification worker mode: ${notificationWorkerMode}`);
     console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
   });
 };

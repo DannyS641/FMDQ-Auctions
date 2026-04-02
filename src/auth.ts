@@ -142,6 +142,7 @@ function sessionFromPayload(payload: {
     email: string;
     displayName: string;
     role: string;
+    csrfToken?: string;
   };
   csrfToken?: string;
 }): AuthSession {
@@ -153,14 +154,26 @@ function sessionFromPayload(payload: {
     role: (payload.user.role as Role) || "Guest",
     email: payload.user.email,
     userId: payload.user.id,
-    csrfToken: payload.csrfToken
+    csrfToken: payload.csrfToken || payload.user.csrfToken
   };
 }
 
 export const apiFetch = async (path: string, init?: RequestInit) => {
   const method = (init?.method || "GET").toUpperCase();
   const isMutation = ["POST", "PATCH", "PUT", "DELETE"].includes(method);
-  const session = readAuthSession();
+  let session = readAuthSession();
+  if (isMutation && session.signedIn && !session.csrfToken) {
+    const refreshResponse = await performApiFetch("/api/auth/me");
+    const refreshPayload = (await refreshResponse.json().catch(() => null)) as {
+      signedIn: boolean;
+      user: null | { id: string; email: string; displayName: string; role: string; csrfToken?: string };
+      csrfToken?: string;
+    } | null;
+    if (refreshResponse.ok && refreshPayload) {
+      session = sessionFromPayload(refreshPayload);
+      writeAuthSession(session);
+    }
+  }
   let response = await performApiFetch(path, init, isMutation ? session.csrfToken : undefined);
   if (!isMutation || response.status !== 403) {
     return response;
@@ -176,7 +189,7 @@ export const apiFetch = async (path: string, init?: RequestInit) => {
   }
   const refreshPayload = (await refreshResponse.json().catch(() => null)) as {
     signedIn: boolean;
-    user: null | { id: string; email: string; displayName: string; role: string };
+    user: null | { id: string; email: string; displayName: string; role: string; csrfToken?: string };
     csrfToken?: string;
   } | null;
   if (!refreshPayload) {
@@ -197,7 +210,7 @@ export const fetchCurrentSession = async () => {
   const response = await apiFetch("/api/auth/me");
   const payload = (await response.json()) as {
     signedIn: boolean;
-    user: null | { id: string; email: string; displayName: string; role: string };
+    user: null | { id: string; email: string; displayName: string; role: string; csrfToken?: string };
     csrfToken?: string;
   };
   const session = sessionFromPayload(payload);

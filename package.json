@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "dev:server": "tsx server/index.ts"
+    "dev:server": "tsx server/index.ts",
+    "dev:worker": "NOTIFICATION_WORKER_MODE=worker tsx server/index.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.0",
