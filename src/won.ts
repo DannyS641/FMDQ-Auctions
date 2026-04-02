@@ -1,5 +1,6 @@
 import "./styles.css";
 import { apiFetch, fetchCurrentSession, getAuditHeaders, readAuthSession } from "./auth";
+import { renderAppHeader, wireAppHeader } from "./app-nav";
 
 type WonAuction = {
   id: string;
@@ -26,18 +27,11 @@ const renderShell = (content: string) => {
   if (!root) return;
   root.innerHTML = `
     <div class="min-h-screen bg-ash">
-      <header class="border-b border-ink/10 bg-white">
-        <nav class="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-6 py-5">
-          <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
-          <div class="flex items-center gap-3">
-            <a href="/closed.html" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Closed auctions</a>
-            <a href="/bidding.html" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Back</a>
-          </div>
-        </nav>
-      </header>
+      ${renderAppHeader(readAuthSession(), { active: "desk" })}
       <main class="mx-auto w-full max-w-7xl px-6 py-10">${content}</main>
     </div>
   `;
+  wireAppHeader();
   revealApp();
 };
 

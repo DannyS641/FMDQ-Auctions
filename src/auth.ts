@@ -1,5 +1,5 @@
 export type AuthMode = "account";
-export type Role = "Guest" | "Bidder" | "Observer" | "Admin";
+export type Role = "Guest" | "Bidder" | "Observer" | "Admin" | "SuperAdmin";
 
 export type AuthSession = {
   mode: AuthMode;
@@ -8,6 +8,70 @@ export type AuthSession = {
   role: Role;
   email?: string;
   userId?: string;
+};
+
+export type UserProfile = {
+  id: string;
+  email: string;
+  displayName: string;
+  status: string;
+  createdAt: string;
+  lastLoginAt?: string | null;
+  role: Role;
+  roles: string[];
+};
+
+export type UserSession = {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  current: boolean;
+};
+
+export type DashboardSummary = {
+  openBidCount: number;
+  wonAuctionCount: number;
+  activeSessionCount: number;
+  totalBidCount: number;
+  reserveMetClosedCount: number;
+  reserveNotMetClosedCount: number;
+};
+
+export type DashboardBidActivity = {
+  itemId: string;
+  title: string;
+  category: string;
+  currentBid: number;
+  yourBid: number;
+  endTime: string;
+  status: "winning" | "outbid" | "won" | "lost" | "active" | "closed";
+};
+
+export type DashboardPayload = {
+  summary: DashboardSummary;
+  recentBidActivity: DashboardBidActivity[];
+};
+
+export type UserBidRecord = {
+  itemId: string;
+  title: string;
+  category: string;
+  lot: string;
+  currentBid: number;
+  yourLatestBid: number;
+  endTime: string;
+  lastBidAt: string;
+  status: "winning" | "outbid" | "won" | "lost" | "active" | "closed";
+};
+
+export type AdminUser = {
+  id: string;
+  email: string;
+  displayName: string;
+  status: string;
+  createdAt: string;
+  lastLoginAt?: string | null;
+  roles: string[];
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
@@ -57,6 +121,14 @@ export const apiFetch = (path: string, init?: RequestInit) =>
       ...(init?.headers || {})
     }
   });
+
+const readJson = async <T>(response: Response, fallbackMessage: string) => {
+  const payload = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
+  if (!response.ok || !payload) {
+    throw new Error(payload?.error || fallbackMessage);
+  }
+  return payload;
+};
 
 const sessionFromPayload = (payload: {
   signedIn: boolean;
@@ -115,13 +187,10 @@ export const registerAccount = async (displayName: string, email: string, passwo
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ displayName, email, password })
   });
-  const payload = (await response.json().catch(() => null)) as
-    | { error?: string; registered?: boolean; verificationRequired?: boolean; email?: string; message?: string; verificationUrl?: string }
-    | null;
-  if (!response.ok || !payload) {
-    throw new Error(payload?.error || "Unable to create account.");
-  }
-  return payload;
+  return readJson<{ registered?: boolean; verificationRequired?: boolean; email?: string; message?: string; verificationUrl?: string }>(
+    response,
+    "Unable to create account."
+  );
 };
 
 export const logoutAccount = async () => {
@@ -138,13 +207,16 @@ export const verifyEmailToken = async (token: string) => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token })
   });
-  const payload = (await response.json().catch(() => null)) as
-    | { error?: string; verified?: boolean; message?: string }
-    | null;
-  if (!response.ok || !payload) {
-    throw new Error(payload?.error || "Unable to verify email.");
-  }
-  return payload;
+  return readJson<{ verified?: boolean; message?: string }>(response, "Unable to verify email.");
+};
+
+export const resendVerification = async (email: string) => {
+  const response = await apiFetch("/api/auth/resend-verification", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email })
+  });
+  return readJson<{ queued?: boolean; message?: string }>(response, "Unable to resend verification email.");
 };
 
 export const requestPasswordReset = async (email: string) => {
@@ -153,13 +225,7 @@ export const requestPasswordReset = async (email: string) => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email })
   });
-  const payload = (await response.json().catch(() => null)) as
-    | { error?: string; requested?: boolean; message?: string }
-    | null;
-  if (!response.ok || !payload) {
-    throw new Error(payload?.error || "Unable to request password reset.");
-  }
-  return payload;
+  return readJson<{ requested?: boolean; message?: string }>(response, "Unable to request password reset.");
 };
 
 export const resetPassword = async (token: string, password: string) => {
@@ -168,13 +234,78 @@ export const resetPassword = async (token: string, password: string) => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token, password })
   });
-  const payload = (await response.json().catch(() => null)) as
-    | { error?: string; reset?: boolean; message?: string }
-    | null;
-  if (!response.ok || !payload) {
-    throw new Error(payload?.error || "Unable to reset password.");
-  }
-  return payload;
+  return readJson<{ reset?: boolean; message?: string }>(response, "Unable to reset password.");
+};
+
+export const fetchMyProfile = async () => {
+  const response = await apiFetch("/api/me/profile");
+  return readJson<UserProfile>(response, "Unable to load your profile.");
+};
+
+export const fetchMySessions = async () => {
+  const response = await apiFetch("/api/me/sessions");
+  return readJson<UserSession[]>(response, "Unable to load your sessions.");
+};
+
+export const revokeMySession = async (sessionId: string) => {
+  const response = await apiFetch(`/api/me/sessions/${sessionId}`, { method: "DELETE" });
+  return readJson<{ revoked?: boolean; message?: string }>(response, "Unable to revoke that session.");
+};
+
+export const revokeOtherSessions = async () => {
+  const response = await apiFetch("/api/me/sessions", { method: "DELETE" });
+  return readJson<{ revoked?: boolean; count?: number; message?: string }>(response, "Unable to revoke other sessions.");
+};
+
+export const fetchMyDashboard = async () => {
+  const response = await apiFetch("/api/me/dashboard");
+  return readJson<DashboardPayload>(response, "Unable to load your dashboard.");
+};
+
+export const fetchMyBids = async () => {
+  const response = await apiFetch("/api/me/bids");
+  return readJson<UserBidRecord[]>(response, "Unable to load your bids.");
+};
+
+export const fetchAdminUsers = async () => {
+  const response = await apiFetch("/api/admin/users");
+  return readJson<AdminUser[]>(response, "Unable to load users.");
+};
+
+export const fetchAdminRoles = async () => {
+  const response = await apiFetch("/api/admin/roles");
+  return readJson<string[]>(response, "Unable to load roles.");
+};
+
+export const assignUserRole = async (userId: string, roleName: string) => {
+  const response = await apiFetch(`/api/admin/users/${userId}/roles`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ roleName })
+  });
+  return readJson<{ updated?: boolean; message?: string }>(response, "Unable to assign role.");
+};
+
+export const removeUserRole = async (userId: string, roleName: string) => {
+  const response = await apiFetch(`/api/admin/users/${userId}/roles/${encodeURIComponent(roleName)}`, {
+    method: "DELETE"
+  });
+  return readJson<{ updated?: boolean; message?: string }>(response, "Unable to remove role.");
+};
+
+export const bulkImportUsers = async (file: File) => {
+  const formData = new FormData();
+  formData.append("csv", file);
+  const response = await apiFetch("/api/admin/users/bulk-import", {
+    method: "POST",
+    body: formData
+  });
+  return readJson<{
+    created: number;
+    skipped: number;
+    failed: number;
+    items: Array<{ row: number; status: "created" | "skipped" | "failed"; email: string; message: string }>;
+  }>(response, "Unable to import users.");
 };
 
 export const getAuditHeaders = () => ({});

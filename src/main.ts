@@ -12,7 +12,7 @@ type Condition = "New" | "Used" | "Fair" | "Damaged";
 
 type Status = "Live" | "Upcoming" | "Closed";
 
-type Role = "Guest" | "Bidder" | "Observer" | "Admin";
+type Role = "Guest" | "Bidder" | "Observer" | "Admin" | "SuperAdmin";
 
 type Bid = {
   bidder: string;
@@ -274,7 +274,14 @@ const formatDate = (value: string) => {
 };
 const resolveMediaUrl = (url: string) =>
   url.startsWith("http") ? url : `${API_BASE_URL}${url}`;
-const canViewReserve = () => state.role === "Admin";
+const canViewReserve = () => state.role === "Admin" || state.role === "SuperAdmin";
+const getReserveOutcome = (item: AuctionItem) => {
+  if (item.reserve <= 0) return "No reserve";
+  if (getStatus(item) !== "Closed") {
+    return item.currentBid >= item.reserve ? "Reserve met" : "Reserve pending";
+  }
+  return item.currentBid >= item.reserve ? "Reserve met" : "Reserve not met";
+};
 
 const resolveRole = () => {
   const session = readAuthSession();
@@ -479,6 +486,7 @@ const renderItems = () => {
       const reserveLabel = item.reserve > 0
         ? (canViewReserve() ? formatMoney(item.reserve) : "Confidential")
         : "No reserve";
+      const reserveOutcome = getReserveOutcome(item);
       const coverUrl = item.images[0]?.url;
       return `
         <article
@@ -511,6 +519,7 @@ const renderItems = () => {
             <div>
               <p class="text-xs uppercase tracking-[0.3em] text-slate">Reserve</p>
               <p class="mt-1 font-semibold text-ink">${reserveLabel}</p>
+              <p class="mt-1 text-xs text-slate">${reserveOutcome}</p>
             </div>
           </div>
           <div class="flex items-center justify-between text-xs text-slate">
@@ -542,6 +551,7 @@ const renderDetail = () => {
   const reserveLine = item.reserve > 0
     ? (canViewReserve() ? formatMoney(item.reserve) : "Confidential")
     : "No reserve";
+  const reserveOutcome = getReserveOutcome(item);
   const mainImage = item.images[0]?.url;
   const thumbnailGrid = item.images.length > 1
     ? item.images
@@ -609,6 +619,7 @@ const renderDetail = () => {
           <div>
             <p class="text-xs uppercase tracking-[0.3em] text-slate">Reserve</p>
             <p class="mt-1 font-semibold text-ink">${reserveLine}</p>
+            <p class="mt-1 text-xs text-slate">${reserveOutcome}</p>
           </div>
           <div>
             <p class="text-xs uppercase tracking-[0.3em] text-slate">Starts</p>
@@ -794,7 +805,7 @@ const updateRoleUi = () => {
     adLogout.classList.toggle("hidden", !session.signedIn);
   }
   if (adminPanel) {
-    adminPanel.classList.toggle("hidden", state.role !== "Admin");
+    adminPanel.classList.toggle("hidden", !(state.role === "Admin" || state.role === "SuperAdmin"));
   }
   renderItems();
   renderDetail();
@@ -802,7 +813,7 @@ const updateRoleUi = () => {
 };
 
 const initSessionUi = async () => {
-  if (!adStatus || !adUser || !adLogin || !adLogout) return;
+  if (!adUser || !adLogin || !adLogout || !activeRoleLabel) return;
   try {
     const session = await fetchCurrentSession();
     writeAuthSession(session);

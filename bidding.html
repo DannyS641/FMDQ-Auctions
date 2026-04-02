@@ -35,34 +35,31 @@
   <body data-app-loading="true">
     <div data-app-loader>
       <div style="width:min(560px,100%);border:1px solid rgba(15,23,42,.08);border-radius:32px;background:rgba(255,255,255,.92);padding:40px 32px;text-align:center;box-shadow:0 24px 70px rgba(148,163,184,.18);font-family:'Space Grotesk',sans-serif;color:#0f172a;">
-        <img src="/slides/fmdq-logo.png" alt="FMDQ" style="height:44px;width:auto;" />
+        <img src="/slides/fmdq-logo.png" alt="FMDQ" style="display:block;height:44px;width:auto;margin:0 auto;" />
         <p style="margin:20px 0 0;font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:#64748b;">Loading auction desk</p>
       </div>
     </div>
     <div class="min-h-screen bg-ash" data-app-root>
-      <header class="border-b border-ink/10 bg-white">
-        <nav class="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-6 px-6 py-6">
-          <div class="flex items-center gap-3">
+      <header class="border-b border-ink/8 bg-white/92 backdrop-blur">
+        <nav class="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-5">
+          <a href="/bidding.html" class="flex items-center gap-3">
             <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
+          </a>
+          <div class="flex flex-wrap items-center gap-2">
+            <a href="/bidding.html" class="rounded-full bg-[#1d326c] px-4 py-2 text-xs font-semibold text-white">Auction desk</a>
+            <a href="/dashboard.html" class="rounded-full border border-ink/10 bg-white/80 px-4 py-2 text-xs font-semibold text-ink transition hover:border-[#1d326c]/25 hover:text-[#1d326c]">Dashboard</a>
+            <a href="/my-bids.html" class="rounded-full border border-ink/10 bg-white/80 px-4 py-2 text-xs font-semibold text-ink transition hover:border-[#1d326c]/25 hover:text-[#1d326c]">My bids</a>
           </div>
           <div class="flex flex-wrap items-center gap-3 text-xs">
-            <a href="/closed.html" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Closed auctions</a>
-            <a href="/won.html" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Won auctions</a>
-            <div class="rounded-full border border-ink/10 bg-ink/5 px-4 py-2">
-              <span class="text-slate">Session:</span>
-              <span class="ml-2 font-semibold text-ink" id="ad-status">Loading</span>
+            <span id="ad-status" class="hidden">Loading</span>
+            <div class="rounded-full border border-[#d7dfef] bg-[#eef3ff] px-4 py-2 font-semibold text-[#1d326c]">
+              Role: <span class="ml-1 text-ink" id="active-role-label">Guest</span>
             </div>
-            <div class="rounded-full border border-ink/10 bg-[#fff7e8] px-4 py-2">
-              <span class="text-[#9a6408]">Active role:</span>
-              <span class="ml-2 font-semibold text-ink" id="active-role-label">Guest</span>
-            </div>
-            <div class="rounded-full border border-ink/10 bg-ink/5 px-4 py-2">
-              <span class="text-slate">User:</span>
-              <span class="ml-2 font-semibold text-ink" id="ad-user">Checking</span>
-            </div>
-            <button id="ad-login" class="rounded-full bg-ink px-4 py-2 text-xs font-semibold text-white">Sign in</button>
-            <button id="ad-logout" class="hidden rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Sign out</button>
-            <a href="/index.html" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Back</a>
+            <a href="/profile.html" class="rounded-full border border-ink/10 bg-white/80 px-4 py-2 font-semibold text-ink">
+              <span id="ad-user">Checking</span>
+            </a>
+            <button id="ad-login" class="rounded-full bg-[#1d326c] px-4 py-2 font-semibold text-white">Sign in</button>
+            <button id="ad-logout" class="hidden rounded-full border border-ink/10 bg-white/80 px-4 py-2 font-semibold text-ink">Sign out</button>
           </div>
         </nav>
       </header>

@@ -52,6 +52,15 @@ const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const tokenSigningSecret = process.env.APP_SECRET || supabaseServiceRoleKey;
 const bidRateWindowMs = 60_000;
 const bidRateLimit = 12;
+const authRateWindowMs = 15 * 60_000;
+const authRateLimit = 10;
+const allowedOrigins = new Set(
+  (process.env.CORS_ORIGINS || [appBaseUrl, "http://localhost:5173", "http://127.0.0.1:5173"].join(","))
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+);
+const errorWebhookUrl = process.env.ERROR_WEBHOOK_URL || "";
 
 if (!supabaseUrl || !supabaseServiceRoleKey) {
   throw new Error("SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY are required for the backend.");
@@ -80,7 +89,16 @@ const execFileAsync = promisify(execFile);
 });
 
 app.disable("x-powered-by");
-app.use(cors({ origin: true, credentials: true }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.has(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error("Origin not allowed by CORS."));
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: "1mb" }));
 app.use((req, res, next) => {
   const requestId = randomUUID();
@@ -92,9 +110,35 @@ app.use((req, res, next) => {
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   res.setHeader("Cache-Control", "no-store");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self'; connect-src 'self' http://localhost:5174 http://127.0.0.1:5174;"
+  );
+  if (process.env.NODE_ENV === "production") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
   next();
 });
-app.use("/uploads", express.static(uploadsDir));
+app.use((req, res, next) => {
+  if (!["POST", "PATCH", "PUT", "DELETE"].includes(req.method)) {
+    next();
+    return;
+  }
+  const origin = String(req.headers.origin || "");
+  const referer = String(req.headers.referer || "");
+  if (!origin && !referer) {
+    next();
+    return;
+  }
+  const source = origin || referer;
+  const allowed = Array.from(allowedOrigins).some((entry) => source.startsWith(entry));
+  if (!allowed) {
+    res.status(403).json({ error: "Request origin is not allowed." });
+    return;
+  }
+  next();
+});
+app.use("/uploads/images", express.static(imagesDir));
 
 type StoredFileRef = { name: string; url: string };
 type StoredBid = { bidder: string; amount: number; time: string; createdAt: string };
@@ -135,7 +179,7 @@ type StoredUser = {
   createdAt: string;
   lastLoginAt: string | null;
 };
-type Role = "Guest" | "Bidder" | "Observer" | "Admin";
+type Role = "Guest" | "Bidder" | "Observer" | "Admin" | "SuperAdmin";
 type AuthContext = {
   userId?: string;
   actor: string;
@@ -188,7 +232,7 @@ type AuditRow = {
   details_json: Record<string, unknown> | string;
   created_at: string;
 };
-type SessionRow = { id: string; user_id: string; expires_at: string };
+type SessionRow = { id: string; user_id: string; created_at: string; expires_at: string };
 type UserRow = {
   id: string;
   email: string;
@@ -226,6 +270,7 @@ const smtpTransporter = notificationTransport === "smtp" && smtpHost && smtpUser
     })
   : null;
 let notificationProcessingInFlight = false;
+const recentAuthAttempts = new Map<string, number[]>();
 
 const seedItems: Array<Omit<StoredItem, "images" | "documents"> & { images: StoredFileRef[]; documents: StoredFileRef[] }> = (() => {
   const now = Date.now();
@@ -296,6 +341,7 @@ const parseCookies = (req: express.Request) =>
     }, {});
 
 const normalizeRole = (roles: string[]): Role => {
+  if (roles.includes("SuperAdmin")) return "SuperAdmin";
   if (roles.includes("Admin")) return "Admin";
   if (roles.includes("Observer")) return "Observer";
   if (roles.includes("Bidder")) return "Bidder";
@@ -436,6 +482,41 @@ const handleSupabaseMaybe = <T>(result: { data: T | null; error: { message: stri
   return result.data;
 };
 
+const checkAuthRateLimit = (key: string) => {
+  const now = Date.now();
+  const existing = recentAuthAttempts.get(key) || [];
+  const active = existing.filter((value) => now - value < authRateWindowMs);
+  if (active.length >= authRateLimit) {
+    recentAuthAttempts.set(key, active);
+    return false;
+  }
+  active.push(now);
+  recentAuthAttempts.set(key, active);
+  return true;
+};
+
+const getClientKey = (req: express.Request, extra = "") =>
+  `${req.ip || req.socket.remoteAddress || "unknown"}:${extra}`;
+
+const reportServerError = async (req: express.Request, error: unknown) => {
+  if (!errorWebhookUrl) return;
+  try {
+    await fetch(errorWebhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: error instanceof Error ? error.message : "Unknown server error",
+        path: req.path,
+        method: req.method,
+        requestId: String((req as express.Request & { requestId?: string }).requestId || ""),
+        occurredAt: new Date().toISOString()
+      })
+    });
+  } catch {
+    // Ignore error-reporting failures.
+  }
+};
+
 const getUserByEmail = async (email: string) =>
   handleSupabaseMaybe<UserRow>(
     await supabase
@@ -494,9 +575,14 @@ const getUserRoles = async (userId: string) =>
 
 const getSessionRow = async (sessionId: string) =>
   handleSupabaseMaybe<SessionRow>(
-    await supabase.from("sessions").select("id,user_id,expires_at").eq("id", sessionId).maybeSingle(),
+    await supabase.from("sessions").select("id,user_id,created_at,expires_at").eq("id", sessionId).maybeSingle(),
     true
   );
+
+const getUserSessions = async (userId: string) =>
+  handleSupabase(
+    await supabase.from("sessions").select("id,user_id,created_at,expires_at").eq("user_id", userId).order("created_at", { ascending: false })
+  ) as SessionRow[];
 
 const deleteSessionRow = async (sessionId: string) => {
   await handleSupabase(await supabase.from("sessions").delete().eq("id", sessionId));
@@ -598,7 +684,7 @@ const getAuthContext = async (req: express.Request): Promise<AuthContext> => {
     actorType: "user",
     role,
     trusted: true,
-    adminAuthorized: role === "Admin",
+    adminAuthorized: role === "Admin" || role === "SuperAdmin",
     signedIn: true
   };
 };
@@ -684,6 +770,13 @@ const getCategories = async () => {
   return rows.map((row) => row.name);
 };
 
+const getRoles = async () => {
+  const rows = handleSupabase(
+    await supabase.from("roles").select("name").order("name", { ascending: true })
+  ) as Array<{ name: string }>;
+  return rows.map((row) => row.name);
+};
+
 const mapItem = (row: ItemRow, files: ItemFileRow[], bids: BidRow[]): StoredItem => ({
   id: row.id,
   title: row.title,
@@ -746,6 +839,50 @@ const getItemById = async (id: string, includeArchived = false) => {
   if (!row) return null;
   if (!includeArchived && row.archived_at) return null;
   return (await hydrateItems([row]))[0] || null;
+};
+
+const getReserveState = (item: StoredItem) => {
+  if (item.reserve <= 0) return "no_reserve";
+  if (new Date(item.endTime).getTime() > Date.now()) {
+    return item.currentBid >= item.reserve ? "reserve_met" : "reserve_pending";
+  }
+  return item.currentBid >= item.reserve ? "reserve_met" : "reserve_not_met";
+};
+
+const getUserBidRecords = async (userId: string, actor: string) => {
+  const bidAudits = handleSupabase(
+    await supabase
+      .from("audits")
+      .select("entity_id,details_json,created_at")
+      .eq("event_type", "BID_PLACED")
+      .eq("actor", actor)
+      .order("created_at", { ascending: false })
+  ) as Array<{ entity_id: string; details_json: Record<string, unknown> | string; created_at: string }>;
+  const uniqueItemIds = Array.from(new Set(bidAudits.map((row) => row.entity_id)));
+  const items = new Map((await getItems(true)).map((item) => [item.id, item]));
+  return uniqueItemIds.flatMap((itemId) => {
+    const item = items.get(itemId);
+    if (!item) return [];
+    const auditsForItem = bidAudits.filter((row) => row.entity_id === itemId);
+    if (!auditsForItem.length) return [];
+    const latestAudit = auditsForItem[0];
+    const details = typeof latestAudit.details_json === "string" ? JSON.parse(latestAudit.details_json || "{}") : latestAudit.details_json || {};
+    const latestAmount = Number(details.amount || 0);
+    const status = new Date(item.endTime).getTime() > Date.now()
+      ? (item.currentBid === latestAmount ? "winning" : "outbid")
+      : (item.currentBid === latestAmount ? "won" : "lost");
+    return [{
+      itemId: item.id,
+      title: item.title,
+      category: item.category,
+      lot: item.lot,
+      currentBid: item.currentBid,
+      yourLatestBid: latestAmount,
+      endTime: item.endTime,
+      lastBidAt: latestAudit.created_at,
+      status
+    }];
+  });
 };
 
 const getRecentAudits = async (limit = 20) => {
@@ -1205,8 +1342,17 @@ const requireAdminToken = asyncHandler(async (req, res, next) => {
   next();
 });
 
+const requireSuperAdminToken = asyncHandler(async (req, res, next) => {
+  const auth = await getAuthContext(req);
+  if (!auth.signedIn || auth.role !== "SuperAdmin") {
+    res.status(403).json({ error: "Super admin access is required." });
+    return;
+  }
+  next();
+});
+
 const seedRoles = async () => {
-  for (const role of ["Admin", "Bidder", "Observer"]) {
+  for (const role of ["SuperAdmin", "Admin", "Bidder", "Observer"]) {
     await handleSupabase(await supabase.from("roles").upsert({ name: role }, { onConflict: "name" }));
   }
 };
@@ -1288,10 +1434,47 @@ app.get("/api/auth/me", asyncHandler(async (req, res) => {
   res.json(session ? { signedIn: true, user: session } : { signedIn: false, user: null });
 }));
 
+app.post("/api/auth/resend-verification", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
+  const email = normalizeEmail(String(req.body?.email || ""));
+  if (!email) {
+    res.status(400).json({ error: "Email is required." });
+    return;
+  }
+  if (!checkAuthRateLimit(getClientKey(req, `resend:${email}`))) {
+    res.status(429).json({ error: "Too many verification attempts. Please wait and try again." });
+    return;
+  }
+  const user = await getUserByEmail(email);
+  if (!user || user.status !== "pending_verification") {
+    res.json({ queued: true, message: "If a pending account exists for that email, a fresh verification link has been sent." });
+    return;
+  }
+  const verification = await createEmailVerificationToken(user.id);
+  await queueNotification(
+    "ACCOUNT_VERIFICATION",
+    "Confirm your FMDQ Auctions account",
+    { email: user.email, displayName: user.display_name, verifyUrl: verification.verifyUrl },
+    user.email
+  );
+  await appendAudit(req, {
+    eventType: "ACCOUNT_VERIFICATION_RESENT",
+    entityType: "system",
+    entityId: user.id,
+    actor: user.display_name,
+    actorType: "user",
+    details: { email: user.email }
+  });
+  res.json({ queued: true, message: "A new verification link has been sent to your email." });
+}));
+
 app.post("/api/auth/register", express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
   const email = normalizeEmail(String(req.body?.email || ""));
   const password = String(req.body?.password || "");
   const displayName = sanitizeDisplayName(String(req.body?.displayName || ""));
+  if (!checkAuthRateLimit(getClientKey(req, `register:${email}`))) {
+    res.status(429).json({ error: "Too many signup attempts. Please wait and try again." });
+    return;
+  }
   if (!email || !displayName || !password) {
     res.status(400).json({ error: "Display name, email, and password are required." });
     return;
@@ -1348,6 +1531,10 @@ app.post("/api/auth/register", express.json({ limit: "128kb" }), asyncHandler(as
 app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
   const email = normalizeEmail(String(req.body?.email || ""));
   const password = String(req.body?.password || "");
+  if (!checkAuthRateLimit(getClientKey(req, `login:${email}`))) {
+    res.status(429).json({ error: "Too many sign-in attempts. Please wait and try again." });
+    return;
+  }
   const user = await getUserByEmail(email);
   if (!user || !verifyPassword(password, user.password_hash || "")) {
     res.status(401).json({ error: "Invalid email or password." });
@@ -1382,6 +1569,10 @@ app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async
 
 app.post("/api/auth/verify-email", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
   const token = String(req.body?.token || "").trim();
+  if (!checkAuthRateLimit(getClientKey(req, `verify:${token.slice(0, 12)}`))) {
+    res.status(429).json({ error: "Too many verification attempts. Please wait and try again." });
+    return;
+  }
   if (!token) {
     res.status(400).json({ error: "Verification token is required." });
     return;
@@ -1426,6 +1617,10 @@ app.post("/api/auth/verify-email", express.json({ limit: "64kb" }), asyncHandler
 
 app.post("/api/auth/request-password-reset", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
   const email = normalizeEmail(String(req.body?.email || ""));
+  if (!checkAuthRateLimit(getClientKey(req, `reset-request:${email}`))) {
+    res.status(429).json({ error: "Too many password reset requests. Please wait and try again." });
+    return;
+  }
   if (!email) {
     res.status(400).json({ error: "Email is required." });
     return;
@@ -1451,6 +1646,10 @@ app.post("/api/auth/request-password-reset", express.json({ limit: "64kb" }), as
 app.post("/api/auth/reset-password", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
   const token = String(req.body?.token || "").trim();
   const password = String(req.body?.password || "");
+  if (!checkAuthRateLimit(getClientKey(req, `reset:${token.slice(0, 12)}`))) {
+    res.status(429).json({ error: "Too many password reset attempts. Please wait and try again." });
+    return;
+  }
   if (!token || !password) {
     res.status(400).json({ error: "Token and new password are required." });
     return;
@@ -1497,6 +1696,155 @@ app.post("/api/auth/logout", asyncHandler(async (req, res) => {
   }
   clearSessionCookie(res);
   res.json({ ok: true });
+}));
+
+app.get("/api/me/profile", asyncHandler(async (req, res) => {
+  const auth = await getAuthContext(req);
+  if (!auth.signedIn || !auth.userId) {
+    res.status(401).json({ error: "Sign in required." });
+    return;
+  }
+  const user = await getUserById(auth.userId);
+  if (!user) {
+    res.status(404).json({ error: "User not found." });
+    return;
+  }
+  const roles = await getUserRoles(user.id);
+  res.json({
+    id: user.id,
+    email: user.email,
+    displayName: user.display_name,
+    status: user.status,
+    createdAt: user.created_at,
+    lastLoginAt: user.last_login_at,
+    role: auth.role,
+    roles: roles.map((row) => row.role_name)
+  });
+}));
+
+app.get("/api/me/sessions", asyncHandler(async (req, res) => {
+  const auth = await getAuthContext(req);
+  if (!auth.signedIn || !auth.userId) {
+    res.status(401).json({ error: "Sign in required." });
+    return;
+  }
+  const currentSessionId = parseCookies(req)[sessionCookieName] || "";
+  const sessions = await getUserSessions(auth.userId);
+  res.json(sessions.map((session) => ({
+    id: session.id,
+    createdAt: session.created_at,
+    expiresAt: session.expires_at,
+    current: session.id === currentSessionId
+  })));
+}));
+
+app.delete("/api/me/sessions/:id", asyncHandler(async (req, res) => {
+  const auth = await getAuthContext(req);
+  if (!auth.signedIn || !auth.userId) {
+    res.status(401).json({ error: "Sign in required." });
+    return;
+  }
+  const session = await getSessionRow(String(req.params.id || ""));
+  if (!session || session.user_id !== auth.userId) {
+    res.status(404).json({ error: "Session not found." });
+    return;
+  }
+  await deleteSessionRow(session.id);
+  const currentSessionId = parseCookies(req)[sessionCookieName] || "";
+  if (session.id === currentSessionId) {
+    clearSessionCookie(res);
+  }
+  await appendAudit(req, {
+    eventType: "SESSION_REVOKED",
+    entityType: "user",
+    entityId: auth.userId,
+    actor: auth.actor,
+    actorType: auth.actorType,
+    details: { sessionId: session.id }
+  });
+  res.json({ revoked: true, message: "Session revoked." });
+}));
+
+app.delete("/api/me/sessions", asyncHandler(async (req, res) => {
+  const auth = await getAuthContext(req);
+  if (!auth.signedIn || !auth.userId) {
+    res.status(401).json({ error: "Sign in required." });
+    return;
+  }
+  const currentSessionId = parseCookies(req)[sessionCookieName] || "";
+  const sessions = await getUserSessions(auth.userId);
+  const revocable = sessions.filter((session) => session.id !== currentSessionId);
+  for (const session of revocable) {
+    await deleteSessionRow(session.id);
+  }
+  await appendAudit(req, {
+    eventType: "SESSIONS_REVOKED",
+    entityType: "user",
+    entityId: auth.userId,
+    actor: auth.actor,
+    actorType: auth.actorType,
+    details: { count: revocable.length }
+  });
+  res.json({ revoked: true, count: revocable.length, message: `Revoked ${revocable.length} other session(s).` });
+}));
+
+app.get("/api/me/dashboard", asyncHandler(async (req, res) => {
+  const auth = await getAuthContext(req);
+  if (!auth.signedIn || !auth.userId) {
+    res.status(401).json({ error: "Sign in required." });
+    return;
+  }
+  const bidRecords = await getUserBidRecords(auth.userId, auth.actor);
+  const sessions = await getUserSessions(auth.userId);
+  const closedItems = (await getItems(true)).filter((item) => new Date(item.endTime).getTime() < Date.now());
+  res.json({
+    summary: {
+      openBidCount: bidRecords.filter((record) => ["winning", "outbid", "active"].includes(record.status)).length,
+      wonAuctionCount: bidRecords.filter((record) => record.status === "won").length,
+      activeSessionCount: sessions.length,
+      totalBidCount: bidRecords.length,
+      reserveMetClosedCount: closedItems.filter((item) => getReserveState(item) === "reserve_met").length,
+      reserveNotMetClosedCount: closedItems.filter((item) => getReserveState(item) === "reserve_not_met").length
+    },
+    recentBidActivity: bidRecords.slice(0, 8)
+  });
+}));
+
+app.get("/api/me/bids", asyncHandler(async (req, res) => {
+  const auth = await getAuthContext(req);
+  if (!auth.signedIn || !auth.userId) {
+    res.status(401).json({ error: "Sign in required." });
+    return;
+  }
+  res.json(await getUserBidRecords(auth.userId, auth.actor));
+}));
+
+app.get("/uploads/documents/:file", asyncHandler(async (req, res) => {
+  const auth = await getAuthContext(req);
+  if (!auth.signedIn) {
+    res.status(401).json({ error: "Sign in required to access documents." });
+    return;
+  }
+  const fileName = safeFileName(String(req.params.file || ""));
+  if (!fileName) {
+    res.status(404).json({ error: "Document not found." });
+    return;
+  }
+  const publicUrl = `/uploads/documents/${fileName}`;
+  const row = handleSupabaseMaybe<ItemFileRow>(
+    await supabase.from("item_files").select("item_id,kind,name,url").eq("kind", "document").eq("url", publicUrl).maybeSingle(),
+    true
+  );
+  if (!row) {
+    res.status(404).json({ error: "Document not found." });
+    return;
+  }
+  const filePath = path.join(docsDir, fileName);
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ error: "Document file not found." });
+    return;
+  }
+  res.sendFile(filePath);
 }));
 
 app.get("/api/items", asyncHandler(async (req, res) => {
@@ -1667,6 +2015,7 @@ app.get("/api/admin/operations", requireAdminToken, asyncHandler(async (req, res
   const pendingNotifications = handleSupabase(await supabase.from("notification_queue").select("id").eq("status", "pending")) as Array<{ id: string }>;
   const audits = handleSupabase(await supabase.from("audits").select("id")) as Array<{ id: string }>;
   const wins = handleSupabase(await supabase.from("audits").select("id").eq("event_type", "BID_PLACED")) as Array<{ id: string }>;
+  const users = await listUsersWithRoles();
   const summary = {
     totalItems: items.length,
     liveCount: items.filter((item) => new Date(item.startTime).getTime() <= Date.now() && new Date(item.endTime).getTime() >= Date.now() && !item.archivedAt).length,
@@ -1674,7 +2023,12 @@ app.get("/api/admin/operations", requireAdminToken, asyncHandler(async (req, res
     archivedCount: items.filter((item) => Boolean(item.archivedAt)).length,
     pendingNotifications: pendingNotifications.length,
     auditCount: audits.length,
-    wins: wins.length
+    wins: wins.length,
+    totalUsers: users.length,
+    activeUsers: users.filter((user) => user.status === "active").length,
+    disabledUsers: users.filter((user) => user.status === "disabled").length,
+    adminUsers: users.filter((user) => user.roles.includes("Admin")).length,
+    superAdminUsers: users.filter((user) => user.roles.includes("SuperAdmin")).length
   };
   res.json({
     summary,
@@ -1696,6 +2050,9 @@ app.get("/api/admin/audits", requireAdminToken, asyncHandler(async (req, res) =>
   const itemId = String(req.query.itemId || "").trim();
   const from = String(req.query.from || "").trim();
   const to = String(req.query.to || "").trim();
+  const eventType = String(req.query.eventType || "").trim();
+  const actor = String(req.query.actor || "").trim();
+  const entityType = String(req.query.entityType || "").trim();
   let request = supabase
     .from("audits")
     .select("id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at")
@@ -1704,6 +2061,9 @@ app.get("/api/admin/audits", requireAdminToken, asyncHandler(async (req, res) =>
   if (itemId) request = request.eq("entity_id", itemId);
   if (from) request = request.gte("created_at", from);
   if (to) request = request.lte("created_at", to);
+  if (eventType) request = request.eq("event_type", eventType);
+  if (actor) request = request.ilike("actor", `%${actor}%`);
+  if (entityType) request = request.eq("entity_type", entityType);
   res.json(handleSupabase(await request));
 }));
 
@@ -1720,9 +2080,73 @@ app.get("/api/admin/users", requireAdminToken, asyncHandler(async (req, res) => 
   res.json(await listUsersWithRoles());
 }));
 
-app.post("/api/admin/users/:id/disable", requireAdminToken, asyncHandler(async (req, res) => {
+app.get("/api/admin/roles", requireAdminToken, asyncHandler(async (req, res) => {
+  res.json(await getRoles());
+}));
+
+app.post("/api/admin/users/:id/roles", requireSuperAdminToken, express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
+  const userId = String(req.params.id || "").trim();
+  const roleName = String(req.body?.roleName || "").trim();
+  if (!userId || !roleName) {
+    res.status(400).json({ error: "User ID and role name are required." });
+    return;
+  }
+  const availableRoles = await getRoles();
+  if (!availableRoles.includes(roleName)) {
+    res.status(400).json({ error: "That role does not exist." });
+    return;
+  }
+  const user = await getUserById(userId);
+  if (!user) {
+    res.status(404).json({ error: "User not found." });
+    return;
+  }
+  await handleSupabase(await supabase.from("user_roles").upsert({ user_id: user.id, role_name: roleName, created_at: new Date().toISOString() }, { onConflict: "user_id,role_name" }));
+  const auth = await getAuthContext(req);
+  await appendAudit(req, {
+    eventType: "USER_ROLE_ASSIGNED",
+    entityType: "user",
+    entityId: user.id,
+    actor: auth.actor,
+    actorType: auth.actorType,
+    details: { email: user.email, role: roleName }
+  });
+  res.json({ updated: true, message: `${roleName} assigned to ${user.display_name}.` });
+}));
+
+app.delete("/api/admin/users/:id/roles/:roleName", requireSuperAdminToken, asyncHandler(async (req, res) => {
+  const userId = String(req.params.id || "").trim();
+  const roleName = String(req.params.roleName || "").trim();
+  if (!userId || !roleName) {
+    res.status(400).json({ error: "User ID and role name are required." });
+    return;
+  }
+  const user = await getUserById(userId);
+  if (!user) {
+    res.status(404).json({ error: "User not found." });
+    return;
+  }
+  if ((await getUserRoles(user.id)).length <= 1) {
+    res.status(400).json({ error: "Every user must retain at least one role." });
+    return;
+  }
+  await handleSupabase(await supabase.from("user_roles").delete().eq("user_id", user.id).eq("role_name", roleName));
+  const auth = await getAuthContext(req);
+  await appendAudit(req, {
+    eventType: "USER_ROLE_REMOVED",
+    entityType: "user",
+    entityId: user.id,
+    actor: auth.actor,
+    actorType: auth.actorType,
+    details: { email: user.email, role: roleName }
+  });
+  res.json({ updated: true, message: `${roleName} removed from ${user.display_name}.` });
+}));
+
+app.post("/api/admin/users/:id/disable", requireAdminToken, express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
   const userId = String(req.params.id || "").trim();
   const auth = await getAuthContext(req);
+  const reason = sanitizeDisplayName(String(req.body?.reason || "")) || "No reason provided";
   if (!userId) {
     res.status(400).json({ error: "User ID is required." });
     return;
@@ -1753,7 +2177,7 @@ app.post("/api/admin/users/:id/disable", requireAdminToken, asyncHandler(async (
     entityId: user.id,
     actor: auth.actor,
     actorType: auth.actorType,
-    details: { email: user.email, target: user.display_name }
+    details: { email: user.email, target: user.display_name, reason }
   });
   res.json({ updated: true, message: `${user.display_name} has been disabled and signed out everywhere.` });
 }));
@@ -1845,6 +2269,93 @@ app.post("/api/admin/users/password-resets", requireAdminToken, express.json({ l
     details: { scope, count: targets.length, role: role || "n/a" }
   });
   res.json({ queued: true, count: targets.length, message: `Queued password resets for ${targets.length} user(s).` });
+}));
+
+app.post("/api/admin/users/bulk-import", requireSuperAdminToken, bulkImportUpload.single("csv"), asyncHandler(async (req, res) => {
+  const csvFile = req.file;
+  if (!csvFile) {
+    res.status(400).json({ error: "Upload a CSV file first." });
+    return;
+  }
+
+  const auth = await getAuthContext(req);
+  const report: {
+    created: number;
+    skipped: number;
+    failed: number;
+    items: Array<{ row: number; status: "created" | "skipped" | "failed"; email: string; message: string }>;
+  } = { created: 0, skipped: 0, failed: 0, items: [] };
+
+  try {
+    const rows = parseCsv(fs.readFileSync(csvFile.path, "utf8"));
+    if (!rows.length) {
+      res.status(400).json({ error: "The uploaded CSV is empty." });
+      return;
+    }
+    const availableRoles = await getRoles();
+    for (const [index, row] of rows.entries()) {
+      const email = normalizeEmail(getImportValue(row, ["email"]));
+      const displayName = sanitizeDisplayName(getImportValue(row, ["display_name", "displayName", "full_name", "name"]));
+      const roles = splitImportList(getImportValue(row, ["roles", "role"])).filter((role) => availableRoles.includes(role));
+      const status = getImportValue(row, ["status"]).trim() || "pending_verification";
+      if (!email || !displayName) {
+        report.failed += 1;
+        report.items.push({ row: index + 2, status: "failed", email: email || `row-${index + 2}`, message: "Email and display name are required." });
+        continue;
+      }
+      if (await getUserByEmail(email)) {
+        report.skipped += 1;
+        report.items.push({ row: index + 2, status: "skipped", email, message: "Skipped because a user with that email already exists." });
+        continue;
+      }
+      const userId = randomUUID();
+      const createdAt = new Date().toISOString();
+      const assignedRoles = roles.length ? roles : ["Bidder"];
+      await handleSupabase(await supabase.from("users").insert({
+        id: userId,
+        email,
+        password_hash: hashPassword(randomUUID()),
+        display_name: displayName,
+        status: status === "active" || status === "disabled" ? status : "pending_verification",
+        created_at: createdAt,
+        last_login_at: null
+      }));
+      await handleSupabase(await supabase.from("user_roles").insert(
+        assignedRoles.map((roleName) => ({
+          user_id: userId,
+          role_name: roleName,
+          created_at: createdAt
+        }))
+      ));
+      if (status === "active") {
+        const user = await getUserByEmail(email);
+        if (user) {
+          await queuePasswordReset(user, auth.actor);
+        }
+      } else {
+        const verification = await createEmailVerificationToken(userId);
+        await queueNotification(
+          "ACCOUNT_VERIFICATION",
+          "Confirm your FMDQ Auctions account",
+          { email, displayName, verifyUrl: verification.verifyUrl },
+          email
+        );
+      }
+      report.created += 1;
+      report.items.push({ row: index + 2, status: "created", email, message: `Created with roles: ${assignedRoles.join(", ")}.` });
+    }
+    await appendAudit(req, {
+      eventType: "USER_BULK_IMPORTED",
+      entityType: "system",
+      entityId: "user-bulk-import",
+      actor: auth.actor,
+      actorType: auth.actorType,
+      details: { created: report.created, skipped: report.skipped, failed: report.failed }
+    });
+    res.json(report);
+  } finally {
+    removeFileIfExists(csvFile.path);
+  }
 }));
 
 app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{ name: "csv", maxCount: 1 }, { name: "bundle", maxCount: 1 }]), asyncHandler(async (req, res) => {
@@ -2166,6 +2677,7 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
 
 app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error(error);
+  void reportServerError(req, error);
   res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error." });
 });
 

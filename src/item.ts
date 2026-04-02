@@ -5,6 +5,7 @@ import {
   getAuditHeaders,
   readAuthSession
 } from "./auth";
+import { renderAppHeader, wireAppHeader } from "./app-nav";
 
 type FileRef = {
   name: string;
@@ -62,6 +63,17 @@ const getStatus = (item: AuctionItem) => {
   if (now > end) return "Closed";
   return "Live";
 };
+const canViewReserve = () => {
+  const session = readAuthSession();
+  return session.role === "Admin" || session.role === "SuperAdmin";
+};
+const getReserveOutcome = (item: AuctionItem) => {
+  if (item.reserve <= 0) return "No reserve";
+  if (getStatus(item) !== "Closed") {
+    return item.currentBid >= item.reserve ? "Reserve met" : "Reserve pending";
+  }
+  return item.currentBid >= item.reserve ? "Reserve met" : "Reserve not met";
+};
 
 const canBid = (item: AuctionItem) => {
   const session = readAuthSession();
@@ -83,6 +95,11 @@ const getQuery = () => {
 };
 
 const renderEmpty = (message: string) => {
+  const header = document.querySelector<HTMLDivElement>("#item-header");
+  if (header) {
+    header.innerHTML = renderAppHeader(readAuthSession(), { active: "desk" });
+    wireAppHeader();
+  }
   const container = document.querySelector<HTMLDivElement>("#item-view");
   if (!container) return;
   container.innerHTML = `
@@ -95,6 +112,11 @@ const renderEmpty = (message: string) => {
 };
 
 const renderItem = (item: AuctionItem) => {
+  const header = document.querySelector<HTMLDivElement>("#item-header");
+  if (header) {
+    header.innerHTML = renderAppHeader(readAuthSession(), { active: "desk" });
+    wireAppHeader();
+  }
   const container = document.querySelector<HTMLDivElement>("#item-view");
   if (!container) return;
   const bidState = canBid(item);
@@ -169,6 +191,14 @@ const renderItem = (item: AuctionItem) => {
             <span class="font-semibold">${formatMoney(item.startBid)}</span>
           </div>
           <div class="flex items-center justify-between">
+            <span>Reserve</span>
+            <span class="font-semibold">${item.reserve > 0 ? (canViewReserve() ? formatMoney(item.reserve) : "Confidential") : "No reserve"}</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span>Reserve status</span>
+            <span class="font-semibold">${getReserveOutcome(item)}</span>
+          </div>
+          <div class="flex items-center justify-between">
             <span>Bid increment</span>
             <span class="font-semibold">${formatMoney(item.increment)}</span>
           </div>
@@ -190,7 +220,7 @@ const renderItem = (item: AuctionItem) => {
           </div>
         </div>
         ${
-          session.role === "Admin"
+          session.role === "Admin" || session.role === "SuperAdmin"
             ? `<a href="/admin-item.html?id=${item.id}" class="mt-5 inline-flex rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Edit item</a>`
             : ""
         }

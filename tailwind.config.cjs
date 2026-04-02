@@ -1,5 +1,5 @@
 ﻿module.exports = {
-  content: ["./index.html", "./signin.html", "./signup.html", "./reset-password.html", "./verify.html", "./bidding.html", "./item.html", "./closed.html", "./won.html", "./operations.html", "./src/**/*.{ts,tsx}"] ,
+  content: ["./index.html", "./signin.html", "./signup.html", "./reset-password.html", "./verify.html", "./bidding.html", "./item.html", "./closed.html", "./won.html", "./operations.html", "./dashboard.html", "./my-bids.html", "./profile.html", "./src/**/*.{ts,tsx}"] ,
   theme: {
     extend: {
       colors: {

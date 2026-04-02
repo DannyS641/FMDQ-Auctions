@@ -3,7 +3,8 @@ import {
   fetchCurrentSession,
   loginWithAccount,
   logoutAccount,
-  readAuthSession
+  readAuthSession,
+  resendVerification
 } from "./auth";
 
 const revealApp = () => {
@@ -64,6 +65,7 @@ const renderSigninPage = () => {
                       <a href="/reset-password.html" class="text-right text-xs font-semibold text-[#1d326c]">Forgot password?</a>
                       <button type="submit" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Sign in</button>
                     </form>
+                    <button id="resend-verification-btn" class="mt-3 hidden text-left text-xs font-semibold text-[#1d326c]">Resend verification email</button>
                     <div class="mt-6 grid gap-3">
                       <a href="/signup.html" class="rounded-full border border-ink/15 bg-white px-6 py-3.5 text-center font-display text-base font-semibold text-ink shadow-[0_8px_25px_rgba(11,14,18,0.07)]">Create account</a>
                     </div>
@@ -84,6 +86,7 @@ const bindEvents = () => {
   const note = document.querySelector<HTMLParagraphElement>("#signin-note");
   const continueBtn = document.querySelector<HTMLButtonElement>("#continue-btn");
   const logoutBtn = document.querySelector<HTMLButtonElement>("#logout-btn");
+  const resendVerificationBtn = document.querySelector<HTMLButtonElement>("#resend-verification-btn");
 
   loginForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -94,7 +97,26 @@ const bindEvents = () => {
       renderSigninPage();
       bindEvents();
     } catch (error) {
-      if (note) note.textContent = error instanceof Error ? error.message : "Unable to sign in.";
+      const message = error instanceof Error ? error.message : "Unable to sign in.";
+      if (note) note.textContent = message;
+      if (resendVerificationBtn) {
+        resendVerificationBtn.classList.toggle("hidden", !message.toLowerCase().includes("verify your email"));
+        resendVerificationBtn.dataset.email = email;
+      }
+    }
+  });
+
+  resendVerificationBtn?.addEventListener("click", async () => {
+    const email = resendVerificationBtn.dataset.email || "";
+    if (!email) return;
+    resendVerificationBtn.disabled = true;
+    try {
+      const payload = await resendVerification(email);
+      if (note) note.textContent = payload.message || "A fresh verification email has been sent.";
+    } catch (error) {
+      if (note) note.textContent = error instanceof Error ? error.message : "Unable to resend verification email.";
+    } finally {
+      resendVerificationBtn.disabled = false;
     }
   });
 

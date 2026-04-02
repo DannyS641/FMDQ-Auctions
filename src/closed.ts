@@ -1,5 +1,6 @@
 import "./styles.css";
-import { apiFetch } from "./auth";
+import { apiFetch, fetchCurrentSession, readAuthSession } from "./auth";
+import { renderAppHeader, wireAppHeader } from "./app-nav";
 
 type FileRef = {
   name: string;
@@ -13,6 +14,7 @@ type AuctionItem = {
   lot: string;
   location: string;
   currentBid: number;
+  reserve: number;
   endTime: string;
   images: FileRef[];
 };
@@ -27,24 +29,21 @@ const formatMoney = (value: number) => `NGN ${value.toLocaleString("en-NG")}`;
 const formatDate = (value: string) => new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
 const resolveMediaUrl = (url: string) => (url.startsWith("http") ? url : `${API_BASE_URL}${url}`);
+const getReserveOutcome = (item: AuctionItem) => {
+  if (item.reserve <= 0) return "No reserve";
+  return item.currentBid >= item.reserve ? "Reserve met" : "Reserve not met";
+};
 
 const renderShell = (content: string) => {
   const root = document.querySelector<HTMLDivElement>("#closed-app");
   if (!root) return;
   root.innerHTML = `
     <div class="min-h-screen bg-ash">
-      <header class="border-b border-ink/10 bg-white">
-        <nav class="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-6 py-5">
-          <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
-          <div class="flex items-center gap-3">
-            <a href="/won.html" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Won auctions</a>
-            <a href="/bidding.html" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Back</a>
-          </div>
-        </nav>
-      </header>
+      ${renderAppHeader(readAuthSession(), { active: "desk" })}
       <main class="mx-auto w-full max-w-7xl px-6 py-10">${content}</main>
     </div>
   `;
+  wireAppHeader();
   revealApp();
 };
 
@@ -71,6 +70,7 @@ const renderClosed = (items: AuctionItem[]) => {
                   <div>
                     <p class="text-xs uppercase tracking-[0.3em] text-slate">Final bid</p>
                     <p class="mt-1 text-lg font-semibold text-ink">${item.currentBid > 0 ? formatMoney(item.currentBid) : "No bids"}</p>
+                    <p class="mt-1 text-xs text-slate">${getReserveOutcome(item)}</p>
                   </div>
                   <div class="text-right">
                     <p class="text-xs uppercase tracking-[0.3em] text-slate">Ended</p>
@@ -88,6 +88,7 @@ const renderClosed = (items: AuctionItem[]) => {
 
 const init = async () => {
   try {
+    await fetchCurrentSession().catch(() => undefined);
     const response = await apiFetch("/api/items");
     if (!response.ok) throw new Error();
     const items = ((await response.json()) as AuctionItem[])

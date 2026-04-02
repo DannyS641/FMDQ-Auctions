@@ -22,7 +22,10 @@ export default defineConfig({
         adminItem: resolve(__dirname, "admin-item.html"),
         closed: resolve(__dirname, "closed.html"),
         won: resolve(__dirname, "won.html"),
-        operations: resolve(__dirname, "operations.html")
+        operations: resolve(__dirname, "operations.html"),
+        dashboard: resolve(__dirname, "dashboard.html"),
+        myBids: resolve(__dirname, "my-bids.html"),
+        profile: resolve(__dirname, "profile.html")
       }
     }
   }
