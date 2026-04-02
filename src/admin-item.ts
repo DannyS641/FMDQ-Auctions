@@ -5,6 +5,7 @@ import { renderAppHeader, wireAppHeader } from "./app-nav";
 type FileRef = {
   name: string;
   url: string;
+  visibility?: "bidder_visible" | "admin_only" | "winner_only";
 };
 
 type AuctionItem = {
@@ -43,6 +44,11 @@ type BulkImportReport = {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174";
 const defaultCategories = ["Cars", "Furniture", "Household Appliances", "Kitchen Appliances", "Phones", "Other"];
 const conditions = ["New", "Used", "Fair", "Damaged"];
+const documentVisibilityOptions = [
+  { value: "bidder_visible", label: "Bidders during active auction" },
+  { value: "admin_only", label: "Admins only" },
+  { value: "winner_only", label: "Winner after close" }
+] as const;
 const itemsPerPage = 10;
 
 const revealApp = () => {
@@ -430,7 +436,14 @@ const renderManager = () => {
                 <p class="text-xs uppercase tracking-[0.3em] text-slate">Existing documents</p>
                 <div class="mt-3 space-y-2 text-sm text-slate">
                   ${selectedItem?.documents.length
-                    ? selectedItem.documents.map((document) => `<p>${document.name}</p>`).join("")
+                    ? selectedItem.documents.map((document) => `
+                        <div class="flex items-center justify-between gap-3 rounded-2xl border border-ink/10 bg-ink/5 px-3 py-2">
+                          <span class="truncate">${document.name}</span>
+                          <span class="rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate">
+                            ${(document.visibility || "bidder_visible").replace(/_/g, " ")}
+                          </span>
+                        </div>
+                      `).join("")
                     : `<p>No documents uploaded.</p>`}
                 </div>
               </div>
@@ -447,6 +460,9 @@ const renderManager = () => {
               <label class="grid gap-3 rounded-2xl border border-ink/10 bg-white p-4">
                 <span class="text-xs font-semibold uppercase tracking-[0.24em] text-slate">Upload documents</span>
                 <input id="admin-documents" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx" class="hidden" />
+                <select id="admin-document-visibility" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm">
+                  ${documentVisibilityOptions.map((option) => `<option value="${option.value}">${option.label}</option>`).join("")}
+                </select>
                 <div class="flex flex-wrap items-center justify-between gap-3">
                   <span id="admin-documents-name" class="text-sm text-slate">No documents selected</span>
                   <span class="rounded-full border border-ink/20 bg-ink/5 px-4 py-2 text-xs font-semibold text-ink">Choose documents</span>
@@ -605,8 +621,8 @@ const bindManagerEvents = () => {
 
   document.querySelector<HTMLButtonElement>("#download-import-template")?.addEventListener("click", () => {
     const template = [
-      "title,category,lot,sku,condition,location,start_bid,reserve,increment,start_time,end_time,description,image_1,image_2,document_1",
-      "\"Toyota Corolla 2015\",Cars,CAR-501,FMDQ-CAR-501,Used,Lagos Warehouse,1000000,1200000,50000,2026-04-01T10:00,2026-04-01T18:00,\"Well-maintained sedan\",toyota-front.jpg,toyota-side.jpg,inspection-report.pdf"
+      "title,category,lot,sku,condition,location,start_bid,reserve,increment,start_time,end_time,description,image_1,image_2,document_1,document_1_visibility",
+      "\"Toyota Corolla 2015\",Cars,CAR-501,FMDQ-CAR-501,Used,Lagos Warehouse,1000000,1200000,50000,2026-04-01T10:00,2026-04-01T18:00,\"Well-maintained sedan\",toyota-front.jpg,toyota-side.jpg,inspection-report.pdf,bidder_visible"
     ].join("\n");
     const blob = new Blob([template], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -794,6 +810,7 @@ const bindManagerEvents = () => {
     const description = (document.querySelector<HTMLTextAreaElement>("#admin-description")?.value || "").trim();
     const imagesInput = document.querySelector<HTMLInputElement>("#admin-images");
     const documentsInput = document.querySelector<HTMLInputElement>("#admin-documents");
+    const documentVisibility = document.querySelector<HTMLSelectElement>("#admin-document-visibility")?.value || "bidder_visible";
 
     if (!title || !sku || !lot || !location || !startTime || !endTime || !startBid || !increment) {
       feedback.textContent = "Please complete all required fields.";
@@ -813,6 +830,7 @@ const bindManagerEvents = () => {
     formData.append("startTime", startTime);
     formData.append("endTime", endTime);
     formData.append("description", description);
+    formData.append("documentVisibility", documentVisibility);
 
     if (imagesInput?.files) {
       Array.from(imagesInput.files).forEach((file) => formData.append("images", file));

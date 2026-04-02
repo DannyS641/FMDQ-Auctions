@@ -9,6 +9,17 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import nodemailer from "nodemailer";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import {
+  buildCsrfTokenValue,
+  canAccessDocumentVisibility,
+  encodeDocumentNameWithVisibility,
+  ensureCanManageTargetRoles,
+  parseDocumentNameWithVisibility,
+  type DocumentVisibility,
+  validateArchiveEntries,
+  validateBidAmount,
+  validateMalwareScanConfiguration
+} from "./security-logic.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,6 +71,7 @@ const maxImportExtractedBytes = 100 * 1024 * 1024;
 const notificationClaimTtlMs = 10 * 60_000;
 const imageBucket = process.env.SUPABASE_IMAGE_BUCKET || "auction-images";
 const documentBucket = process.env.SUPABASE_DOCUMENT_BUCKET || "auction-documents";
+const imageAccessPolicy = (process.env.IMAGE_ACCESS_POLICY || "public").toLowerCase();
 const malwareScanMode = (process.env.MALWARE_SCAN_MODE || "off").toLowerCase();
 const malwareScanCommand = process.env.MALWARE_SCAN_COMMAND || "";
 const allowedOrigins = new Set(
@@ -70,9 +82,15 @@ const allowedOrigins = new Set(
 );
 const errorWebhookUrl = process.env.ERROR_WEBHOOK_URL || "";
 const securityTelemetryEvents = new Set(["AUTH_ATTEMPT", "BID_ATTEMPT"]);
+let notificationQueueSupportsProcessedAt = true;
+let securityEventsTableAvailable = true;
 
 if (!supabaseUrl || !supabaseServiceRoleKey || !tokenSigningSecret) {
   throw new Error("SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY, and APP_SECRET are required for the backend.");
+}
+const malwareConfigCheck = validateMalwareScanConfiguration(process.env.NODE_ENV, malwareScanMode, malwareScanCommand);
+if (!malwareConfigCheck.ok) {
+  throw new Error(malwareConfigCheck.error);
 }
 
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
@@ -173,8 +191,8 @@ app.use((req, res, next) => {
     next();
   })().catch(next);
 });
-type StoredFileRef = { name: string; url: string };
-type StoredBid = { bidder: string; amount: number; time: string; createdAt: string };
+type StoredFileRef = { name: string; url: string; visibility?: DocumentVisibility };
+type StoredBid = { bidder: string; amount: number; time: string; createdAt: string; bidderUserId?: string };
 type StoredItem = {
   id: string;
   title: string;
@@ -412,7 +430,7 @@ const passwordRuleMessage = "Password must be at least 8 characters and include 
 const base64UrlEncode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 const base64UrlDecode = (value: string) => Buffer.from(value, "base64url").toString("utf8");
 const signTokenValue = (value: string) => createHmac("sha256", tokenSigningSecret).update(value).digest("base64url");
-const buildCsrfToken = (sessionId: string) => createHmac("sha256", tokenSigningSecret).update(`csrf:${sessionId}`).digest("base64url");
+const buildCsrfToken = (sessionId: string) => buildCsrfTokenValue(tokenSigningSecret, sessionId);
 const passwordHashFingerprint = (passwordHash: string) => createHmac("sha256", tokenSigningSecret).update(passwordHash).digest("hex").slice(0, 24);
 const buildSignedToken = (payload: Record<string, unknown>) => {
   const body = base64UrlEncode(JSON.stringify(payload));
@@ -588,6 +606,18 @@ const ensureStorageBuckets = async () => {
   await ensureStorageBucket(documentBucket, false);
 };
 
+const detectSecurityEventsTable = async () => {
+  const result = await supabase.from("security_events").select("id").limit(1);
+  if (result.error) {
+    if (isMissingSecurityEventsTableError(new Error(result.error.message))) {
+      securityEventsTableAvailable = false;
+      return;
+    }
+    throw new Error(result.error.message);
+  }
+  securityEventsTableAvailable = true;
+};
+
 const removeFileIfExists = (filePath: string) => {
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 };
@@ -617,6 +647,15 @@ const handleSupabaseMaybe = <T>(result: { data: T | null; error: { message: stri
   return result.data;
 };
 
+const isMissingProcessedAtColumnError = (error: unknown) =>
+  error instanceof Error && error.message.toLowerCase().includes("notification_queue.processed_at");
+
+const isMissingSecurityEventsTableError = (error: unknown) =>
+  error instanceof Error && (
+    error.message.toLowerCase().includes("security_events")
+    || error.message.toLowerCase().includes("relation") && error.message.toLowerCase().includes("does not exist")
+  );
+
 const getClientKey = (req: express.Request, extra = "") =>
   `${req.ip || req.socket.remoteAddress || "unknown"}:${extra}`;
 
@@ -638,23 +677,45 @@ const recordSharedRateLimitAttempt = async (
   const createdAt = new Date(now).toISOString();
   for (let slot = 0; slot < limit; slot += 1) {
     const id = buildRateLimitSlotId(eventType, actor, windowStartMs, slot);
-    const result = await supabase.from("audits").insert({
-      id,
-      event_type: eventType,
-      entity_type: "system",
-      entity_id: actor,
-      actor,
-      actor_type: "system",
-      request_id: String((req as express.Request & { requestId?: string }).requestId || ""),
-      details_json: {
-        path: req.path,
-        method: req.method,
-        windowStart: new Date(windowStartMs).toISOString(),
-        slot,
-        ...details
-      },
-      created_at: createdAt
-    });
+    let result;
+    if (securityEventsTableAvailable) {
+      result = await supabase.from("security_events").insert({
+        id,
+        event_type: eventType,
+        actor,
+        request_id: String((req as express.Request & { requestId?: string }).requestId || ""),
+        details_json: {
+          path: req.path,
+          method: req.method,
+          windowStart: new Date(windowStartMs).toISOString(),
+          slot,
+          ...details
+        },
+        created_at: createdAt
+      });
+      if (result.error && isMissingSecurityEventsTableError(new Error(result.error.message))) {
+        securityEventsTableAvailable = false;
+      }
+    }
+    if (!securityEventsTableAvailable) {
+      result = await supabase.from("audits").insert({
+        id,
+        event_type: eventType,
+        entity_type: "system",
+        entity_id: actor,
+        actor,
+        actor_type: "system",
+        request_id: String((req as express.Request & { requestId?: string }).requestId || ""),
+        details_json: {
+          path: req.path,
+          method: req.method,
+          windowStart: new Date(windowStartMs).toISOString(),
+          slot,
+          ...details
+        },
+        created_at: createdAt
+      });
+    }
     if (!result.error) return true;
     const duplicate = result.error.message.toLowerCase().includes("duplicate key");
     if (!duplicate) throw new Error(result.error.message);
@@ -741,23 +802,31 @@ const getUserRoles = async (userId: string) =>
   ) as RoleRow[];
 
 const ensureCanManageTargetUser = (actor: AuthContext, targetRoles: string[]) => {
-  if (targetRoles.includes("SuperAdmin") && actor.role !== "SuperAdmin") {
-    return { ok: false as const, error: "Only a SuperAdmin can manage another SuperAdmin account." };
-  }
-  return { ok: true as const };
+  return ensureCanManageTargetRoles(actor.role, targetRoles);
 };
 
-const canAccessItemDocuments = (auth: AuthContext, item: StoredItem) => {
-  if (!auth.signedIn) return false;
-  if (auth.adminAuthorized) return true;
-  if (auth.role !== "Bidder") return false;
-  if (item.archivedAt) return false;
-  return new Date(item.endTime).getTime() >= Date.now();
+const isUserWinningItem = (auth: AuthContext, item: StoredItem) => {
+  if (!auth.userId) return false;
+  if (new Date(item.endTime).getTime() > Date.now()) return false;
+  if (item.currentBid <= 0) return false;
+  const matchingBid = item.bids.find((bid) => bid.bidderUserId === auth.userId);
+  return Boolean(matchingBid && matchingBid.amount === item.currentBid);
 };
+
+const canAccessItemDocument = (auth: AuthContext, item: StoredItem, visibility: DocumentVisibility) =>
+  canAccessDocumentVisibility({
+    signedIn: auth.signedIn,
+    adminAuthorized: auth.adminAuthorized,
+    role: auth.role,
+    itemArchived: Boolean(item.archivedAt),
+    itemEnded: new Date(item.endTime).getTime() <= Date.now(),
+    reserveState: getReserveState(item),
+    isWinner: isUserWinningItem(auth, item)
+  }, visibility);
 
 const sanitizeItemForAuth = (item: StoredItem, auth: AuthContext): StoredItem => ({
   ...item,
-  documents: canAccessItemDocuments(auth, item) ? item.documents : []
+  documents: item.documents.filter((document) => canAccessItemDocument(auth, item, document.visibility || "bidder_visible"))
 });
 
 const getSessionRow = async (sessionId: string) =>
@@ -938,20 +1007,29 @@ const queueNotification = async (
         .eq("status", "pending")
     );
   }
-  await handleSupabase(
-    await supabase.from("notification_queue").insert({
-      id: randomUUID(),
-      channel: "email",
-      event_type: eventType,
-      recipient,
-      subject,
-      status: "pending",
-      payload_json: payload,
-      created_at: new Date().toISOString(),
-      processed_at: null,
-      error_message: null
-    })
-  );
+  const basePayload = {
+    id: randomUUID(),
+    channel: "email" as const,
+    event_type: eventType,
+    recipient,
+    subject,
+    status: "pending" as const,
+    payload_json: payload,
+    created_at: new Date().toISOString(),
+    error_message: null
+  };
+  if (notificationQueueSupportsProcessedAt) {
+    const result = await supabase.from("notification_queue").insert({
+      ...basePayload,
+      processed_at: null
+    });
+    if (!result.error) return;
+    if (!isMissingProcessedAtColumnError(new Error(result.error.message))) {
+      throw new Error(result.error.message);
+    }
+    notificationQueueSupportsProcessedAt = false;
+  }
+  await handleSupabase(await supabase.from("notification_queue").insert(basePayload));
 };
 
 const getCategories = async () => {
@@ -968,7 +1046,12 @@ const getRoles = async () => {
   return rows.map((row) => row.name);
 };
 
-const mapItem = (row: ItemRow, files: ItemFileRow[], bids: BidRow[]): StoredItem => ({
+const mapItem = (
+  row: ItemRow,
+  files: ItemFileRow[],
+  bids: BidRow[],
+  bidAuditLookup: Map<string, Map<string, string>>
+): StoredItem => ({
   id: row.id,
   title: row.title,
   category: row.category,
@@ -984,12 +1067,18 @@ const mapItem = (row: ItemRow, files: ItemFileRow[], bids: BidRow[]): StoredItem
   endTime: new Date(row.end_time).toISOString(),
   description: row.description || "",
   images: files.filter((file) => file.item_id === row.id && file.kind === "image").map((file) => ({ name: file.name, url: file.url })),
-  documents: files.filter((file) => file.item_id === row.id && file.kind === "document").map((file) => ({ name: file.name, url: file.url })),
+  documents: files
+    .filter((file) => file.item_id === row.id && file.kind === "document")
+    .map((file) => {
+      const parsed = parseDocumentNameWithVisibility(file.name);
+      return { name: parsed.displayName, url: file.url, visibility: parsed.visibility };
+    }),
   bids: bids.filter((bid) => bid.item_id === row.id).map((bid) => ({
     bidder: bid.bidder_alias,
     amount: Number(bid.amount),
     time: bid.bid_time,
-    createdAt: bid.created_at
+    createdAt: bid.created_at,
+    bidderUserId: bidAuditLookup.get(row.id)?.get(bid.created_at)
   })),
   createdAt: row.created_at,
   archivedAt: row.archived_at
@@ -1004,7 +1093,23 @@ const hydrateItems = async (rows: ItemRow[]) => {
   const bids = handleSupabase(
     await supabase.from("bids").select("item_id,bidder_alias,amount,bid_time,created_at").in("item_id", ids).order("created_at", { ascending: false })
   ) as BidRow[];
-  return rows.map((row) => mapItem(row, files, bids));
+  const bidAudits = handleSupabase(
+    await supabase
+      .from("audits")
+      .select("entity_id,details_json,created_at")
+      .eq("event_type", "BID_PLACED")
+      .in("entity_id", ids)
+  ) as BidAuditRow[];
+  const bidAuditLookup = new Map<string, Map<string, string>>();
+  for (const audit of bidAudits) {
+    const bidderUserId = String(parseAuditDetails(audit.details_json).bidderUserId || "");
+    if (!bidderUserId) continue;
+    if (!bidAuditLookup.has(audit.entity_id)) {
+      bidAuditLookup.set(audit.entity_id, new Map());
+    }
+    bidAuditLookup.get(audit.entity_id)!.set(audit.created_at, bidderUserId);
+  }
+  return rows.map((row) => mapItem(row, files, bids, bidAuditLookup));
 };
 
 const getItems = async (includeArchived = false) => {
@@ -1052,8 +1157,45 @@ const parseAuditDetails = (value: Record<string, unknown> | string | null | unde
   return value;
 };
 
-const getBidAuditRowsForUser = async (userId: string, actor: string) => {
-  const keyedRows = handleSupabase(
+const backfillLegacyBidAuditAttribution = async () => {
+  const users = handleSupabase(
+    await supabase.from("users").select("id,display_name").eq("status", "active")
+  ) as Array<{ id: string; display_name: string }>;
+  const uniqueDisplayNameMap = new Map<string, string>();
+  const duplicateDisplayNames = new Set<string>();
+  for (const user of users) {
+    if (uniqueDisplayNameMap.has(user.display_name)) {
+      duplicateDisplayNames.add(user.display_name);
+      uniqueDisplayNameMap.delete(user.display_name);
+      continue;
+    }
+    if (!duplicateDisplayNames.has(user.display_name)) {
+      uniqueDisplayNameMap.set(user.display_name, user.id);
+    }
+  }
+  const bidAudits = handleSupabase(
+    await supabase
+      .from("audits")
+      .select("id,actor,details_json")
+      .eq("event_type", "BID_PLACED")
+      .order("created_at", { ascending: false })
+  ) as Array<Pick<AuditRow, "id" | "actor" | "details_json">>;
+  for (const audit of bidAudits) {
+    const details = parseAuditDetails(audit.details_json);
+    if (details.bidderUserId) continue;
+    const matchedUserId = uniqueDisplayNameMap.get(audit.actor);
+    if (!matchedUserId) continue;
+    await handleSupabase(
+      await supabase
+        .from("audits")
+        .update({ details_json: { ...details, bidderUserId: matchedUserId } })
+        .eq("id", audit.id)
+    );
+  }
+};
+
+const getBidAuditRowsForUser = async (userId: string) => {
+  return handleSupabase(
     await supabase
       .from("audits")
       .select("entity_id,details_json,created_at")
@@ -1061,20 +1203,10 @@ const getBidAuditRowsForUser = async (userId: string, actor: string) => {
       .contains("details_json", { bidderUserId: userId })
       .order("created_at", { ascending: false })
   ) as BidAuditRow[];
-  if (keyedRows.length) return keyedRows;
-  const legacyRows = handleSupabase(
-    await supabase
-      .from("audits")
-      .select("entity_id,details_json,created_at")
-      .eq("event_type", "BID_PLACED")
-      .eq("actor", actor)
-      .order("created_at", { ascending: false })
-  ) as BidAuditRow[];
-  return legacyRows.filter((row) => !parseAuditDetails(row.details_json).bidderUserId);
 };
 
-const getUserBidRecords = async (userId: string, actor: string) => {
-  const bidAudits = await getBidAuditRowsForUser(userId, actor);
+const getUserBidRecords = async (userId: string) => {
+  const bidAudits = await getBidAuditRowsForUser(userId);
   const uniqueItemIds = Array.from(new Set(bidAudits.map((row) => row.entity_id)));
   const items = new Map((await getItems(true)).map((item) => [item.id, item]));
   return uniqueItemIds.flatMap((itemId) => {
@@ -1127,13 +1259,27 @@ const getRecentAudits = async (limit = 20) => {
 };
 
 const getNotificationQueue = async (limit = 20) => {
-  const rows = handleSupabase(
-    await supabase
-      .from("notification_queue")
-      .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,error_message")
-      .order("created_at", { ascending: false })
-      .limit(limit)
-  ) as NotificationRow[];
+  let rows: NotificationRow[];
+  try {
+    rows = handleSupabase(
+      await supabase
+        .from("notification_queue")
+        .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,error_message")
+        .order("created_at", { ascending: false })
+        .limit(limit)
+    ) as NotificationRow[];
+    notificationQueueSupportsProcessedAt = true;
+  } catch (error) {
+    if (!isMissingProcessedAtColumnError(error)) throw error;
+    notificationQueueSupportsProcessedAt = false;
+    rows = handleSupabase(
+      await supabase
+        .from("notification_queue")
+        .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,error_message")
+        .order("created_at", { ascending: false })
+        .limit(limit)
+    ) as NotificationRow[];
+  }
   return rows.map((row) => ({
     id: row.id,
     channel: row.channel,
@@ -1149,16 +1295,41 @@ const getNotificationQueue = async (limit = 20) => {
 };
 
 const getPendingNotificationQueue = async () => {
-  const staleBefore = new Date(Date.now() - notificationClaimTtlMs).toISOString();
-  const rows = handleSupabase(
-    await supabase
-      .from("notification_queue")
-      .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,error_message")
-      .eq("status", "pending")
-      .or(`processed_at.is.null,processed_at.lte.${staleBefore}`)
-      .order("created_at", { ascending: true })
-      .limit(10)
-  ) as NotificationRow[];
+  let rows: NotificationRow[];
+  if (notificationQueueSupportsProcessedAt) {
+    const staleBefore = new Date(Date.now() - notificationClaimTtlMs).toISOString();
+    try {
+      rows = handleSupabase(
+        await supabase
+          .from("notification_queue")
+          .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,error_message")
+          .eq("status", "pending")
+          .or(`processed_at.is.null,processed_at.lte.${staleBefore}`)
+          .order("created_at", { ascending: true })
+          .limit(10)
+      ) as NotificationRow[];
+    } catch (error) {
+      if (!isMissingProcessedAtColumnError(error)) throw error;
+      notificationQueueSupportsProcessedAt = false;
+      rows = handleSupabase(
+        await supabase
+          .from("notification_queue")
+          .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,error_message")
+          .eq("status", "pending")
+          .order("created_at", { ascending: true })
+          .limit(10)
+      ) as NotificationRow[];
+    }
+  } else {
+    rows = handleSupabase(
+      await supabase
+        .from("notification_queue")
+        .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,error_message")
+        .eq("status", "pending")
+        .order("created_at", { ascending: true })
+        .limit(10)
+    ) as NotificationRow[];
+  }
   return rows.map((row) => ({
     id: row.id,
     channel: row.channel,
@@ -1175,18 +1346,57 @@ const getPendingNotificationQueue = async () => {
 
 const claimNotificationQueueEntry = async (entryId: string) => {
   const claimTime = new Date().toISOString();
-  const staleBefore = new Date(Date.now() - notificationClaimTtlMs).toISOString();
   const claimToken = `claim:${randomUUID()}`;
-  const result = await supabase
+  if (notificationQueueSupportsProcessedAt) {
+    const staleBefore = new Date(Date.now() - notificationClaimTtlMs).toISOString();
+    const result = await supabase
+      .from("notification_queue")
+      .update({ processed_at: claimTime, error_message: claimToken })
+      .eq("id", entryId)
+      .eq("status", "pending")
+      .or(`processed_at.is.null,processed_at.lte.${staleBefore}`)
+      .select("id")
+      .maybeSingle();
+    if (!result.error) return Boolean(result.data);
+    if (!isMissingProcessedAtColumnError(new Error(result.error.message))) {
+      throw new Error(result.error.message);
+    }
+    notificationQueueSupportsProcessedAt = false;
+  }
+  const fallbackResult = await supabase
     .from("notification_queue")
-    .update({ processed_at: claimTime, error_message: claimToken })
+    .update({ error_message: claimToken })
     .eq("id", entryId)
     .eq("status", "pending")
-    .or(`processed_at.is.null,processed_at.lte.${staleBefore}`)
     .select("id")
     .maybeSingle();
-  if (result.error) throw new Error(result.error.message);
-  return Boolean(result.data);
+  if (fallbackResult.error) throw new Error(fallbackResult.error.message);
+  return Boolean(fallbackResult.data);
+};
+
+const updateNotificationOutcome = async (
+  entryId: string,
+  status: "sent" | "failed",
+  errorMessage: string | null,
+  processedAt = new Date().toISOString()
+) => {
+  if (notificationQueueSupportsProcessedAt) {
+    const result = await supabase
+      .from("notification_queue")
+      .update({ status, processed_at: processedAt, error_message: errorMessage })
+      .eq("id", entryId);
+    if (!result.error) return;
+    if (!isMissingProcessedAtColumnError(new Error(result.error.message))) {
+      throw new Error(result.error.message);
+    }
+    notificationQueueSupportsProcessedAt = false;
+  }
+  await handleSupabase(
+    await supabase
+      .from("notification_queue")
+      .update({ status, error_message: errorMessage })
+      .eq("id", entryId)
+  );
 };
 
 const escapeHtml = (value: unknown) =>
@@ -1260,9 +1470,7 @@ const renderNotificationContent = (entry: NotificationQueueItem) => {
 const deliverNotification = async (entry: NotificationQueueItem) => {
   const processedAt = new Date().toISOString();
   if (notificationTransport === "noop") {
-    await handleSupabase(
-      await supabase.from("notification_queue").update({ status: "sent", processed_at: processedAt, error_message: null }).eq("id", entry.id)
-    );
+    await updateNotificationOutcome(entry.id, "sent", null, processedAt);
     return;
   }
   if (notificationTransport === "smtp") {
@@ -1277,9 +1485,7 @@ const deliverNotification = async (entry: NotificationQueueItem) => {
       text: content.text,
       html: content.html
     });
-    await handleSupabase(
-      await supabase.from("notification_queue").update({ status: "sent", processed_at: processedAt, error_message: null }).eq("id", entry.id)
-    );
+    await updateNotificationOutcome(entry.id, "sent", null, processedAt);
     return;
   }
   const filePath = path.join(outboxDir, `${processedAt.replace(/[:.]/g, "-")}-${entry.id}.json`);
@@ -1293,9 +1499,7 @@ const deliverNotification = async (entry: NotificationQueueItem) => {
     createdAt: entry.createdAt,
     processedAt
   }, null, 2));
-  await handleSupabase(
-    await supabase.from("notification_queue").update({ status: "sent", processed_at: processedAt, error_message: null }).eq("id", entry.id)
-  );
+  await updateNotificationOutcome(entry.id, "sent", null, processedAt);
 };
 
 const processNotificationQueue = async () => {
@@ -1310,15 +1514,11 @@ const processNotificationQueue = async () => {
         await deliverNotification(entry);
         processed += 1;
       } catch (error) {
-        await handleSupabase(
-          await supabase
-            .from("notification_queue")
-            .update({
-              status: "failed",
-              processed_at: new Date().toISOString(),
-              error_message: error instanceof Error ? error.message : "Notification processing failed."
-            })
-            .eq("id", entry.id)
+        await updateNotificationOutcome(
+          entry.id,
+          "failed",
+          error instanceof Error ? error.message : "Notification processing failed.",
+          new Date().toISOString()
         );
       }
     }
@@ -1428,18 +1628,7 @@ const inspectImportArchive = async (zipPath: string) => {
     .map((entry) => entry.trim())
     .filter(Boolean)
     .filter((entry) => !entry.endsWith("/"));
-  if (!entries.length) {
-    throw new Error("The ZIP bundle is empty.");
-  }
-  if (entries.length > maxImportArchiveEntries) {
-    throw new Error(`The ZIP bundle contains too many files. Maximum allowed is ${maxImportArchiveEntries}.`);
-  }
-  for (const entry of entries) {
-    const normalized = entry.replace(/\\/g, "/");
-    if (normalized.startsWith("/") || normalized.includes("../")) {
-      throw new Error(`The ZIP bundle contains an unsafe path: ${entry}`);
-    }
-  }
+  validateArchiveEntries(entries, maxImportArchiveEntries);
 };
 
 const getImportValue = (row: Record<string, string>, candidates: string[]) => {
@@ -1488,8 +1677,18 @@ const collectImportFiles = (rootDir: string) => {
 
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const documentExtensions = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx"]);
+const normalizeDocumentVisibility = (value: string | undefined): DocumentVisibility => {
+  const normalized = (value || "").trim().toLowerCase();
+  if (normalized === "admin_only" || normalized === "winner_only") return normalized;
+  return "bidder_visible";
+};
 
-const prepareManagedFile = async (sourcePath: string, kind: "image" | "document", originalName = path.basename(sourcePath)) => {
+const prepareManagedFile = async (
+  sourcePath: string,
+  kind: "image" | "document",
+  originalName = path.basename(sourcePath),
+  visibility: DocumentVisibility = "bidder_visible"
+) => {
   const extension = path.extname(sourcePath).toLowerCase();
   if (kind === "image" && !imageExtensions.has(extension)) {
     throw new Error(`Unsupported image file type for ${path.basename(sourcePath)}.`);
@@ -1503,7 +1702,7 @@ const prepareManagedFile = async (sourcePath: string, kind: "image" | "document"
     return {
       id: randomUUID(),
       kind,
-      name: originalName,
+      name: kind === "document" ? encodeDocumentNameWithVisibility(originalName, visibility) : originalName,
       url: stored.url
     };
   } finally {
@@ -1511,13 +1710,17 @@ const prepareManagedFile = async (sourcePath: string, kind: "image" | "document"
   }
 };
 
-const copyImportedFile = async (sourcePath: string, kind: "image" | "document") => {
-  return prepareManagedFile(sourcePath, kind, path.basename(sourcePath));
+const copyImportedFile = async (sourcePath: string, kind: "image" | "document", visibility: DocumentVisibility = "bidder_visible") => {
+  return prepareManagedFile(sourcePath, kind, path.basename(sourcePath), visibility);
 };
 
-const prepareUploadedMulterFile = async (file: Express.Multer.File, kind: "image" | "document") => {
+const prepareUploadedMulterFile = async (
+  file: Express.Multer.File,
+  kind: "image" | "document",
+  visibility: DocumentVisibility = "bidder_visible"
+) => {
   try {
-    return await prepareManagedFile(file.path, kind, file.originalname);
+    return await prepareManagedFile(file.path, kind, file.originalname, visibility);
   } finally {
     removeFileIfExists(file.path);
   }
@@ -1597,15 +1800,7 @@ const findExistingItemByLotOrSku = async (lot: string, sku: string) => {
 };
 
 const validateBid = (item: StoredItem, amount: number) => {
-  if (!Number.isFinite(amount) || amount <= 0) return { ok: false as const, error: "Invalid bid amount." };
-  const now = Date.now();
-  const start = new Date(item.startTime).getTime();
-  const end = new Date(item.endTime).getTime();
-  if (now < start || now > end) return { ok: false as const, error: "Bidding is closed or not yet open for this item." };
-  const requiredBid = Math.max(item.currentBid || item.startBid, item.startBid) + item.increment;
-  if (amount < requiredBid) return { ok: false as const, error: `Bid must be at least ${requiredBid}.` };
-  if ((amount - requiredBid) % item.increment !== 0) return { ok: false as const, error: `Bid must increase by ${item.increment}.` };
-  return { ok: true as const };
+  return validateBidAmount(item, amount, Date.now());
 };
 
 const checkBidRateLimit = async (req: express.Request, actor: string, itemId: string) =>
@@ -2081,7 +2276,7 @@ app.get("/api/me/dashboard", asyncHandler(async (req, res) => {
     res.status(401).json({ error: "Sign in required." });
     return;
   }
-  const bidRecords = await getUserBidRecords(auth.userId, auth.actor);
+  const bidRecords = await getUserBidRecords(auth.userId);
   const sessions = await getUserSessions(auth.userId);
   const closedItems = (await getItems(true)).filter((item) => new Date(item.endTime).getTime() < Date.now());
   res.json({
@@ -2103,11 +2298,31 @@ app.get("/api/me/bids", asyncHandler(async (req, res) => {
     res.status(401).json({ error: "Sign in required." });
     return;
   }
-  res.json(await getUserBidRecords(auth.userId, auth.actor));
+  res.json(await getUserBidRecords(auth.userId));
 }));
 
 app.get("/uploads/images/:file", asyncHandler(async (req, res) => {
   const rawFile = String(req.params.file || "");
+  if (imageAccessPolicy !== "public") {
+    const auth = await getAuthContext(req);
+    if (!auth.signedIn) {
+      res.status(401).json({ error: "Sign in required to access item images." });
+      return;
+    }
+    if (imageAccessPolicy === "bidder_visible") {
+      const publicUrl = `/uploads/images/${rawFile}`;
+      const row = handleSupabaseMaybe<ItemFileRow>(
+        await supabase.from("item_files").select("item_id,kind,name,url").eq("kind", "image").eq("url", publicUrl).maybeSingle(),
+        true
+      );
+      const item = row ? await getItemById(row.item_id, true) : null;
+      const itemVisible = item && !item.archivedAt;
+      if (!auth.adminAuthorized && (!itemVisible || auth.role !== "Bidder")) {
+        res.status(403).json({ error: "You do not have access to this image." });
+        return;
+      }
+    }
+  }
   const localFileName = safeFileName(rawFile);
   const localPath = path.join(imagesDir, localFileName);
   if (localFileName && fs.existsSync(localPath)) {
@@ -2151,7 +2366,8 @@ app.get("/uploads/documents/:file", asyncHandler(async (req, res) => {
     return;
   }
   const item = await getItemById(row.item_id, true);
-  if (!item || !canAccessItemDocuments(auth, item)) {
+  const parsedDocument = parseDocumentNameWithVisibility(row.name);
+  if (!item || !canAccessItemDocument(auth, item, parsedDocument.visibility)) {
     res.status(403).json({ error: "You do not have access to this document." });
     return;
   }
@@ -2172,8 +2388,8 @@ app.get("/uploads/documents/:file", asyncHandler(async (req, res) => {
     return;
   }
   const buffer = Buffer.from(await result.data.arrayBuffer());
-  res.setHeader("Content-Type", result.data.type || guessContentType(row.name, "application/octet-stream"));
-  res.setHeader("Content-Disposition", `inline; filename="${safeFileName(row.name)}"`);
+  res.setHeader("Content-Type", result.data.type || guessContentType(parsedDocument.displayName, "application/octet-stream"));
+  res.setHeader("Content-Disposition", `inline; filename="${safeFileName(parsedDocument.displayName)}"`);
   res.send(buffer);
 }));
 
@@ -2328,7 +2544,7 @@ app.get("/api/me/wins", asyncHandler(async (req, res) => {
     return;
   }
   const itemsById = new Map((await getItems(true)).map((item) => [item.id, item]));
-  const bidAudits = await getBidAuditRowsForUser(auth.userId!, auth.actor);
+  const bidAudits = await getBidAuditRowsForUser(auth.userId!);
   const wins = bidAudits.flatMap((row) => {
     const item = itemsById.get(row.entity_id);
     if (!item) return [];
@@ -2783,19 +2999,25 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
         const imageNames = Object.entries(normalizedRow)
           .filter(([key, value]) => key.startsWith("image") && value.trim())
           .flatMap(([, value]) => splitImportList(value));
-        const documentNames = Object.entries(normalizedRow)
+        const documentEntries = Object.entries(normalizedRow)
           .filter(([key, value]) => (key.startsWith("document") || key.startsWith("doc")) && value.trim())
-          .flatMap(([, value]) => splitImportList(value));
+          .flatMap(([key, value]) => splitImportList(value).map((name) => ({
+            key,
+            name,
+            visibility: normalizeDocumentVisibility(
+              normalizedRow[`${key}_visibility`] || normalizedRow.document_visibility || normalizedRow.doc_visibility
+            )
+          })));
 
         const imageFiles = await Promise.all(imageNames.map(async (name) => {
           const sourcePath = extractedFiles.get(name.toLowerCase());
           if (!sourcePath) throw new Error(`Image file "${name}" was not found in the ZIP.`);
           return copyImportedFile(sourcePath, "image");
         }));
-        const documentFiles = await Promise.all(documentNames.map(async (name) => {
-          const sourcePath = extractedFiles.get(name.toLowerCase());
-          if (!sourcePath) throw new Error(`Document file "${name}" was not found in the ZIP.`);
-          return copyImportedFile(sourcePath, "document");
+        const documentFiles = await Promise.all(documentEntries.map(async (entry) => {
+          const sourcePath = extractedFiles.get(entry.name.toLowerCase());
+          if (!sourcePath) throw new Error(`Document file "${entry.name}" was not found in the ZIP.`);
+          return copyImportedFile(sourcePath, "document", entry.visibility);
         }));
 
         const itemId = await createItemRecord(req, validation.value, auth, { images: imageFiles, documents: documentFiles });
@@ -2839,8 +3061,9 @@ app.post("/api/items", requireAdminToken, upload.fields([{ name: "images", maxCo
   const images = files?.images || [];
   const documents = files?.documents || [];
   const auth = await getAuthContext(req);
+  const documentVisibility = normalizeDocumentVisibility(String(req.body.documentVisibility || "bidder_visible"));
   const preparedImages = await Promise.all(images.map((image) => prepareUploadedMulterFile(image, "image")));
-  const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document")));
+  const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document", documentVisibility)));
   const itemId = await createItemRecord(req, validation.value, auth, {
     images: preparedImages,
     documents: preparedDocuments
@@ -2863,8 +3086,9 @@ app.patch("/api/items/:id", requireAdminToken, upload.fields([{ name: "images", 
   const images = files?.images || [];
   const documents = files?.documents || [];
   const auth = await getAuthContext(req);
+  const documentVisibility = normalizeDocumentVisibility(String(req.body.documentVisibility || "bidder_visible"));
   const preparedImages = await Promise.all(images.map((image) => prepareUploadedMulterFile(image, "image")));
-  const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document")));
+  const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document", documentVisibility)));
 
   await handleSupabase(await supabase.from("categories").upsert({ name: validation.value.category }, { onConflict: "name" }));
   await handleSupabase(
@@ -3027,10 +3251,12 @@ app.use((error: unknown, req: express.Request, res: express.Response, next: expr
 
 const start = async () => {
   await handleSupabase(await supabase.from("roles").select("name").limit(1));
+  await detectSecurityEventsTable();
   await ensureStorageBuckets();
   await seedRoles();
   await seedCategoriesIfEmpty();
   await seedItemsIfEmpty();
+  await backfillLegacyBidAuditAttribution();
   await handleSupabase(await supabase.from("sessions").delete().lte("expires_at", new Date().toISOString()));
   await handleSupabase(await supabase.from("email_verification_tokens").delete().lte("expires_at", new Date().toISOString()));
   if (notificationTransport === "smtp") {
@@ -3043,6 +3269,9 @@ const start = async () => {
   if (!shouldRunApiServer) {
     console.log(`Notification worker running in ${notificationWorkerMode} mode.`);
     console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
+    if (!securityEventsTableAvailable) {
+      console.warn("security_events table not found; falling back to audits for rate-limit telemetry.");
+    }
     return;
   }
   app.listen(port, () => {
@@ -3050,6 +3279,9 @@ const start = async () => {
     console.log("Storage backend: supabase-js");
     console.log(`Notification worker mode: ${notificationWorkerMode}`);
     console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
+    if (!securityEventsTableAvailable) {
+      console.warn("security_events table not found; falling back to audits for rate-limit telemetry.");
+    }
   });
 };
 
