@@ -975,7 +975,7 @@ const refreshData = async (feedbackMessage?: string) => {
 const init = async () => {
   await fetchCurrentSession().catch(() => undefined);
   const session = readAuthSession();
-  if (!session.signedIn || session.role !== "Admin") {
+  if (!session.signedIn || !["Admin", "SuperAdmin"].includes(session.role)) {
     renderAccessDenied();
     return;
   }

@@ -8,6 +8,7 @@ export type AuthSession = {
   role: Role;
   email?: string;
   userId?: string;
+  csrfToken?: string;
 };
 
 export type UserProfile = {
@@ -98,7 +99,8 @@ export const readAuthSession = (): AuthSession => {
       displayName: parsed.displayName,
       role: parsed.role as Role,
       email: parsed.email,
-      userId: parsed.userId
+      userId: parsed.userId,
+      csrfToken: parsed.csrfToken
     };
   } catch {
     return defaultSession;
@@ -113,14 +115,17 @@ export const clearAuthSession = () => {
   sessionStorage.removeItem(authSessionKey);
 };
 
-export const apiFetch = (path: string, init?: RequestInit) =>
-  fetch(`${API_BASE_URL}${path}`, {
+const performApiFetch = (path: string, init?: RequestInit, csrfToken?: string) => {
+  const headers = new Headers(init?.headers || {});
+  if (csrfToken) {
+    headers.set("x-csrf-token", csrfToken);
+  }
+  return fetch(`${API_BASE_URL}${path}`, {
     ...init,
     credentials: "include",
-    headers: {
-      ...(init?.headers || {})
-    }
+    headers
   });
+};
 
 const readJson = async <T>(response: Response, fallbackMessage: string) => {
   const payload = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
@@ -130,7 +135,7 @@ const readJson = async <T>(response: Response, fallbackMessage: string) => {
   return payload;
 };
 
-const sessionFromPayload = (payload: {
+function sessionFromPayload(payload: {
   signedIn: boolean;
   user: null | {
     id: string;
@@ -138,7 +143,8 @@ const sessionFromPayload = (payload: {
     displayName: string;
     role: string;
   };
-}): AuthSession => {
+  csrfToken?: string;
+}): AuthSession {
   if (!payload.signedIn || !payload.user) return defaultSession;
   return {
     mode: "account",
@@ -146,8 +152,45 @@ const sessionFromPayload = (payload: {
     displayName: payload.user.displayName,
     role: (payload.user.role as Role) || "Guest",
     email: payload.user.email,
-    userId: payload.user.id
+    userId: payload.user.id,
+    csrfToken: payload.csrfToken
   };
+}
+
+export const apiFetch = async (path: string, init?: RequestInit) => {
+  const method = (init?.method || "GET").toUpperCase();
+  const isMutation = ["POST", "PATCH", "PUT", "DELETE"].includes(method);
+  const session = readAuthSession();
+  let response = await performApiFetch(path, init, isMutation ? session.csrfToken : undefined);
+  if (!isMutation || response.status !== 403) {
+    return response;
+  }
+  const payload = (await response.clone().json().catch(() => null)) as { error?: string } | null;
+  if (payload?.error !== "Invalid or missing CSRF token.") {
+    return response;
+  }
+  const refreshResponse = await performApiFetch("/api/auth/me");
+  if (!refreshResponse.ok) {
+    clearAuthSession();
+    return response;
+  }
+  const refreshPayload = (await refreshResponse.json().catch(() => null)) as {
+    signedIn: boolean;
+    user: null | { id: string; email: string; displayName: string; role: string };
+    csrfToken?: string;
+  } | null;
+  if (!refreshPayload) {
+    clearAuthSession();
+    return response;
+  }
+  const refreshedSession = sessionFromPayload(refreshPayload);
+  if (refreshedSession.signedIn) {
+    writeAuthSession(refreshedSession);
+    response = await performApiFetch(path, init, refreshedSession.csrfToken);
+    return response;
+  }
+  clearAuthSession();
+  return response;
 };
 
 export const fetchCurrentSession = async () => {
@@ -155,6 +198,7 @@ export const fetchCurrentSession = async () => {
   const payload = (await response.json()) as {
     signedIn: boolean;
     user: null | { id: string; email: string; displayName: string; role: string };
+    csrfToken?: string;
   };
   const session = sessionFromPayload(payload);
   writeAuthSession(session);
@@ -175,7 +219,8 @@ export const loginWithAccount = async (email: string, password: string) => {
   }
   const session = sessionFromPayload({
     signedIn: Boolean(payload.signedIn),
-    user: payload.user || null
+    user: payload.user || null,
+    csrfToken: (payload as { csrfToken?: string }).csrfToken
   });
   writeAuthSession(session);
   return session;

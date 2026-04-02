@@ -49,11 +49,14 @@ const smtpSecure = String(process.env.SMTP_SECURE || "").toLowerCase() === "true
 const appBaseUrl = (process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/+$/, "");
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-const tokenSigningSecret = process.env.APP_SECRET || supabaseServiceRoleKey;
+const tokenSigningSecret = process.env.APP_SECRET || "";
 const bidRateWindowMs = 60_000;
 const bidRateLimit = 12;
 const authRateWindowMs = 15 * 60_000;
 const authRateLimit = 10;
+const maxImportArchiveEntries = 150;
+const maxImportExtractedBytes = 100 * 1024 * 1024;
+const notificationClaimTtlMs = 10 * 60_000;
 const allowedOrigins = new Set(
   (process.env.CORS_ORIGINS || [appBaseUrl, "http://localhost:5173", "http://127.0.0.1:5173"].join(","))
     .split(",")
@@ -61,9 +64,10 @@ const allowedOrigins = new Set(
     .filter(Boolean)
 );
 const errorWebhookUrl = process.env.ERROR_WEBHOOK_URL || "";
+const securityTelemetryEvents = new Set(["AUTH_ATTEMPT", "BID_ATTEMPT"]);
 
-if (!supabaseUrl || !supabaseServiceRoleKey) {
-  throw new Error("SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY are required for the backend.");
+if (!supabaseUrl || !supabaseServiceRoleKey || !tokenSigningSecret) {
+  throw new Error("SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY, and APP_SECRET are required for the backend.");
 }
 
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
@@ -138,6 +142,30 @@ app.use((req, res, next) => {
   }
   next();
 });
+app.use((req, res, next) => {
+  void (async () => {
+    if (!["POST", "PATCH", "PUT", "DELETE"].includes(req.method)) {
+      next();
+      return;
+    }
+    if (adminApiToken && req.header("x-admin-token") === adminApiToken) {
+      next();
+      return;
+    }
+    const sessionId = parseCookies(req)[sessionCookieName];
+    if (!sessionId) {
+      next();
+      return;
+    }
+    const expectedToken = buildCsrfToken(sessionId);
+    const providedToken = String(req.header("x-csrf-token") || "");
+    if (!providedToken || providedToken !== expectedToken) {
+      res.status(403).json({ error: "Invalid or missing CSRF token." });
+      return;
+    }
+    next();
+  })().catch(next);
+});
 app.use("/uploads/images", express.static(imagesDir));
 
 type StoredFileRef = { name: string; url: string };
@@ -182,6 +210,7 @@ type StoredUser = {
 type Role = "Guest" | "Bidder" | "Observer" | "Admin" | "SuperAdmin";
 type AuthContext = {
   userId?: string;
+  sessionId?: string;
   actor: string;
   actorType: "system" | "user" | "integration";
   role: Role;
@@ -200,6 +229,11 @@ type NotificationQueueItem = {
   createdAt: string;
   processedAt?: string | null;
   errorMessage?: string | null;
+};
+type BidAuditRow = {
+  entity_id: string;
+  details_json: Record<string, unknown> | string;
+  created_at: string;
 };
 type ItemRow = {
   id: string;
@@ -270,7 +304,6 @@ const smtpTransporter = notificationTransport === "smtp" && smtpHost && smtpUser
     })
   : null;
 let notificationProcessingInFlight = false;
-const recentAuthAttempts = new Map<string, number[]>();
 
 const seedItems: Array<Omit<StoredItem, "images" | "documents"> & { images: StoredFileRef[]; documents: StoredFileRef[] }> = (() => {
   const now = Date.now();
@@ -325,7 +358,6 @@ const seedItems: Array<Omit<StoredItem, "images" | "documents"> & { images: Stor
   ];
 })();
 
-const recentBidAttempts = new Map<string, number[]>();
 const processedBidKeys = new Map<string, string>();
 
 const parseCookies = (req: express.Request) =>
@@ -363,6 +395,7 @@ const passwordRuleMessage = "Password must be at least 8 characters and include 
 const base64UrlEncode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 const base64UrlDecode = (value: string) => Buffer.from(value, "base64url").toString("utf8");
 const signTokenValue = (value: string) => createHmac("sha256", tokenSigningSecret).update(value).digest("base64url");
+const buildCsrfToken = (sessionId: string) => createHmac("sha256", tokenSigningSecret).update(`csrf:${sessionId}`).digest("base64url");
 const passwordHashFingerprint = (passwordHash: string) => createHmac("sha256", tokenSigningSecret).update(passwordHash).digest("hex").slice(0, 24);
 const buildSignedToken = (payload: Record<string, unknown>) => {
   const body = base64UrlEncode(JSON.stringify(payload));
@@ -482,21 +515,53 @@ const handleSupabaseMaybe = <T>(result: { data: T | null; error: { message: stri
   return result.data;
 };
 
-const checkAuthRateLimit = (key: string) => {
-  const now = Date.now();
-  const existing = recentAuthAttempts.get(key) || [];
-  const active = existing.filter((value) => now - value < authRateWindowMs);
-  if (active.length >= authRateLimit) {
-    recentAuthAttempts.set(key, active);
-    return false;
-  }
-  active.push(now);
-  recentAuthAttempts.set(key, active);
-  return true;
-};
-
 const getClientKey = (req: express.Request, extra = "") =>
   `${req.ip || req.socket.remoteAddress || "unknown"}:${extra}`;
+
+const buildRateLimitSlotId = (eventType: string, actor: string, windowStartMs: number, slot: number) =>
+  createHmac("sha256", tokenSigningSecret)
+    .update(`${eventType}:${actor}:${windowStartMs}:${slot}`)
+    .digest("hex");
+
+const recordSharedRateLimitAttempt = async (
+  req: express.Request,
+  eventType: string,
+  actor: string,
+  windowMs: number,
+  limit: number,
+  details: Record<string, string | number | boolean> = {}
+) => {
+  const now = Date.now();
+  const windowStartMs = Math.floor(now / windowMs) * windowMs;
+  const createdAt = new Date(now).toISOString();
+  for (let slot = 0; slot < limit; slot += 1) {
+    const id = buildRateLimitSlotId(eventType, actor, windowStartMs, slot);
+    const result = await supabase.from("audits").insert({
+      id,
+      event_type: eventType,
+      entity_type: "system",
+      entity_id: actor,
+      actor,
+      actor_type: "system",
+      request_id: String((req as express.Request & { requestId?: string }).requestId || ""),
+      details_json: {
+        path: req.path,
+        method: req.method,
+        windowStart: new Date(windowStartMs).toISOString(),
+        slot,
+        ...details
+      },
+      created_at: createdAt
+    });
+    if (!result.error) return true;
+    const duplicate = result.error.message.toLowerCase().includes("duplicate key");
+    if (!duplicate) throw new Error(result.error.message);
+  }
+  return false;
+};
+
+const checkAuthRateLimit = async (req: express.Request, key: string) =>
+  recordSharedRateLimitAttempt(req, "AUTH_ATTEMPT", key, authRateWindowMs, authRateLimit);
 
 const reportServerError = async (req: express.Request, error: unknown) => {
   if (!errorWebhookUrl) return;
@@ -573,6 +638,26 @@ const getUserRoles = async (userId: string) =>
     await supabase.from("user_roles").select("role_name").eq("user_id", userId)
   ) as RoleRow[];
 
+const ensureCanManageTargetUser = (actor: AuthContext, targetRoles: string[]) => {
+  if (targetRoles.includes("SuperAdmin") && actor.role !== "SuperAdmin") {
+    return { ok: false as const, error: "Only a SuperAdmin can manage another SuperAdmin account." };
+  }
+  return { ok: true as const };
+};
+
+const canAccessItemDocuments = (auth: AuthContext, item: StoredItem) => {
+  if (!auth.signedIn) return false;
+  if (auth.adminAuthorized) return true;
+  if (auth.role !== "Bidder") return false;
+  if (item.archivedAt) return false;
+  return new Date(item.endTime).getTime() >= Date.now();
+};
+
+const sanitizeItemForAuth = (item: StoredItem, auth: AuthContext): StoredItem => ({
+  ...item,
+  documents: canAccessItemDocuments(auth, item) ? item.documents : []
+});
+
 const getSessionRow = async (sessionId: string) =>
   handleSupabaseMaybe<SessionRow>(
     await supabase.from("sessions").select("id,user_id,created_at,expires_at").eq("id", sessionId).maybeSingle(),
@@ -606,6 +691,7 @@ const createUserSession = async (res: express.Response, userId: string) => {
     await supabase.from("sessions").insert({ id: sessionId, user_id: userId, created_at: createdAt, expires_at: expiresAt })
   );
   setSessionCookie(res, sessionId, expiresAt);
+  return { sessionId, createdAt, expiresAt };
 };
 
 const createEmailVerificationToken = async (userId: string) => {
@@ -654,6 +740,7 @@ const getAuthContext = async (req: express.Request): Promise<AuthContext> => {
   if (adminApiToken && req.header("x-admin-token") === adminApiToken) {
     return {
       userId: "admin-token",
+      sessionId: undefined,
       actor: "Admin API token",
       actorType: "integration",
       role: "Admin",
@@ -680,6 +767,7 @@ const getAuthContext = async (req: express.Request): Promise<AuthContext> => {
   const role = normalizeRole(roleRows.map((row) => row.role_name));
   return {
     userId: user.id,
+    sessionId,
     actor: user.display_name,
     actorType: "user",
     role,
@@ -689,7 +777,7 @@ const getAuthContext = async (req: express.Request): Promise<AuthContext> => {
   };
 };
 
-const serializeSession = async (req: express.Request): Promise<(StoredUser & { role: Role }) | null> => {
+const serializeSession = async (req: express.Request): Promise<((StoredUser & { role: Role }) & { csrfToken?: string }) | null> => {
   const auth = await getAuthContext(req);
   if (!auth.signedIn || !auth.userId) return null;
   const user = await getUserById(auth.userId);
@@ -701,7 +789,8 @@ const serializeSession = async (req: express.Request): Promise<(StoredUser & { r
     status: user.status,
     createdAt: user.created_at,
     lastLoginAt: user.last_login_at,
-    role: auth.role
+    role: auth.role,
+    csrfToken: auth.sessionId ? buildCsrfToken(auth.sessionId) : undefined
   };
 };
 
@@ -849,15 +938,41 @@ const getReserveState = (item: StoredItem) => {
   return item.currentBid >= item.reserve ? "reserve_met" : "reserve_not_met";
 };
 
-const getUserBidRecords = async (userId: string, actor: string) => {
-  const bidAudits = handleSupabase(
+const parseAuditDetails = (value: Record<string, unknown> | string | null | undefined) => {
+  if (!value) return {} as Record<string, unknown>;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return value;
+};
+
+const getBidAuditRowsForUser = async (userId: string, actor: string) => {
+  const keyedRows = handleSupabase(
+    await supabase
+      .from("audits")
+      .select("entity_id,details_json,created_at")
+      .eq("event_type", "BID_PLACED")
+      .contains("details_json", { bidderUserId: userId })
+      .order("created_at", { ascending: false })
+  ) as BidAuditRow[];
+  if (keyedRows.length) return keyedRows;
+  const legacyRows = handleSupabase(
     await supabase
       .from("audits")
       .select("entity_id,details_json,created_at")
       .eq("event_type", "BID_PLACED")
       .eq("actor", actor)
       .order("created_at", { ascending: false })
-  ) as Array<{ entity_id: string; details_json: Record<string, unknown> | string; created_at: string }>;
+  ) as BidAuditRow[];
+  return legacyRows.filter((row) => !parseAuditDetails(row.details_json).bidderUserId);
+};
+
+const getUserBidRecords = async (userId: string, actor: string) => {
+  const bidAudits = await getBidAuditRowsForUser(userId, actor);
   const uniqueItemIds = Array.from(new Set(bidAudits.map((row) => row.entity_id)));
   const items = new Map((await getItems(true)).map((item) => [item.id, item]));
   return uniqueItemIds.flatMap((itemId) => {
@@ -866,7 +981,7 @@ const getUserBidRecords = async (userId: string, actor: string) => {
     const auditsForItem = bidAudits.filter((row) => row.entity_id === itemId);
     if (!auditsForItem.length) return [];
     const latestAudit = auditsForItem[0];
-    const details = typeof latestAudit.details_json === "string" ? JSON.parse(latestAudit.details_json || "{}") : latestAudit.details_json || {};
+    const details = parseAuditDetails(latestAudit.details_json);
     const latestAmount = Number(details.amount || 0);
     const status = new Date(item.endTime).getTime() > Date.now()
       ? (item.currentBid === latestAmount ? "winning" : "outbid")
@@ -891,9 +1006,12 @@ const getRecentAudits = async (limit = 20) => {
       .from("audits")
       .select("id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at")
       .order("created_at", { ascending: false })
-      .limit(limit)
+      .limit(limit + 100)
   ) as AuditRow[];
-  return rows.map((row) => ({
+  return rows
+    .filter((row) => !securityTelemetryEvents.has(row.event_type))
+    .slice(0, limit)
+    .map((row) => ({
     id: row.id,
     eventType: row.event_type,
     entityType: row.entity_type,
@@ -929,11 +1047,13 @@ const getNotificationQueue = async (limit = 20) => {
 };
 
 const getPendingNotificationQueue = async () => {
+  const staleBefore = new Date(Date.now() - notificationClaimTtlMs).toISOString();
   const rows = handleSupabase(
     await supabase
       .from("notification_queue")
       .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,error_message")
       .eq("status", "pending")
+      .or(`processed_at.is.null,processed_at.lte.${staleBefore}`)
       .order("created_at", { ascending: true })
       .limit(10)
   ) as NotificationRow[];
@@ -949,6 +1069,22 @@ const getPendingNotificationQueue = async () => {
     processedAt: row.processed_at,
     errorMessage: row.error_message
   })) as NotificationQueueItem[];
+};
+
+const claimNotificationQueueEntry = async (entryId: string) => {
+  const claimTime = new Date().toISOString();
+  const staleBefore = new Date(Date.now() - notificationClaimTtlMs).toISOString();
+  const claimToken = `claim:${randomUUID()}`;
+  const result = await supabase
+    .from("notification_queue")
+    .update({ processed_at: claimTime, error_message: claimToken })
+    .eq("id", entryId)
+    .eq("status", "pending")
+    .or(`processed_at.is.null,processed_at.lte.${staleBefore}`)
+    .select("id")
+    .maybeSingle();
+  if (result.error) throw new Error(result.error.message);
+  return Boolean(result.data);
 };
 
 const escapeHtml = (value: unknown) =>
@@ -1064,24 +1200,27 @@ const processNotificationQueue = async () => {
   if (notificationProcessingInFlight) return 0;
   notificationProcessingInFlight = true;
   try {
-  const entries = await getPendingNotificationQueue();
-  for (const entry of entries) {
-    try {
-      await deliverNotification(entry);
-    } catch (error) {
-      await handleSupabase(
-        await supabase
-          .from("notification_queue")
-          .update({
-            status: "failed",
-            processed_at: new Date().toISOString(),
-            error_message: error instanceof Error ? error.message : "Notification processing failed."
-          })
-          .eq("id", entry.id)
-      );
+    const entries = await getPendingNotificationQueue();
+    let processed = 0;
+    for (const entry of entries) {
+      if (!(await claimNotificationQueueEntry(entry.id))) continue;
+      try {
+        await deliverNotification(entry);
+        processed += 1;
+      } catch (error) {
+        await handleSupabase(
+          await supabase
+            .from("notification_queue")
+            .update({
+              status: "failed",
+              processed_at: new Date().toISOString(),
+              error_message: error instanceof Error ? error.message : "Notification processing failed."
+            })
+            .eq("id", entry.id)
+        );
+      }
     }
-  }
-  return entries.length;
+    return processed;
   } finally {
     notificationProcessingInFlight = false;
   }
@@ -1169,6 +1308,27 @@ const parseCsv = (content: string) => {
 
 const normalizeImportKey = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
 
+const inspectImportArchive = async (zipPath: string) => {
+  const { stdout } = await execFileAsync("/usr/bin/unzip", ["-Z1", zipPath], { maxBuffer: 10 * 1024 * 1024 });
+  const entries = stdout
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .filter((entry) => !entry.endsWith("/"));
+  if (!entries.length) {
+    throw new Error("The ZIP bundle is empty.");
+  }
+  if (entries.length > maxImportArchiveEntries) {
+    throw new Error(`The ZIP bundle contains too many files. Maximum allowed is ${maxImportArchiveEntries}.`);
+  }
+  for (const entry of entries) {
+    const normalized = entry.replace(/\\/g, "/");
+    if (normalized.startsWith("/") || normalized.includes("../")) {
+      throw new Error(`The ZIP bundle contains an unsafe path: ${entry}`);
+    }
+  }
+};
+
 const getImportValue = (row: Record<string, string>, candidates: string[]) => {
   const normalized = Object.entries(row).reduce<Record<string, string>>((acc, [key, value]) => {
     acc[normalizeImportKey(key)] = value;
@@ -1189,12 +1349,22 @@ const splitImportList = (value: string) =>
 
 const collectImportFiles = (rootDir: string) => {
   const map = new Map<string, string>();
+  let totalBytes = 0;
+  let totalFiles = 0;
   const walk = (currentDir: string) => {
     for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
         walk(fullPath);
       } else {
+        totalFiles += 1;
+        if (totalFiles > maxImportArchiveEntries) {
+          throw new Error(`The ZIP bundle contains too many extracted files. Maximum allowed is ${maxImportArchiveEntries}.`);
+        }
+        totalBytes += fs.statSync(fullPath).size;
+        if (totalBytes > maxImportExtractedBytes) {
+          throw new Error(`The extracted ZIP bundle exceeds the ${Math.round(maxImportExtractedBytes / (1024 * 1024))} MB safety limit.`);
+        }
         map.set(entry.name.toLowerCase(), fullPath);
       }
     }
@@ -1311,19 +1481,8 @@ const validateBid = (item: StoredItem, amount: number) => {
   return { ok: true as const };
 };
 
-const checkBidRateLimit = (actor: string, itemId: string) => {
-  const now = Date.now();
-  const key = `${actor}:${itemId}`;
-  const existing = recentBidAttempts.get(key) || [];
-  const current = existing.filter((value) => now - value < bidRateWindowMs);
-  if (current.length >= bidRateLimit) {
-    recentBidAttempts.set(key, current);
-    return false;
-  }
-  current.push(now);
-  recentBidAttempts.set(key, current);
-  return true;
-};
+const checkBidRateLimit = async (req: express.Request, actor: string, itemId: string) =>
+  recordSharedRateLimitAttempt(req, "BID_ATTEMPT", `${actor}:${itemId}`, bidRateWindowMs, bidRateLimit, { itemId });
 
 const asyncHandler = (
   fn: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<void>
@@ -1440,7 +1599,7 @@ app.post("/api/auth/resend-verification", express.json({ limit: "64kb" }), async
     res.status(400).json({ error: "Email is required." });
     return;
   }
-  if (!checkAuthRateLimit(getClientKey(req, `resend:${email}`))) {
+  if (!(await checkAuthRateLimit(req, getClientKey(req, `resend:${email}`)))) {
     res.status(429).json({ error: "Too many verification attempts. Please wait and try again." });
     return;
   }
@@ -1471,7 +1630,7 @@ app.post("/api/auth/register", express.json({ limit: "128kb" }), asyncHandler(as
   const email = normalizeEmail(String(req.body?.email || ""));
   const password = String(req.body?.password || "");
   const displayName = sanitizeDisplayName(String(req.body?.displayName || ""));
-  if (!checkAuthRateLimit(getClientKey(req, `register:${email}`))) {
+  if (!(await checkAuthRateLimit(req, getClientKey(req, `register:${email}`)))) {
     res.status(429).json({ error: "Too many signup attempts. Please wait and try again." });
     return;
   }
@@ -1531,7 +1690,7 @@ app.post("/api/auth/register", express.json({ limit: "128kb" }), asyncHandler(as
 app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
   const email = normalizeEmail(String(req.body?.email || ""));
   const password = String(req.body?.password || "");
-  if (!checkAuthRateLimit(getClientKey(req, `login:${email}`))) {
+  if (!(await checkAuthRateLimit(req, getClientKey(req, `login:${email}`)))) {
     res.status(429).json({ error: "Too many sign-in attempts. Please wait and try again." });
     return;
   }
@@ -1550,7 +1709,7 @@ app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async
   }
   const lastLoginAt = new Date().toISOString();
   await handleSupabase(await supabase.from("users").update({ last_login_at: lastLoginAt }).eq("id", user.id));
-  await createUserSession(res, user.id);
+  const sessionRecord = await createUserSession(res, user.id);
   const roles = await getUserRoles(user.id);
   const role = normalizeRole(roles.map((row) => row.role_name));
   res.json({
@@ -1563,13 +1722,14 @@ app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async
       createdAt: user.created_at,
       lastLoginAt,
       role
-    }
+    },
+    csrfToken: buildCsrfToken(sessionRecord.sessionId)
   });
 }));
 
 app.post("/api/auth/verify-email", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
   const token = String(req.body?.token || "").trim();
-  if (!checkAuthRateLimit(getClientKey(req, `verify:${token.slice(0, 12)}`))) {
+  if (!(await checkAuthRateLimit(req, getClientKey(req, `verify:${token.slice(0, 12)}`)))) {
     res.status(429).json({ error: "Too many verification attempts. Please wait and try again." });
     return;
   }
@@ -1617,7 +1777,7 @@ app.post("/api/auth/verify-email", express.json({ limit: "64kb" }), asyncHandler
 
 app.post("/api/auth/request-password-reset", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
   const email = normalizeEmail(String(req.body?.email || ""));
-  if (!checkAuthRateLimit(getClientKey(req, `reset-request:${email}`))) {
+  if (!(await checkAuthRateLimit(req, getClientKey(req, `reset-request:${email}`)))) {
     res.status(429).json({ error: "Too many password reset requests. Please wait and try again." });
     return;
   }
@@ -1646,7 +1806,7 @@ app.post("/api/auth/request-password-reset", express.json({ limit: "64kb" }), as
 app.post("/api/auth/reset-password", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
   const token = String(req.body?.token || "").trim();
   const password = String(req.body?.password || "");
-  if (!checkAuthRateLimit(getClientKey(req, `reset:${token.slice(0, 12)}`))) {
+  if (!(await checkAuthRateLimit(req, getClientKey(req, `reset:${token.slice(0, 12)}`)))) {
     res.status(429).json({ error: "Too many password reset attempts. Please wait and try again." });
     return;
   }
@@ -1839,6 +1999,11 @@ app.get("/uploads/documents/:file", asyncHandler(async (req, res) => {
     res.status(404).json({ error: "Document not found." });
     return;
   }
+  const item = await getItemById(row.item_id, true);
+  if (!item || !canAccessItemDocuments(auth, item)) {
+    res.status(403).json({ error: "You do not have access to this document." });
+    return;
+  }
   const filePath = path.join(docsDir, fileName);
   if (!fs.existsSync(filePath)) {
     res.status(404).json({ error: "Document file not found." });
@@ -1854,7 +2019,8 @@ app.get("/api/items", asyncHandler(async (req, res) => {
     res.status(403).json({ error: "Admin role required." });
     return;
   }
-  res.json(await getItems(includeArchived));
+  const items = await getItems(includeArchived);
+  res.json(items.map((item) => sanitizeItemForAuth(item, auth)));
 }));
 
 app.get("/api/items/:id", asyncHandler(async (req, res) => {
@@ -1869,7 +2035,7 @@ app.get("/api/items/:id", asyncHandler(async (req, res) => {
     res.status(404).json({ error: "Item not found" });
     return;
   }
-  res.json(item);
+  res.json(sanitizeItemForAuth(item, auth));
 }));
 
 app.get("/api/categories", asyncHandler(async (req, res) => {
@@ -1997,13 +2163,11 @@ app.get("/api/me/wins", asyncHandler(async (req, res) => {
     return;
   }
   const itemsById = new Map((await getItems(true)).map((item) => [item.id, item]));
-  const bidAudits = handleSupabase(
-    await supabase.from("audits").select("entity_id,details_json").eq("event_type", "BID_PLACED").eq("actor", auth.actor).order("created_at", { ascending: false })
-  ) as Array<{ entity_id: string; details_json: Record<string, unknown> | string }>;
+  const bidAudits = await getBidAuditRowsForUser(auth.userId!, auth.actor);
   const wins = bidAudits.flatMap((row) => {
     const item = itemsById.get(row.entity_id);
     if (!item) return [];
-    const details = typeof row.details_json === "string" ? JSON.parse(row.details_json || "{}") : row.details_json || {};
+    const details = parseAuditDetails(row.details_json);
     const won = new Date(item.endTime).getTime() < Date.now() && item.currentBid > 0 && Number(details.amount || 0) === item.currentBid;
     return won ? [{ id: item.id, title: item.title, category: item.category, currentBid: item.currentBid, endTime: item.endTime }] : [];
   });
@@ -2053,6 +2217,7 @@ app.get("/api/admin/audits", requireAdminToken, asyncHandler(async (req, res) =>
   const eventType = String(req.query.eventType || "").trim();
   const actor = String(req.query.actor || "").trim();
   const entityType = String(req.query.entityType || "").trim();
+  const includeSecurity = String(req.query.includeSecurity || "") === "1";
   let request = supabase
     .from("audits")
     .select("id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at")
@@ -2064,7 +2229,8 @@ app.get("/api/admin/audits", requireAdminToken, asyncHandler(async (req, res) =>
   if (eventType) request = request.eq("event_type", eventType);
   if (actor) request = request.ilike("actor", `%${actor}%`);
   if (entityType) request = request.eq("entity_type", entityType);
-  res.json(handleSupabase(await request));
+  const rows = handleSupabase(await request) as AuditRow[];
+  res.json(includeSecurity ? rows : rows.filter((row) => !securityTelemetryEvents.has(row.event_type)));
 }));
 
 app.get("/api/admin/notifications", requireAdminToken, asyncHandler(async (req, res) => {
@@ -2160,6 +2326,12 @@ app.post("/api/admin/users/:id/disable", requireAdminToken, express.json({ limit
     res.status(404).json({ error: "User not found." });
     return;
   }
+  const targetRoles = (await getUserRoles(user.id)).map((row) => row.role_name);
+  const targetCheck = ensureCanManageTargetUser(auth, targetRoles);
+  if (!targetCheck.ok) {
+    res.status(403).json({ error: targetCheck.error });
+    return;
+  }
   if (user.status === "disabled") {
     res.json({ updated: true, message: `${user.display_name} is already disabled.` });
     return;
@@ -2184,6 +2356,7 @@ app.post("/api/admin/users/:id/disable", requireAdminToken, express.json({ limit
 
 app.post("/api/admin/users/:id/enable", requireAdminToken, asyncHandler(async (req, res) => {
   const userId = String(req.params.id || "").trim();
+  const auth = await getAuthContext(req);
   if (!userId) {
     res.status(400).json({ error: "User ID is required." });
     return;
@@ -2191,6 +2364,12 @@ app.post("/api/admin/users/:id/enable", requireAdminToken, asyncHandler(async (r
   const user = await getUserByIdWithPassword(userId);
   if (!user) {
     res.status(404).json({ error: "User not found." });
+    return;
+  }
+  const targetRoles = (await getUserRoles(user.id)).map((row) => row.role_name);
+  const targetCheck = ensureCanManageTargetUser(auth, targetRoles);
+  if (!targetCheck.ok) {
+    res.status(403).json({ error: targetCheck.error });
     return;
   }
   if (user.status === "active") {
@@ -2203,7 +2382,6 @@ app.post("/api/admin/users/:id/enable", requireAdminToken, asyncHandler(async (r
       .update({ status: "active" })
       .eq("id", user.id)
   );
-  const auth = await getAuthContext(req);
   await appendAudit(req, {
     eventType: "USER_ENABLED",
     entityType: "user",
@@ -2222,6 +2400,12 @@ app.post("/api/admin/users/:id/password-reset", requireAdminToken, asyncHandler(
     return;
   }
   const auth = await getAuthContext(req);
+  const targetRoles = (await getUserRoles(user.id)).map((row) => row.role_name);
+  const targetCheck = ensureCanManageTargetUser(auth, targetRoles);
+  if (!targetCheck.ok) {
+    res.status(403).json({ error: targetCheck.error });
+    return;
+  }
   await queuePasswordReset(user, auth.actor);
   await appendAudit(req, {
     eventType: "PASSWORD_RESET_FORCED",
@@ -2238,17 +2422,17 @@ app.post("/api/admin/users/password-resets", requireAdminToken, express.json({ l
   const scope = String(req.body?.scope || "selected");
   const role = String(req.body?.role || "").trim();
   const selectedIds = Array.isArray(req.body?.userIds) ? req.body.userIds.map((value: unknown) => String(value).trim()).filter(Boolean) : [];
+  const auth = await getAuthContext(req);
   const users = (await listUsersWithRoles()).filter((user) => user.status === "active");
   const targets = users.filter((user) => {
     if (scope === "all") return true;
     if (scope === "role") return role ? user.roles.includes(role) : false;
     return selectedIds.includes(user.id);
-  });
+  }).filter((user) => auth.role === "SuperAdmin" || !user.roles.includes("SuperAdmin"));
   if (!targets.length) {
     res.status(400).json({ error: "No users matched the selected bulk reset criteria." });
     return;
   }
-  const auth = await getAuthContext(req);
   for (const target of targets) {
     await queuePasswordReset({
       id: target.id,
@@ -2391,6 +2575,7 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
 
     let extractedFiles = new Map<string, string>();
     if (zipFile) {
+      await inspectImportArchive(zipFile.path);
       await execFileAsync("/usr/bin/unzip", ["-oq", zipFile.path, "-d", tempExtractDir]);
       extractedFiles = collectImportFiles(tempExtractDir);
     }
@@ -2625,7 +2810,7 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
   }
   const actor = auth.actor;
   const idempotencyKey = String(req.header("x-idempotency-key") || "");
-  if (!checkBidRateLimit(actor, req.params.id)) {
+  if (!(await checkBidRateLimit(req, actor, req.params.id))) {
     res.status(429).json({ error: "Too many bid attempts. Please wait and try again." });
     return;
   }
@@ -2669,7 +2854,7 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
     entityId: item.id,
     actor,
     actorType: auth.actorType,
-    details: { amount, bidSequence, auctionItemId: item.id }
+    details: { amount, bidSequence, auctionItemId: item.id, bidderUserId: auth.userId || "" }
   });
   await queueNotification("BID_PLACED", `Bid accepted for ${item.title}`, { itemId: item.id, amount, bidSequence });
   res.json(await getItemById(item.id));
