@@ -1,6 +1,11 @@
 import { createHmac } from "crypto";
 
 export type DocumentVisibility = "bidder_visible" | "admin_only" | "winner_only";
+export type NotificationMeta = {
+  attempts: number;
+  nextAttemptAt?: string;
+  lastError?: string;
+};
 
 export type DocumentAccessContext = {
   signedIn: boolean;
@@ -115,4 +120,31 @@ export const validateArchiveEntries = (entries: string[], maxEntries: number) =>
       throw new Error(`The ZIP bundle contains an unsafe path: ${entry}`);
     }
   }
+};
+
+export const buildNotificationMeta = (
+  current: Partial<NotificationMeta> | null | undefined,
+  errorMessage: string,
+  now: Date,
+  maxAttempts: number
+) => {
+  const attempts = Number(current?.attempts || 0) + 1;
+  const retryDelayMs = Math.min(30 * 60_000, Math.max(60_000, attempts * 60_000));
+  const exhausted = attempts >= maxAttempts;
+  return {
+    exhausted,
+    nextStatus: exhausted ? "failed" as const : "pending" as const,
+    meta: {
+      attempts,
+      lastError: errorMessage,
+      nextAttemptAt: exhausted ? undefined : new Date(now.getTime() + retryDelayMs).toISOString()
+    }
+  };
+};
+
+export const shouldProcessNotificationNow = (current: Partial<NotificationMeta> | null | undefined, now: Date) => {
+  if (!current?.nextAttemptAt) return true;
+  const nextAttemptAtMs = Date.parse(current.nextAttemptAt);
+  if (Number.isNaN(nextAttemptAtMs)) return true;
+  return nextAttemptAtMs <= now.getTime();
 };

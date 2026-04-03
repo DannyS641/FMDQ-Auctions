@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildNotificationMeta,
   buildCsrfTokenValue,
   canAccessDocumentVisibility,
   encodeDocumentNameWithVisibility,
   ensureCanManageTargetRoles,
   parseDocumentNameWithVisibility,
+  shouldProcessNotificationNow,
   validateArchiveEntries,
   validateBidAmount,
   validateMalwareScanConfiguration
@@ -98,4 +100,16 @@ test("archive validation rejects unsafe or oversized bundles", () => {
   assert.throws(() => validateArchiveEntries(["../escape.txt"], 10), /unsafe path/i);
   assert.throws(() => validateArchiveEntries(Array.from({ length: 12 }, (_, index) => `file-${index}.txt`), 10), /too many files/i);
   assert.doesNotThrow(() => validateArchiveEntries(["docs/file.pdf", "images/photo.jpg"], 10));
+});
+
+test("notification retry metadata backs off and eventually exhausts", () => {
+  const first = buildNotificationMeta({}, "SMTP timed out", new Date("2026-04-02T10:00:00.000Z"), 3);
+  assert.equal(first.nextStatus, "pending");
+  assert.equal(first.meta.attempts, 1);
+  assert.equal(shouldProcessNotificationNow(first.meta, new Date("2026-04-02T10:00:30.000Z")), false);
+  assert.equal(shouldProcessNotificationNow(first.meta, new Date("2026-04-02T10:01:00.000Z")), true);
+
+  const final = buildNotificationMeta({ attempts: 2 }, "Still failing", new Date("2026-04-02T10:00:00.000Z"), 3);
+  assert.equal(final.exhausted, true);
+  assert.equal(final.nextStatus, "failed");
 });

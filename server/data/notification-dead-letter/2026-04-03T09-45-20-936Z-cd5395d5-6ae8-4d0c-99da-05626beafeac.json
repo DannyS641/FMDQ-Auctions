@@ -1,0 +1,15 @@
+{
+  "id": "cd5395d5-6ae8-4d0c-99da-05626beafeac",
+  "eventType": "ITEM_UPDATED",
+  "recipient": "operations@fmdq.example",
+  "subject": "Auction item updated: Toyota Corolla 2018",
+  "payload": {
+    "_meta": {
+      "attempts": 5,
+      "lastError": "Can't send mail - all recipients were rejected: 501 5.1.4 Recipient address reserved by RFC 2606"
+    },
+    "title": "Toyota Corolla 2018",
+    "itemId": "bbe0162d-6bba-4a10-819b-5fd9d35f1384"
+  },
+  "errorMessage": "Can't send mail - all recipients were rejected: 501 5.1.4 Recipient address reserved by RFC 2606"
+}

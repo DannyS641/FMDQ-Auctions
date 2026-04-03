@@ -11,10 +11,12 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import {
   buildCsrfTokenValue,
+  buildNotificationMeta,
   canAccessDocumentVisibility,
   encodeDocumentNameWithVisibility,
   ensureCanManageTargetRoles,
   parseDocumentNameWithVisibility,
+  shouldProcessNotificationNow,
   type DocumentVisibility,
   validateArchiveEntries,
   validateBidAmount,
@@ -52,6 +54,7 @@ const notificationRecipient = process.env.NOTIFY_TO || "operations@fmdq.example"
 const notificationTransport = (process.env.NOTIFY_TRANSPORT || "file").toLowerCase();
 const notificationPollMs = Math.max(Number(process.env.NOTIFY_POLL_MS || 5000), 1000);
 const notificationWorkerMode = (process.env.NOTIFICATION_WORKER_MODE || "both").toLowerCase();
+const notificationMaxAttempts = Math.max(Number(process.env.NOTIFICATION_MAX_ATTEMPTS || 5), 1);
 const smtpHost = process.env.SMTP_HOST || "";
 const smtpPort = Number(process.env.SMTP_PORT || 587);
 const smtpUser = process.env.SMTP_USER || "";
@@ -71,9 +74,14 @@ const maxImportExtractedBytes = 100 * 1024 * 1024;
 const notificationClaimTtlMs = 10 * 60_000;
 const imageBucket = process.env.SUPABASE_IMAGE_BUCKET || "auction-images";
 const documentBucket = process.env.SUPABASE_DOCUMENT_BUCKET || "auction-documents";
-const imageAccessPolicy = (process.env.IMAGE_ACCESS_POLICY || "public").toLowerCase();
+const imageAccessPolicy = (process.env.IMAGE_ACCESS_POLICY || "bidder_visible").toLowerCase();
 const malwareScanMode = (process.env.MALWARE_SCAN_MODE || "off").toLowerCase();
 const malwareScanCommand = process.env.MALWARE_SCAN_COMMAND || "";
+const opsAlertWebhookUrl = process.env.OPS_ALERT_WEBHOOK_URL || "";
+const tempUploadRetentionHours = Math.max(Number(process.env.TEMP_UPLOAD_RETENTION_HOURS || 24), 1);
+const outboxRetentionDays = Math.max(Number(process.env.OUTBOX_RETENTION_DAYS || 30), 1);
+const deadLetterRetentionDays = Math.max(Number(process.env.DEAD_LETTER_RETENTION_DAYS || 30), 1);
+const quarantineRetentionDays = Math.max(Number(process.env.QUARANTINE_RETENTION_DAYS || 14), 1);
 const allowedOrigins = new Set(
   (process.env.CORS_ORIGINS || [appBaseUrl, "http://localhost:5173", "http://127.0.0.1:5173"].join(","))
     .split(",")
@@ -103,6 +111,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
 
 const dataDir = path.join(__dirname, "data");
 const outboxDir = path.join(dataDir, "notification-outbox");
+const deadLetterDir = path.join(dataDir, "notification-dead-letter");
 const importsDir = path.join(dataDir, "imports");
 const uploadsDir = path.join(__dirname, "uploads");
 const tempUploadsDir = path.join(uploadsDir, "temp");
@@ -111,7 +120,7 @@ const imagesDir = path.join(uploadsDir, "images");
 const docsDir = path.join(uploadsDir, "documents");
 const execFileAsync = promisify(execFile);
 
-[dataDir, outboxDir, importsDir, uploadsDir, tempUploadsDir, quarantineDir, imagesDir, docsDir].forEach((dir) => {
+[dataDir, outboxDir, deadLetterDir, importsDir, uploadsDir, tempUploadsDir, quarantineDir, imagesDir, docsDir].forEach((dir) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -547,6 +556,10 @@ const runMalwareScan = async (filePath: string) => {
     }
     return quarantinePath;
   } catch (error) {
+    await sendOpsAlert("Malware scan failed", {
+      filePath: path.basename(filePath),
+      message: error instanceof Error ? error.message : "Malware scan failed."
+    });
     throw new Error(error instanceof Error ? `Malware scan failed: ${error.message}` : "Malware scan failed.");
   }
 };
@@ -609,10 +622,6 @@ const ensureStorageBuckets = async () => {
 const detectSecurityEventsTable = async () => {
   const result = await supabase.from("security_events").select("id").limit(1);
   if (result.error) {
-    if (isMissingSecurityEventsTableError(new Error(result.error.message))) {
-      securityEventsTableAvailable = false;
-      return;
-    }
     throw new Error(result.error.message);
   }
   securityEventsTableAvailable = true;
@@ -672,54 +681,41 @@ const recordSharedRateLimitAttempt = async (
   limit: number,
   details: Record<string, string | number | boolean> = {}
 ) => {
+  if (!securityEventsTableAvailable) {
+    throw new Error("security_events table is required for rate-limit telemetry. Run docs/security-events.sql in Supabase.");
+  }
   const now = Date.now();
   const windowStartMs = Math.floor(now / windowMs) * windowMs;
   const createdAt = new Date(now).toISOString();
   for (let slot = 0; slot < limit; slot += 1) {
     const id = buildRateLimitSlotId(eventType, actor, windowStartMs, slot);
-    let result;
-    if (securityEventsTableAvailable) {
-      result = await supabase.from("security_events").insert({
-        id,
-        event_type: eventType,
-        actor,
-        request_id: String((req as express.Request & { requestId?: string }).requestId || ""),
-        details_json: {
-          path: req.path,
-          method: req.method,
-          windowStart: new Date(windowStartMs).toISOString(),
-          slot,
-          ...details
-        },
-        created_at: createdAt
-      });
-      if (result.error && isMissingSecurityEventsTableError(new Error(result.error.message))) {
-        securityEventsTableAvailable = false;
-      }
-    }
-    if (!securityEventsTableAvailable) {
-      result = await supabase.from("audits").insert({
-        id,
-        event_type: eventType,
-        entity_type: "system",
-        entity_id: actor,
-        actor,
-        actor_type: "system",
-        request_id: String((req as express.Request & { requestId?: string }).requestId || ""),
-        details_json: {
-          path: req.path,
-          method: req.method,
-          windowStart: new Date(windowStartMs).toISOString(),
-          slot,
-          ...details
-        },
-        created_at: createdAt
-      });
-    }
+    const result = await supabase.from("security_events").insert({
+      id,
+      event_type: eventType,
+      actor,
+      request_id: String((req as express.Request & { requestId?: string }).requestId || ""),
+      details_json: {
+        path: req.path,
+        method: req.method,
+        windowStart: new Date(windowStartMs).toISOString(),
+        slot,
+        ...details
+      },
+      created_at: createdAt
+    });
     if (!result.error) return true;
     const duplicate = result.error.message.toLowerCase().includes("duplicate key");
     if (!duplicate) throw new Error(result.error.message);
   }
+  await sendOpsAlert("Rate limit threshold reached", {
+    eventType,
+    actor,
+    path: req.path,
+    method: req.method,
+    limit,
+    windowMs,
+    ...details
+  });
   return false;
 };
 
@@ -743,6 +739,43 @@ const reportServerError = async (req: express.Request, error: unknown) => {
   } catch {
     // Ignore error-reporting failures.
   }
+};
+
+const sendOpsAlert = async (title: string, details: Record<string, unknown>) => {
+  if (!opsAlertWebhookUrl) return;
+  try {
+    await fetch(opsAlertWebhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        occurredAt: new Date().toISOString(),
+        details
+      })
+    });
+  } catch {
+    // Ignore monitoring delivery failures.
+  }
+};
+
+const pruneFilesOlderThan = (directory: string, maxAgeMs: number) => {
+  if (!fs.existsSync(directory)) return;
+  const cutoff = Date.now() - maxAgeMs;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const fullPath = path.join(directory, entry.name);
+    const stats = fs.statSync(fullPath);
+    if (stats.mtimeMs <= cutoff) {
+      fs.unlinkSync(fullPath);
+    }
+  }
+};
+
+const pruneOperationalFiles = () => {
+  pruneFilesOlderThan(tempUploadsDir, tempUploadRetentionHours * 60 * 60 * 1000);
+  pruneFilesOlderThan(outboxDir, outboxRetentionDays * 24 * 60 * 60 * 1000);
+  pruneFilesOlderThan(deadLetterDir, deadLetterRetentionDays * 24 * 60 * 60 * 1000);
+  pruneFilesOlderThan(quarantineDir, quarantineRetentionDays * 24 * 60 * 60 * 1000);
 };
 
 const getUserByEmail = async (email: string) =>
@@ -905,6 +938,47 @@ const queuePasswordReset = async (user: UserRow & { password_hash?: string }, tr
     user.email
   );
   return reset;
+};
+
+const queueBidActivityNotifications = async (
+  item: StoredItem,
+  bidder: { userId?: string; email?: string; displayName: string },
+  amount: number,
+  previousLeader?: StoredBid
+) => {
+  if (bidder.email) {
+    await queueNotification(
+      "BID_PLACED",
+      `Your bid was placed for ${item.title}`,
+      {
+        itemId: item.id,
+        title: item.title,
+        amount,
+        currentBid: amount,
+        displayName: bidder.displayName,
+        itemUrl: `${appBaseUrl}/item.html?id=${encodeURIComponent(item.id)}`
+      },
+      bidder.email
+    );
+  }
+
+  if (!previousLeader?.bidderUserId || previousLeader.bidderUserId === bidder.userId) return;
+  const previousLeaderUser = await getUserById(previousLeader.bidderUserId);
+  if (!previousLeaderUser?.email) return;
+
+  await queueNotification(
+    "OUTBID_ALERT",
+    `You were outbid on ${item.title}`,
+    {
+      itemId: item.id,
+      title: item.title,
+      previousBid: previousLeader.amount,
+      currentBid: amount,
+      displayName: previousLeaderUser.display_name,
+      itemUrl: `${appBaseUrl}/item.html?id=${encodeURIComponent(item.id)}`
+    },
+    previousLeaderUser.email
+  );
 };
 
 const getAuthContext = async (req: express.Request): Promise<AuthContext> => {
@@ -1295,6 +1369,7 @@ const getNotificationQueue = async (limit = 20) => {
 };
 
 const getPendingNotificationQueue = async () => {
+  const now = new Date();
   let rows: NotificationRow[];
   if (notificationQueueSupportsProcessedAt) {
     const staleBefore = new Date(Date.now() - notificationClaimTtlMs).toISOString();
@@ -1341,7 +1416,7 @@ const getPendingNotificationQueue = async () => {
     createdAt: row.created_at,
     processedAt: row.processed_at,
     errorMessage: row.error_message
-  })) as NotificationQueueItem[];
+  })).filter((row) => shouldProcessNotificationNow(((row.payload as Record<string, unknown>)._meta as Record<string, unknown> | undefined), now)) as NotificationQueueItem[];
 };
 
 const claimNotificationQueueEntry = async (entryId: string) => {
@@ -1376,14 +1451,15 @@ const claimNotificationQueueEntry = async (entryId: string) => {
 
 const updateNotificationOutcome = async (
   entryId: string,
-  status: "sent" | "failed",
+  status: "pending" | "sent" | "failed",
   errorMessage: string | null,
-  processedAt = new Date().toISOString()
+  processedAt = new Date().toISOString(),
+  payloadOverride?: Record<string, unknown>
 ) => {
   if (notificationQueueSupportsProcessedAt) {
     const result = await supabase
       .from("notification_queue")
-      .update({ status, processed_at: processedAt, error_message: errorMessage })
+      .update({ status, processed_at: processedAt, error_message: errorMessage, ...(payloadOverride ? { payload_json: payloadOverride } : {}) })
       .eq("id", entryId);
     if (!result.error) return;
     if (!isMissingProcessedAtColumnError(new Error(result.error.message))) {
@@ -1394,7 +1470,7 @@ const updateNotificationOutcome = async (
   await handleSupabase(
     await supabase
       .from("notification_queue")
-      .update({ status, error_message: errorMessage })
+      .update({ status, error_message: errorMessage, ...(payloadOverride ? { payload_json: payloadOverride } : {}) })
       .eq("id", entryId)
   );
 };
@@ -1450,6 +1526,42 @@ const renderNotificationContent = (entry: NotificationQueueItem) => {
           <p>Use the link below to reset your FMDQ Auctions password:</p>
           <p><a href="${escapeHtml(resetUrl)}">${escapeHtml(resetUrl)}</a></p>
           <p>This link expires in 1 hour.</p>
+        </div>
+      `
+    };
+  }
+
+  if (entry.eventType === "BID_PLACED") {
+    const displayName = escapeHtml(entry.payload.displayName || "there");
+    const title = escapeHtml(entry.payload.title || "this auction item");
+    const currentBid = escapeHtml(entry.payload.currentBid || entry.payload.amount || "");
+    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding.html`);
+    return {
+      text: `Hello ${displayName},\n\nYour bid of ${currentBid} was placed successfully for ${title}.\n\nView the item here:\n${itemUrl}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
+          <p>Hello ${displayName},</p>
+          <p>Your bid of <strong>${currentBid}</strong> was placed successfully for <strong>${title}</strong>.</p>
+          <p>View the item here: <a href="${escapeHtml(itemUrl)}">${escapeHtml(itemUrl)}</a></p>
+        </div>
+      `
+    };
+  }
+
+  if (entry.eventType === "OUTBID_ALERT") {
+    const displayName = escapeHtml(entry.payload.displayName || "there");
+    const title = escapeHtml(entry.payload.title || "this auction item");
+    const previousBid = escapeHtml(entry.payload.previousBid || "");
+    const currentBid = escapeHtml(entry.payload.currentBid || "");
+    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding.html`);
+    return {
+      text: `Hello ${displayName},\n\nYou were outbid on ${title}.\nYour previous bid: ${previousBid}\nCurrent bid: ${currentBid}\n\nOpen the item to place a new bid:\n${itemUrl}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
+          <p>Hello ${displayName},</p>
+          <p>You were outbid on <strong>${title}</strong>.</p>
+          <p>Your previous bid: <strong>${previousBid}</strong><br />Current bid: <strong>${currentBid}</strong></p>
+          <p>Open the item to place a new bid: <a href="${escapeHtml(itemUrl)}">${escapeHtml(itemUrl)}</a></p>
         </div>
       `
     };
@@ -1514,11 +1626,38 @@ const processNotificationQueue = async () => {
         await deliverNotification(entry);
         processed += 1;
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Notification processing failed.";
+        const now = new Date();
+        const currentMeta = ((entry.payload as Record<string, unknown>)._meta || {}) as Record<string, unknown>;
+        const retry = buildNotificationMeta(currentMeta, errorMessage, now, notificationMaxAttempts);
+        const payloadWithMeta = {
+          ...(entry.payload || {}),
+          _meta: retry.meta
+        };
+        if (retry.nextStatus === "failed") {
+          const deadLetterPath = path.join(deadLetterDir, `${now.toISOString().replace(/[:.]/g, "-")}-${entry.id}.json`);
+          fs.writeFileSync(deadLetterPath, JSON.stringify({
+            id: entry.id,
+            eventType: entry.eventType,
+            recipient: entry.recipient,
+            subject: entry.subject,
+            payload: payloadWithMeta,
+            errorMessage
+          }, null, 2));
+          await sendOpsAlert("Notification moved to dead letter", {
+            entryId: entry.id,
+            eventType: entry.eventType,
+            recipient: entry.recipient,
+            errorMessage,
+            attempts: retry.meta.attempts
+          });
+        }
         await updateNotificationOutcome(
           entry.id,
-          "failed",
-          error instanceof Error ? error.message : "Notification processing failed.",
-          new Date().toISOString()
+          retry.nextStatus,
+          errorMessage,
+          now.toISOString(),
+          payloadWithMeta
         );
       }
     }
@@ -1533,9 +1672,21 @@ const shouldRunNotificationWorker = notificationWorkerMode === "worker" || notif
 
 const startNotificationWorkerLoop = async () => {
   if (!shouldRunNotificationWorker) return;
-  await processNotificationQueue();
+  try {
+    await processNotificationQueue();
+  } catch (error) {
+    await sendOpsAlert("Notification worker startup failure", {
+      errorMessage: error instanceof Error ? error.message : "Unknown notification worker error."
+    });
+    throw error;
+  }
   setInterval(() => {
-    void processNotificationQueue().catch((error) => console.error("Notification processing failed.", error));
+    void processNotificationQueue().catch(async (error) => {
+      console.error("Notification processing failed.", error);
+      await sendOpsAlert("Notification processing failed", {
+        errorMessage: error instanceof Error ? error.message : "Unknown notification processing error."
+      });
+    });
   }, notificationPollMs);
 };
 
@@ -1679,8 +1830,8 @@ const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const documentExtensions = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx"]);
 const normalizeDocumentVisibility = (value: string | undefined): DocumentVisibility => {
   const normalized = (value || "").trim().toLowerCase();
-  if (normalized === "admin_only" || normalized === "winner_only") return normalized;
-  return "bidder_visible";
+  if (normalized === "bidder_visible" || normalized === "winner_only") return normalized;
+  return "admin_only";
 };
 
 const prepareManagedFile = async (
@@ -3061,7 +3212,7 @@ app.post("/api/items", requireAdminToken, upload.fields([{ name: "images", maxCo
   const images = files?.images || [];
   const documents = files?.documents || [];
   const auth = await getAuthContext(req);
-  const documentVisibility = normalizeDocumentVisibility(String(req.body.documentVisibility || "bidder_visible"));
+  const documentVisibility = normalizeDocumentVisibility(String(req.body.documentVisibility || "admin_only"));
   const preparedImages = await Promise.all(images.map((image) => prepareUploadedMulterFile(image, "image")));
   const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document", documentVisibility)));
   const itemId = await createItemRecord(req, validation.value, auth, {
@@ -3086,7 +3237,7 @@ app.patch("/api/items/:id", requireAdminToken, upload.fields([{ name: "images", 
   const images = files?.images || [];
   const documents = files?.documents || [];
   const auth = await getAuthContext(req);
-  const documentVisibility = normalizeDocumentVisibility(String(req.body.documentVisibility || "bidder_visible"));
+  const documentVisibility = normalizeDocumentVisibility(String(req.body.documentVisibility || "admin_only"));
   const preparedImages = await Promise.all(images.map((image) => prepareUploadedMulterFile(image, "image")));
   const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document", documentVisibility)));
 
@@ -3217,6 +3368,10 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
     res.status(400).json({ error: validation.error });
     return;
   }
+  const previousLeader = item.currentBid > 0
+    ? item.bids.find((bid) => bid.amount === item.currentBid && Boolean(bid.bidderUserId))
+    : undefined;
+  const biddingUser = auth.userId ? await getUserById(auth.userId) : null;
   const bidRows = handleSupabase(await supabase.from("bids").select("id").eq("item_id", item.id)) as Array<{ id: string }>;
   const bidSequence = bidRows.length + 1;
   const bidAlias = `Bidder-${String(bidSequence).padStart(3, "0")}`;
@@ -3239,7 +3394,16 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
     actorType: auth.actorType,
     details: { amount, bidSequence, auctionItemId: item.id, bidderUserId: auth.userId || "" }
   });
-  await queueNotification("BID_PLACED", `Bid accepted for ${item.title}`, { itemId: item.id, amount, bidSequence });
+  await queueBidActivityNotifications(
+    item,
+    {
+      userId: auth.userId,
+      email: biddingUser?.email,
+      displayName: biddingUser?.display_name || actor
+    },
+    amount,
+    previousLeader
+  );
   res.json(await getItemById(item.id));
 }));
 
@@ -3253,6 +3417,7 @@ const start = async () => {
   await handleSupabase(await supabase.from("roles").select("name").limit(1));
   await detectSecurityEventsTable();
   await ensureStorageBuckets();
+  pruneOperationalFiles();
   await seedRoles();
   await seedCategoriesIfEmpty();
   await seedItemsIfEmpty();
@@ -3269,9 +3434,6 @@ const start = async () => {
   if (!shouldRunApiServer) {
     console.log(`Notification worker running in ${notificationWorkerMode} mode.`);
     console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
-    if (!securityEventsTableAvailable) {
-      console.warn("security_events table not found; falling back to audits for rate-limit telemetry.");
-    }
     return;
   }
   app.listen(port, () => {
@@ -3279,9 +3441,6 @@ const start = async () => {
     console.log("Storage backend: supabase-js");
     console.log(`Notification worker mode: ${notificationWorkerMode}`);
     console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
-    if (!securityEventsTableAvailable) {
-      console.warn("security_events table not found; falling back to audits for rate-limit telemetry.");
-    }
   });
 };
 

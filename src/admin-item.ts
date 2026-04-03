@@ -45,8 +45,8 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5174
 const defaultCategories = ["Cars", "Furniture", "Household Appliances", "Kitchen Appliances", "Phones", "Other"];
 const conditions = ["New", "Used", "Fair", "Damaged"];
 const documentVisibilityOptions = [
-  { value: "bidder_visible", label: "Bidders during active auction" },
   { value: "admin_only", label: "Admins only" },
+  { value: "bidder_visible", label: "Bidders during active auction" },
   { value: "winner_only", label: "Winner after close" }
 ] as const;
 const itemsPerPage = 10;
@@ -622,7 +622,7 @@ const bindManagerEvents = () => {
   document.querySelector<HTMLButtonElement>("#download-import-template")?.addEventListener("click", () => {
     const template = [
       "title,category,lot,sku,condition,location,start_bid,reserve,increment,start_time,end_time,description,image_1,image_2,document_1,document_1_visibility",
-      "\"Toyota Corolla 2015\",Cars,CAR-501,FMDQ-CAR-501,Used,Lagos Warehouse,1000000,1200000,50000,2026-04-01T10:00,2026-04-01T18:00,\"Well-maintained sedan\",toyota-front.jpg,toyota-side.jpg,inspection-report.pdf,bidder_visible"
+      "\"Toyota Corolla 2015\",Cars,CAR-501,FMDQ-CAR-501,Used,Lagos Warehouse,1000000,1200000,50000,2026-04-01T10:00,2026-04-01T18:00,\"Well-maintained sedan\",toyota-front.jpg,toyota-side.jpg,inspection-report.pdf,admin_only"
     ].join("\n");
     const blob = new Blob([template], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -810,7 +810,7 @@ const bindManagerEvents = () => {
     const description = (document.querySelector<HTMLTextAreaElement>("#admin-description")?.value || "").trim();
     const imagesInput = document.querySelector<HTMLInputElement>("#admin-images");
     const documentsInput = document.querySelector<HTMLInputElement>("#admin-documents");
-    const documentVisibility = document.querySelector<HTMLSelectElement>("#admin-document-visibility")?.value || "bidder_visible";
+    const documentVisibility = document.querySelector<HTMLSelectElement>("#admin-document-visibility")?.value || "admin_only";
 
     if (!title || !sku || !lot || !location || !startTime || !endTime || !startBid || !increment) {
       feedback.textContent = "Please complete all required fields.";
