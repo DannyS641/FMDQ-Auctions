@@ -342,7 +342,8 @@ on conflict (name) do nothing;
 insert into public.schema_migrations (version)
 values
   ('0001_bid_queue_hardening'),
-  ('0002_metadata_rls_hardening')
+  ('0002_metadata_rls_hardening'),
+  ('0003_notification_queue_claim_columns')
 on conflict (version) do nothing;
 
 commit;

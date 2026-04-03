@@ -93,7 +93,11 @@ const allowedOrigins = new Set(
 const errorWebhookUrl = process.env.ERROR_WEBHOOK_URL || "";
 const securityTelemetryEvents = new Set(["AUTH_ATTEMPT", "BID_ATTEMPT"]);
 let securityEventsTableAvailable = true;
-const requiredSchemaMigrations = ["0001_bid_queue_hardening", "0002_metadata_rls_hardening"];
+const requiredSchemaMigrations = [
+  "0001_bid_queue_hardening",
+  "0002_metadata_rls_hardening",
+  "0003_notification_queue_claim_columns"
+];
 
 if (!supabaseUrl || !supabaseServiceRoleKey || !tokenSigningSecret) {
   throw new Error("SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY, and APP_SECRET are required for the backend.");
@@ -1481,11 +1485,11 @@ const getPendingNotificationQueue = async () => {
   return rows.map(mapNotificationRow);
 };
 
-const claimNotificationQueueEntry = async (entryId: string) => {
+const claimNotificationQueueEntry = async (entry: NotificationQueueItem) => {
   const claimTime = new Date().toISOString();
   const claimToken = `claim:${randomUUID()}`;
   const claimExpiresAt = new Date(Date.now() + notificationClaimTtlMs).toISOString();
-  const result = await supabase
+  let request = supabase
     .from("notification_queue")
     .update({
       claim_token: claimToken,
@@ -1493,10 +1497,11 @@ const claimNotificationQueueEntry = async (entryId: string) => {
       processed_at: claimTime,
       error_message: null
     })
-    .eq("id", entryId)
+    .eq("id", entry.id)
     .eq("status", "pending")
-    .lte("next_attempt_at", claimTime)
-    .or(`claim_expires_at.is.null,claim_expires_at.lte.${claimTime}`)
+    .lte("next_attempt_at", claimTime);
+  request = entry.claimToken ? request.eq("claim_token", entry.claimToken) : request.is("claim_token", null);
+  const result = await request
     .select("id,claim_token")
     .maybeSingle();
   if (result.error) throw new Error(result.error.message);
@@ -1688,7 +1693,7 @@ const processNotificationQueue = async () => {
     const entries = await getPendingNotificationQueue();
     let processed = 0;
     for (const entry of entries) {
-      const claimToken = await claimNotificationQueueEntry(entry.id);
+      const claimToken = await claimNotificationQueueEntry(entry);
       if (!claimToken) continue;
       try {
         await deliverNotification(entry, claimToken);

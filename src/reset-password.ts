@@ -1,5 +1,6 @@
 import "./styles.css";
 import { requestPasswordReset, resetPassword } from "./auth";
+import { bindPasswordVisibilityToggle } from "./password-visibility";
 
 const revealApp = () => {
   window.requestAnimationFrame(() => {
@@ -27,8 +28,14 @@ const renderPage = () => {
             <p class="mt-4 text-sm text-slate">${isResetMode ? "Choose a new password for your account." : "Enter your account email and we’ll send you a password reset link."}</p>
             <form id="reset-form" class="mt-8 grid gap-3">
               ${isResetMode ? `
-                <input id="reset-password" type="password" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="New password (8+ chars, upper, lower, number, symbol)" />
-                <input id="reset-password-confirm" type="password" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Confirm new password" />
+                <div class="flex items-center gap-2 rounded-2xl border border-ink/10 bg-white px-4 py-3">
+                  <input id="reset-password" type="password" class="w-full bg-transparent text-sm outline-none" placeholder="New password (8+ chars, upper, lower, number, symbol)" />
+                  <button id="reset-password-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show new password"></button>
+                </div>
+                <div class="flex items-center gap-2 rounded-2xl border border-ink/10 bg-white px-4 py-3">
+                  <input id="reset-password-confirm" type="password" class="w-full bg-transparent text-sm outline-none" placeholder="Confirm new password" />
+                  <button id="reset-password-confirm-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show confirm new password"></button>
+                </div>
               ` : `
                 <input id="reset-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
               `}
@@ -47,6 +54,8 @@ const bindEvents = () => {
   const note = document.querySelector<HTMLParagraphElement>("#reset-note");
   const token = getToken();
   const isResetMode = Boolean(token);
+  bindPasswordVisibilityToggle("reset-password", "reset-password-toggle");
+  bindPasswordVisibilityToggle("reset-password-confirm", "reset-password-confirm-toggle");
 
   form?.addEventListener("submit", async (event) => {
     event.preventDefault();

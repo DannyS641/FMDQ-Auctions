@@ -17,3 +17,4 @@ Applied versions are tracked in `public.schema_migrations`, and the backend refu
 Current migrations:
 - `0001_bid_queue_hardening.sql`
 - `0002_metadata_rls_hardening.sql`
+- `0003_notification_queue_claim_columns.sql`

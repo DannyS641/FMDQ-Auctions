@@ -1,5 +1,6 @@
 import "./styles.css";
 import { registerAccount } from "./auth";
+import { bindPasswordVisibilityToggle } from "./password-visibility";
 
 const revealApp = () => {
   window.requestAnimationFrame(() => {
@@ -33,7 +34,10 @@ const renderSignupPage = () => {
               <form id="signup-form" class="mt-8 grid gap-3">
                 <input id="signup-name" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Full name" />
                 <input id="signup-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
-                <input id="signup-password" type="password" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Password (8+ chars, upper, lower, number, symbol)" />
+                <div class="flex items-center gap-2 rounded-2xl border border-ink/10 bg-white px-4 py-3">
+                  <input id="signup-password" type="password" class="w-full bg-transparent text-sm outline-none" placeholder="Password (8+ chars, upper, lower, number, symbol)" />
+                  <button id="signup-password-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show password"></button>
+                </div>
                 <button type="submit" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Create account</button>
               </form>
 
@@ -71,6 +75,7 @@ const bindEvents = () => {
   const confirmBtn = document.querySelector<HTMLButtonElement>("#signup-consent-confirm");
   const cancelBtn = document.querySelector<HTMLButtonElement>("#signup-consent-cancel");
   let pendingSubmission: { displayName: string; email: string; password: string } | null = null;
+  bindPasswordVisibilityToggle("signup-password", "signup-password-toggle");
 
   const closeModal = () => {
     if (!modal) return;

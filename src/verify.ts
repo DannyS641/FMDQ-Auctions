@@ -9,6 +9,25 @@ const revealApp = () => {
 
 const getParams = () => new URLSearchParams(window.location.search);
 
+const bindResendVerification = () => {
+  const resendButton = document.querySelector<HTMLButtonElement>("#resend-verification");
+  resendButton?.addEventListener("click", async () => {
+    const email = getParams().get("email") || "";
+    const message = document.querySelector<HTMLParagraphElement>("#verify-message");
+    if (!email) return;
+    resendButton.disabled = true;
+    if (message) message.textContent = "Sending a fresh verification email...";
+    try {
+      const payload = await resendVerification(email);
+      if (message) message.textContent = payload.message || "A fresh verification link has been sent.";
+    } catch (error) {
+      if (message) message.textContent = error instanceof Error ? error.message : "Unable to resend verification email.";
+    } finally {
+      resendButton.disabled = false;
+    }
+  });
+};
+
 const renderVerifyPage = (message: string, state: "pending" | "success" | "error") => {
   const email = getParams().get("email") || "";
   const tone =
@@ -40,7 +59,6 @@ const renderVerifyPage = (message: string, state: "pending" | "success" | "error
           </div>
           <div class="mt-6 flex flex-wrap gap-3">
             <a href="/signin.html" class="rounded-full bg-ink px-6 py-3 text-sm font-semibold text-white">Go to sign in</a>
-            <a href="/signup.html" class="rounded-full border border-ink/10 px-6 py-3 text-sm font-semibold text-ink">Create another account</a>
             ${email && state !== "success" ? `<button id="resend-verification" class="rounded-full border border-ink/10 px-6 py-3 text-sm font-semibold text-ink">Resend verification</button>` : ""}
           </div>
         </div>
@@ -53,6 +71,7 @@ const init = async () => {
   const token = getParams().get("token");
   if (!token) {
     renderVerifyPage("Open the verification email we sent you and use the link inside it to activate your account.", "pending");
+    bindResendVerification();
     revealApp();
     return;
   }
@@ -70,22 +89,7 @@ const init = async () => {
     renderVerifyPage(error instanceof Error ? error.message : "Unable to verify email.", "error");
   }
 
-  const resendButton = document.querySelector<HTMLButtonElement>("#resend-verification");
-  resendButton?.addEventListener("click", async () => {
-    const email = getParams().get("email") || "";
-    const message = document.querySelector<HTMLParagraphElement>("#verify-message");
-    if (!email) return;
-    resendButton.disabled = true;
-    if (message) message.textContent = "Sending a fresh verification email...";
-    try {
-      const payload = await resendVerification(email);
-      if (message) message.textContent = payload.message || "A fresh verification link has been sent.";
-    } catch (error) {
-      if (message) message.textContent = error instanceof Error ? error.message : "Unable to resend verification email.";
-    } finally {
-      resendButton.disabled = false;
-    }
-  });
+  bindResendVerification();
 };
 
 void init();

@@ -6,6 +6,7 @@ import {
   readAuthSession,
   resendVerification
 } from "./auth";
+import { bindPasswordVisibilityToggle } from "./password-visibility";
 
 const revealApp = () => {
   window.requestAnimationFrame(() => {
@@ -61,7 +62,10 @@ const renderSigninPage = () => {
                     <form id="login-form" class="grid gap-3">
                       <p class="text-xs uppercase tracking-[0.28em] text-slate">Sign in</p>
                       <input id="login-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
-                      <input id="login-password" type="password" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Password" />
+                      <div class="flex items-center gap-2 rounded-2xl border border-ink/10 bg-white px-4 py-3">
+                        <input id="login-password" type="password" class="w-full bg-transparent text-sm outline-none" placeholder="Password" />
+                        <button id="login-password-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show password"></button>
+                      </div>
                       <a href="/reset-password.html" class="text-right text-xs font-semibold text-[#1d326c]">Forgot password?</a>
                       <button type="submit" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Sign in</button>
                     </form>
@@ -87,6 +91,7 @@ const bindEvents = () => {
   const continueBtn = document.querySelector<HTMLButtonElement>("#continue-btn");
   const logoutBtn = document.querySelector<HTMLButtonElement>("#logout-btn");
   const resendVerificationBtn = document.querySelector<HTMLButtonElement>("#resend-verification-btn");
+  bindPasswordVisibilityToggle("login-password", "login-password-toggle");
 
   loginForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
