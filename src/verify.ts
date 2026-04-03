@@ -21,7 +21,11 @@ const bindResendVerification = () => {
       const payload = await resendVerification(email);
       if (message) message.textContent = payload.message || "A fresh verification link has been sent.";
     } catch (error) {
-      if (message) message.textContent = error instanceof Error ? error.message : "Unable to resend verification email.";
+      console.error("Unable to resend verification email from verification page.", error);
+      if (message) {
+        message.textContent =
+          "Unable to resend the verification email right now. Please wait a moment and try again.";
+      }
     } finally {
       resendButton.disabled = false;
     }
@@ -86,7 +90,11 @@ const init = async () => {
       window.location.href = "/signin.html";
     }, 2000);
   } catch (error) {
-    renderVerifyPage(error instanceof Error ? error.message : "Unable to verify email.", "error");
+    console.error("Unable to verify email token.", error);
+    renderVerifyPage(
+      "Unable to verify your email with this link. Please request a fresh verification email and try again.",
+      "error"
+    );
   }
 
   bindResendVerification();

@@ -43,7 +43,7 @@ export type DashboardBidActivity = {
   title: string;
   category: string;
   currentBid: number;
-  yourBid: number;
+  yourLatestBid: number;
   endTime: string;
   status: "winning" | "outbid" | "won" | "lost" | "active" | "closed";
 };

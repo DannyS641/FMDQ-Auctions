@@ -339,7 +339,10 @@ const renderItem = (item: AuctionItem) => {
       const updated = (await response.json()) as AuctionItem;
       renderItem(updated);
     } catch (error) {
-      if (bidHint) bidHint.textContent = error instanceof Error ? error.message : "Unable to submit bid. Please try again.";
+      console.error(`Unable to submit bid for item ${item.id} from item page.`, error);
+      if (bidHint) {
+        bidHint.textContent = "Unable to submit your bid right now. Please refresh the item and try again.";
+      }
     }
   });
 };

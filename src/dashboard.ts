@@ -8,7 +8,7 @@ const revealApp = () => {
   });
 };
 
-const formatMoney = (value: number) => `NGN ${value.toLocaleString("en-NG")}`;
+const formatMoney = (value: number) => `NGN ${Number(value || 0).toLocaleString("en-NG")}`;
 const formatDate = (value: string) => new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
 
 const renderShell = (content: string) => {
@@ -25,8 +25,8 @@ const renderShell = (content: string) => {
 };
 
 const init = async () => {
-  await fetchCurrentSession().catch(() => undefined);
-  const session = readAuthSession();
+  const syncedSession = await fetchCurrentSession().catch(() => readAuthSession());
+  const session = syncedSession || readAuthSession();
   if (!session.signedIn) {
     renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">Sign in first to view your bidder dashboard.</div>`);
     return;
@@ -60,7 +60,7 @@ const init = async () => {
                   <span class="rounded-full border border-ink/10 bg-white px-3 py-1 text-xs font-semibold text-ink">${entry.status}</span>
                 </div>
                 <div class="mt-4 grid gap-3 text-sm md:grid-cols-3">
-                  <p class="text-slate">Your bid <span class="font-semibold text-ink">${formatMoney(entry.yourBid)}</span></p>
+                  <p class="text-slate">Your bid <span class="font-semibold text-ink">${formatMoney(entry.yourLatestBid)}</span></p>
                   <p class="text-slate">Current bid <span class="font-semibold text-ink">${formatMoney(entry.currentBid)}</span></p>
                   <p class="text-slate">Ends <span class="font-semibold text-ink">${formatDate(entry.endTime)}</span></p>
                 </div>
@@ -70,8 +70,18 @@ const init = async () => {
         </section>
       </section>
     `);
-  } catch {
-    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">Unable to load your dashboard right now.</div>`);
+  } catch (error) {
+    console.error("Unable to load bidder dashboard.", error);
+    renderShell(`
+      <div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">
+        <p class="font-semibold text-ink">Unable to load your dashboard right now.</p>
+        <p class="mt-3">Please refresh the page or try again in a moment.</p>
+        <button id="dashboard-retry" type="button" class="mt-6 rounded-full bg-[#1d326c] px-6 py-3 text-sm font-semibold text-white">Try again</button>
+      </div>
+    `);
+    document.querySelector<HTMLButtonElement>("#dashboard-retry")?.addEventListener("click", () => {
+      window.location.reload();
+    });
   }
 };
 

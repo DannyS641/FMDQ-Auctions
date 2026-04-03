@@ -491,7 +491,12 @@ const wireActions = async (sessionRole: string, items: AuctionItem[], wins: WonA
     if (feedback) feedback.textContent = "Processing notification queue...";
     const response = await apiFetch("/api/admin/notifications/process", { method: "POST", headers: getAuditHeaders() });
     const payload = await response.json().catch(() => null) as { processed?: number; transport?: string; error?: string } | null;
-    if (feedback) feedback.textContent = response.ok ? `Processed ${payload?.processed || 0} queued notifications using ${payload?.transport || "configured"} transport.` : (payload?.error || "Unable to process notification queue.");
+    if (feedback) {
+      feedback.textContent = response.ok
+        ? `Processed ${payload?.processed || 0} queued notifications using ${payload?.transport || "configured"} transport.`
+        : "Unable to process the notification queue right now. Please try again in a moment.";
+    }
+    if (!response.ok) console.error("Unable to process notification queue.", payload?.error || payload);
   });
   document.querySelector<HTMLButtonElement>("#spool-item-sheet")?.addEventListener("click", () => {
     const itemId = (document.querySelector<HTMLInputElement>("#spool-item-id")?.value || "").trim();
@@ -566,7 +571,12 @@ const wireActions = async (sessionRole: string, items: AuctionItem[], wins: WonA
       button.disabled = true;
       const response = await apiFetch(`/api/admin/users/${userId}/password-reset`, { method: "POST", headers: getAuditHeaders() });
       const payload = await response.json().catch(() => null) as { message?: string; error?: string } | null;
-      if (feedback) feedback.textContent = response.ok ? (payload?.message || "Reset email sent.") : (payload?.error || "Unable to send reset email.");
+      if (feedback) {
+        feedback.textContent = response.ok
+          ? (payload?.message || "Reset email sent.")
+          : "Unable to send the reset email right now. Please try again in a moment.";
+      }
+      if (!response.ok) console.error(`Unable to send admin reset email for user ${userId}.`, payload?.error || payload);
       button.disabled = false;
     });
   });
@@ -584,7 +594,12 @@ const wireActions = async (sessionRole: string, items: AuctionItem[], wins: WonA
         body: JSON.stringify({ reason })
       });
       const payload = await response.json().catch(() => null) as { message?: string; error?: string } | null;
-      if (feedback) feedback.textContent = response.ok ? (payload?.message || "User disabled.") : (payload?.error || "Unable to disable user.");
+      if (feedback) {
+        feedback.textContent = response.ok
+          ? (payload?.message || "User disabled.")
+          : "Unable to disable this user right now. Please try again in a moment.";
+      }
+      if (!response.ok) console.error(`Unable to disable user ${userId}.`, payload?.error || payload);
       button.disabled = false;
       if (response.ok) window.location.reload();
     });
@@ -598,7 +613,12 @@ const wireActions = async (sessionRole: string, items: AuctionItem[], wins: WonA
       button.disabled = true;
       const response = await apiFetch(`/api/admin/users/${userId}/enable`, { method: "POST", headers: getAuditHeaders() });
       const payload = await response.json().catch(() => null) as { message?: string; error?: string } | null;
-      if (feedback) feedback.textContent = response.ok ? (payload?.message || "User enabled.") : (payload?.error || "Unable to enable user.");
+      if (feedback) {
+        feedback.textContent = response.ok
+          ? (payload?.message || "User enabled.")
+          : "Unable to enable this user right now. Please try again in a moment.";
+      }
+      if (!response.ok) console.error("Unable to enable user.", payload?.error || payload);
       button.disabled = false;
       if (response.ok) window.location.reload();
     });
@@ -615,7 +635,12 @@ const wireActions = async (sessionRole: string, items: AuctionItem[], wins: WonA
         body: JSON.stringify({ scope, role })
       });
       const payload = await response.json().catch(() => null) as { message?: string; error?: string } | null;
-      if (feedback) feedback.textContent = response.ok ? (payload?.message || "Bulk reset queued.") : (payload?.error || "Unable to queue bulk reset.");
+      if (feedback) {
+        feedback.textContent = response.ok
+          ? (payload?.message || "Bulk reset queued.")
+          : "Unable to queue the bulk reset right now. Please try again in a moment.";
+      }
+      if (!response.ok) console.error("Unable to queue bulk password reset.", payload?.error || payload);
     });
   });
 
@@ -633,7 +658,8 @@ const wireActions = async (sessionRole: string, items: AuctionItem[], wins: WonA
           if (feedback) feedback.textContent = payload.message || "Role assigned.";
           window.location.reload();
         } catch (error) {
-          if (feedback) feedback.textContent = error instanceof Error ? error.message : "Unable to assign role.";
+          console.error(`Unable to assign role ${roleName} to user ${userId}.`, error);
+          if (feedback) feedback.textContent = "Unable to assign that role right now. Please try again.";
         } finally {
           button.disabled = false;
         }
@@ -652,7 +678,8 @@ const wireActions = async (sessionRole: string, items: AuctionItem[], wins: WonA
           if (feedback) feedback.textContent = payload.message || "Role removed.";
           window.location.reload();
         } catch (error) {
-          if (feedback) feedback.textContent = error instanceof Error ? error.message : "Unable to remove role.";
+          console.error(`Unable to remove role ${roleName} from user ${userId}.`, error);
+          if (feedback) feedback.textContent = "Unable to remove that role right now. Please try again.";
         } finally {
           button.disabled = false;
         }
@@ -676,7 +703,11 @@ const wireActions = async (sessionRole: string, items: AuctionItem[], wins: WonA
         const report = await bulkImportUsers(file);
         if (bulkFeedback) bulkFeedback.textContent = `Created ${report.created}, skipped ${report.skipped}, failed ${report.failed}.`;
       } catch (error) {
-        if (bulkFeedback) bulkFeedback.textContent = error instanceof Error ? error.message : "Unable to import users.";
+        console.error("Unable to bulk import users.", error);
+        if (bulkFeedback) {
+          bulkFeedback.textContent =
+            "Unable to import users right now. Please review the CSV template and try again.";
+        }
       }
     });
     document.querySelector<HTMLButtonElement>("#download-user-template")?.addEventListener("click", () => {
@@ -705,6 +736,7 @@ const init = async () => {
     renderPage(session.role, operations, items, wins, users, roles, operations.recentAudits);
     await wireActions(session.role, items, wins, users);
   } catch (error) {
+    console.error("Unable to load operations desk.", error);
     const message = error instanceof Error ? error.message : "";
     const hint = message.includes("404")
       ? "The operations endpoint is not available from the running backend yet. Restart `npm run dev:server` so the latest server routes are loaded."

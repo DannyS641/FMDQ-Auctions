@@ -102,10 +102,15 @@ const bindEvents = () => {
       renderSigninPage();
       bindEvents();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to sign in.";
+      console.error("Sign in failed.", error);
+      const requiresVerification =
+        error instanceof Error && error.message.toLowerCase().includes("verify your email");
+      const message = requiresVerification
+        ? "Please verify your email before signing in. You can resend the verification link below."
+        : "Unable to sign in right now. Please check your details and try again.";
       if (note) note.textContent = message;
       if (resendVerificationBtn) {
-        resendVerificationBtn.classList.toggle("hidden", !message.toLowerCase().includes("verify your email"));
+        resendVerificationBtn.classList.toggle("hidden", !requiresVerification);
         resendVerificationBtn.dataset.email = email;
       }
     }
@@ -119,7 +124,8 @@ const bindEvents = () => {
       const payload = await resendVerification(email);
       if (note) note.textContent = payload.message || "A fresh verification email has been sent.";
     } catch (error) {
-      if (note) note.textContent = error instanceof Error ? error.message : "Unable to resend verification email.";
+      console.error("Unable to resend verification email from sign in.", error);
+      if (note) note.textContent = "Unable to resend the verification email right now. Please try again in a moment.";
     } finally {
       resendVerificationBtn.disabled = false;
     }

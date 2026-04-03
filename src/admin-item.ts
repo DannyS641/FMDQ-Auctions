@@ -666,7 +666,9 @@ const bindManagerEvents = () => {
       updateFileSelectionLabel("bulk-import-zip", "bulk-import-zip-name", "Optional ZIP bundle");
       await refreshData(`Bulk import finished. ${state.bulkImportReport.created} item(s) created.`);
     } catch (error) {
-      bulkImportFeedback.textContent = error instanceof Error ? error.message : "Unable to import items.";
+      console.error("Bulk item import failed.", error);
+      bulkImportFeedback.textContent =
+        "Unable to import those items right now. Please review the CSV and ZIP bundle, then try again.";
       state.bulkImportReport = null;
       renderManager();
       bindManagerEvents();
@@ -758,7 +760,8 @@ const bindManagerEvents = () => {
       if (input) input.value = "";
       await refreshData(payload?.created ? `Category "${name}" added.` : `Category "${name}" is already available.`);
     } catch (error) {
-      categoryFeedback.textContent = error instanceof Error ? error.message : "Unable to add category.";
+      console.error("Unable to add category.", error);
+      categoryFeedback.textContent = "Unable to add that category right now. Please try again in a moment.";
     }
   });
 
@@ -865,7 +868,8 @@ const bindManagerEvents = () => {
       updateQueryState();
       await refreshData("Item saved successfully.");
     } catch (error) {
-      feedback.textContent = error instanceof Error ? error.message : "Unable to save item.";
+      console.error("Unable to save item.", error);
+      feedback.textContent = "Unable to save this item right now. Please review the form and try again.";
     }
   });
 };
@@ -890,10 +894,11 @@ const deleteItem = async (itemId: string) => {
     await refreshData("Item archived successfully.");
     showActionStatus("success", "✓", "Item archived successfully.");
   } catch (error) {
+    console.error(`Unable to archive item ${itemId}.`, error);
     if (feedback) {
-      feedback.textContent = error instanceof Error ? error.message : "Unable to archive item.";
+      feedback.textContent = "Unable to archive this item right now. Please try again in a moment.";
     }
-    showActionStatus("error", "❌", error instanceof Error ? error.message : "Unable to archive item.");
+    showActionStatus("error", "❌", "Unable to archive this item right now. Please try again.");
   }
 };
 
@@ -918,10 +923,11 @@ const restoreItem = async (itemId: string) => {
     await refreshData("Item restored successfully.");
     showActionStatus("success", "✓", "Item restored successfully.");
   } catch (error) {
+    console.error(`Unable to restore item ${itemId}.`, error);
     if (feedback) {
-      feedback.textContent = error instanceof Error ? error.message : "Unable to restore item.";
+      feedback.textContent = "Unable to restore this item right now. Please try again in a moment.";
     }
-    showActionStatus("error", "❌", error instanceof Error ? error.message : "Unable to restore item.");
+    showActionStatus("error", "❌", "Unable to restore this item right now. Please try again.");
   }
 };
 
@@ -940,10 +946,11 @@ const deleteCategory = async (category: string) => {
     await refreshData(`Category "${category}" deleted.`);
     showActionStatus("success", "✓", `Category "${category}" deleted.`);
   } catch (error) {
+    console.error(`Unable to delete category ${category}.`, error);
     if (feedback) {
-      feedback.textContent = error instanceof Error ? error.message : "Unable to delete category.";
+      feedback.textContent = "Unable to delete this category right now. Please try again in a moment.";
     }
-    showActionStatus("error", "❌", error instanceof Error ? error.message : "Unable to delete category.");
+    showActionStatus("error", "❌", "Unable to delete this category right now. Please try again.");
   }
 };
 

@@ -127,7 +127,11 @@ const bindEvents = () => {
       await registerAccount(displayName, email, password);
       window.location.href = `/verify.html?email=${encodeURIComponent(email)}`;
     } catch (error) {
-      if (note) note.textContent = error instanceof Error ? error.message : "Unable to create account.";
+      console.error("Unable to create account.", error);
+      if (note) {
+        note.textContent =
+          "Unable to create your account right now. Please review your details and try again in a moment.";
+      }
     } finally {
       confirmBtn.disabled = false;
       pendingSubmission = null;

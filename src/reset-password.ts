@@ -80,7 +80,12 @@ const bindEvents = () => {
       const payload = await requestPasswordReset(email);
       if (note) note.textContent = payload.message || "If an active account exists, a reset link has been sent.";
     } catch (error) {
-      if (note) note.textContent = error instanceof Error ? error.message : "Unable to continue.";
+      console.error("Unable to complete password reset flow.", error);
+      if (note) {
+        note.textContent = isResetMode
+          ? "Unable to update your password right now. Please confirm both entries match and try again."
+          : "Unable to send a reset link right now. Please confirm the email and try again in a moment.";
+      }
     }
   });
 };

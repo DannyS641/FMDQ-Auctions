@@ -93,7 +93,10 @@ const init = async () => {
         const payload = await requestPasswordReset(profile.email);
         if (feedback) feedback.textContent = payload.message || "Password reset email sent.";
       } catch (error) {
-        if (feedback) feedback.textContent = error instanceof Error ? error.message : "Unable to send password reset email.";
+        console.error("Unable to request profile password reset.", error);
+        if (feedback) {
+          feedback.textContent = "Unable to send a password reset email right now. Please try again in a moment.";
+        }
       }
     });
     document.querySelector<HTMLButtonElement>("#profile-signout")?.addEventListener("click", async () => {
@@ -106,7 +109,8 @@ const init = async () => {
         if (feedback) feedback.textContent = payload.message || "Other sessions revoked.";
         window.location.reload();
       } catch (error) {
-        if (feedback) feedback.textContent = error instanceof Error ? error.message : "Unable to revoke other sessions.";
+        console.error("Unable to revoke other sessions.", error);
+        if (feedback) feedback.textContent = "Unable to revoke other sessions right now. Please try again.";
       }
     });
     document.querySelectorAll<HTMLButtonElement>("[data-revoke-session]").forEach((button) => {
@@ -118,7 +122,8 @@ const init = async () => {
           if (feedback) feedback.textContent = payload.message || "Session revoked.";
           window.location.reload();
         } catch (error) {
-          if (feedback) feedback.textContent = error instanceof Error ? error.message : "Unable to revoke session.";
+          console.error(`Unable to revoke session ${sessionId}.`, error);
+          if (feedback) feedback.textContent = "Unable to revoke that session right now. Please try again.";
         }
       });
     });

@@ -901,6 +901,17 @@ const getUserById = async (id: string) =>
     true
   );
 
+const getUserByDisplayName = async (displayName: string) =>
+  handleSupabaseMaybe<UserRow>(
+    await supabase
+      .from("users")
+      .select("id,email,display_name,status,created_at,last_login_at")
+      .eq("display_name", displayName)
+      .eq("status", "active")
+      .maybeSingle(),
+    true
+  );
+
 const getUserByIdWithPassword = async (id: string) =>
   handleSupabaseMaybe<UserRow>(
     await supabase
@@ -1049,6 +1060,8 @@ const queueBidActivityNotifications = async (
   amount: number,
   previousLeader?: StoredBid
 ) => {
+  const imageUrl = item.images[0]?.url ? `${appBaseUrl}${item.images[0].url}` : "";
+
   if (bidder.email) {
     await queueNotification(
       "BID_PLACED",
@@ -1059,14 +1072,19 @@ const queueBidActivityNotifications = async (
         amount,
         currentBid: amount,
         displayName: bidder.displayName,
+        imageUrl,
         itemUrl: `${appBaseUrl}/item.html?id=${encodeURIComponent(item.id)}`
       },
       bidder.email
     );
   }
 
-  if (!previousLeader?.bidderUserId || previousLeader.bidderUserId === bidder.userId) return;
-  const previousLeaderUser = await getUserById(previousLeader.bidderUserId);
+  if (!previousLeader || previousLeader.bidderUserId === bidder.userId) return;
+  const previousLeaderUserId = previousLeader.bidderUserId
+    || await resolveLegacyBidOwnerForNotification(item.id, previousLeader.amount, bidder.userId);
+  if (!previousLeaderUserId || previousLeaderUserId === bidder.userId) return;
+
+  const previousLeaderUser = await getUserById(previousLeaderUserId);
   if (!previousLeaderUser?.email) return;
 
   await queueNotification(
@@ -1078,6 +1096,7 @@ const queueBidActivityNotifications = async (
       previousBid: previousLeader.amount,
       currentBid: amount,
       displayName: previousLeaderUser.display_name,
+      imageUrl,
       itemUrl: `${appBaseUrl}/item.html?id=${encodeURIComponent(item.id)}`
     },
     previousLeaderUser.email
@@ -1377,6 +1396,47 @@ const backfillLegacyBidAuditAttribution = async () => {
   }
 };
 
+const resolveLegacyBidOwnerForNotification = async (
+  itemId: string,
+  previousBidAmount: number,
+  currentBidderUserId?: string
+) => {
+  const matchingAudits = handleSupabase(
+    await supabase
+      .from("audits")
+      .select("actor,details_json,created_at")
+      .eq("event_type", "BID_PLACED")
+      .eq("entity_id", itemId)
+      .order("created_at", { ascending: false })
+      .limit(50)
+  ) as Array<Pick<AuditRow, "actor" | "details_json" | "created_at">>;
+
+  for (const audit of matchingAudits) {
+    const details = parseAuditDetails(audit.details_json);
+    if (Number(details.amount || 0) !== previousBidAmount) continue;
+
+    const attributedUserId = String(details.bidderUserId || "");
+    if (attributedUserId && attributedUserId !== currentBidderUserId) {
+      return attributedUserId;
+    }
+
+    const fallbackUser = await getUserByDisplayName(audit.actor).catch(() => null);
+    if (fallbackUser?.id && fallbackUser.id !== currentBidderUserId) {
+      await handleSupabase(
+        await supabase
+          .from("bids")
+          .update({ bidder_user_id: fallbackUser.id })
+          .eq("item_id", itemId)
+          .eq("amount", previousBidAmount)
+          .is("bidder_user_id", null)
+      );
+      return fallbackUser.id;
+    }
+  }
+
+  return "";
+};
+
 const getBidAuditRowsForUser = async (userId: string) => {
   return handleSupabase(
     await supabase
@@ -1555,7 +1615,23 @@ const escapeHtml = (value: unknown) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-const renderNotificationContent = (entry: NotificationQueueItem) => {
+const loadEmailInlineImage = async (imageUrl: string, title: string) => {
+  const imageMatch = imageUrl.match(/^\/uploads\/images\/(.+)$/);
+  if (!imageMatch) return null;
+  const storagePath = decodeStoredFilePath(imageMatch[1]);
+  if (!storagePath) return null;
+  const downloadResult = await supabase.storage.from(imageBucket).download(storagePath);
+  if (downloadResult.error || !downloadResult.data) return null;
+  const content = Buffer.from(await downloadResult.data.arrayBuffer());
+  return {
+    cid: `auction-item-${randomUUID()}@fmdq-auctions`,
+    filename: safeFileName(path.basename(storagePath) || `${title || "auction-item"}.jpg`),
+    contentType: guessContentType(storagePath),
+    content
+  };
+};
+
+const renderNotificationContent = async (entry: NotificationQueueItem) => {
   if (entry.eventType === "ACCOUNT_VERIFICATION") {
     const displayName = escapeHtml(entry.payload.displayName || "there");
     const verifyUrl = String(entry.payload.verifyUrl || "");
@@ -1607,16 +1683,19 @@ const renderNotificationContent = (entry: NotificationQueueItem) => {
     const displayName = escapeHtml(entry.payload.displayName || "there");
     const title = escapeHtml(entry.payload.title || "this auction item");
     const currentBid = escapeHtml(entry.payload.currentBid || entry.payload.amount || "");
+    const inlineImage = await loadEmailInlineImage(String(entry.payload.imageUrl || ""), title);
     const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding.html`);
     return {
       text: `Hello ${displayName},\n\nYour bid of ${currentBid} was placed successfully for ${title}.\n\nView the item here:\n${itemUrl}`,
       html: `
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
+          ${inlineImage ? `<img src="cid:${escapeHtml(inlineImage.cid)}" alt="${title}" style="display:block;width:100%;max-width:520px;border-radius:18px;margin:0 0 18px;" />` : ""}
           <p>Hello ${displayName},</p>
           <p>Your bid of <strong>${currentBid}</strong> was placed successfully for <strong>${title}</strong>.</p>
           <p>View the item here: <a href="${escapeHtml(itemUrl)}">${escapeHtml(itemUrl)}</a></p>
         </div>
-      `
+      `,
+      attachments: inlineImage ? [inlineImage] : []
     };
   }
 
@@ -1625,17 +1704,20 @@ const renderNotificationContent = (entry: NotificationQueueItem) => {
     const title = escapeHtml(entry.payload.title || "this auction item");
     const previousBid = escapeHtml(entry.payload.previousBid || "");
     const currentBid = escapeHtml(entry.payload.currentBid || "");
+    const inlineImage = await loadEmailInlineImage(String(entry.payload.imageUrl || ""), title);
     const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding.html`);
     return {
       text: `Hello ${displayName},\n\nYou were outbid on ${title}.\nYour previous bid: ${previousBid}\nCurrent bid: ${currentBid}\n\nOpen the item to place a new bid:\n${itemUrl}`,
       html: `
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
+          ${inlineImage ? `<img src="cid:${escapeHtml(inlineImage.cid)}" alt="${title}" style="display:block;width:100%;max-width:520px;border-radius:18px;margin:0 0 18px;" />` : ""}
           <p>Hello ${displayName},</p>
           <p>You were outbid on <strong>${title}</strong>.</p>
           <p>Your previous bid: <strong>${previousBid}</strong><br />Current bid: <strong>${currentBid}</strong></p>
           <p>Open the item to place a new bid: <a href="${escapeHtml(itemUrl)}">${escapeHtml(itemUrl)}</a></p>
         </div>
-      `
+      `,
+      attachments: inlineImage ? [inlineImage] : []
     };
   }
 
@@ -1647,7 +1729,8 @@ const renderNotificationContent = (entry: NotificationQueueItem) => {
         <p>${escapeHtml(entry.subject)}</p>
         <pre style="white-space: pre-wrap; background: #f8fafc; padding: 12px; border-radius: 8px;">${escapeHtml(prettyPayload)}</pre>
       </div>
-    `
+    `,
+    attachments: []
   };
 };
 
@@ -1661,13 +1744,14 @@ const deliverNotification = async (entry: NotificationQueueItem, claimToken: str
     if (!smtpTransporter) {
       throw new Error("SMTP transport is enabled but SMTP_HOST, SMTP_USER, or SMTP_PASS is missing.");
     }
-    const content = renderNotificationContent(entry);
+    const content = await renderNotificationContent(entry);
     await smtpTransporter.sendMail({
       from: smtpFrom,
       to: entry.recipient,
       subject: entry.subject,
       text: content.text,
-      html: content.html
+      html: content.html,
+      attachments: content.attachments
     });
     await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
     return;
@@ -3562,10 +3646,10 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
       displayName: biddingUser?.display_name || actor
     },
     amount,
-    bidResult.previousBidderUserId && item.currentBid > 0
+    item.currentBid > 0
       ? {
           bidder: "",
-          bidderUserId: bidResult.previousBidderUserId,
+          bidderUserId: bidResult.previousBidderUserId || null,
           amount: item.currentBid,
           time: "",
           createdAt: ""

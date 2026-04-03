@@ -732,7 +732,8 @@ const renderDetail = () => {
         renderDetail();
         renderHistory();
       } catch (error) {
-        bidHint.textContent = error instanceof Error ? error.message : "Unable to submit bid. Please try again.";
+        console.error(`Unable to submit bid for item ${item.id}.`, error);
+        bidHint.textContent = "Unable to submit your bid right now. Please refresh the auction and try again.";
       }
     });
   }
