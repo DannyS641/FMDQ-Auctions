@@ -16,7 +16,6 @@ import {
   encodeDocumentNameWithVisibility,
   ensureCanManageTargetRoles,
   parseDocumentNameWithVisibility,
-  shouldProcessNotificationNow,
   type DocumentVisibility,
   validateArchiveEntries,
   validateBidAmount,
@@ -55,6 +54,7 @@ const notificationTransport = (process.env.NOTIFY_TRANSPORT || "file").toLowerCa
 const notificationPollMs = Math.max(Number(process.env.NOTIFY_POLL_MS || 5000), 1000);
 const notificationWorkerMode = (process.env.NOTIFICATION_WORKER_MODE || "both").toLowerCase();
 const notificationMaxAttempts = Math.max(Number(process.env.NOTIFICATION_MAX_ATTEMPTS || 5), 1);
+const maintenancePollMs = Math.max(Number(process.env.MAINTENANCE_POLL_MS || 60 * 60 * 1000), 60 * 1000);
 const smtpHost = process.env.SMTP_HOST || "";
 const smtpPort = Number(process.env.SMTP_PORT || 587);
 const smtpUser = process.env.SMTP_USER || "";
@@ -72,11 +72,13 @@ const authRateLimit = 10;
 const maxImportArchiveEntries = 150;
 const maxImportExtractedBytes = 100 * 1024 * 1024;
 const notificationClaimTtlMs = 10 * 60_000;
+const securityEventsRetentionMs = Math.max(Number(process.env.SECURITY_EVENTS_RETENTION_DAYS || 30), 1) * 24 * 60 * 60 * 1000;
 const imageBucket = process.env.SUPABASE_IMAGE_BUCKET || "auction-images";
 const documentBucket = process.env.SUPABASE_DOCUMENT_BUCKET || "auction-documents";
 const imageAccessPolicy = (process.env.IMAGE_ACCESS_POLICY || "bidder_visible").toLowerCase();
 const malwareScanMode = (process.env.MALWARE_SCAN_MODE || "off").toLowerCase();
 const malwareScanCommand = process.env.MALWARE_SCAN_COMMAND || "";
+const malwareScanTimeoutMs = Math.max(Number(process.env.MALWARE_SCAN_TIMEOUT_MS || 30000), 5000);
 const opsAlertWebhookUrl = process.env.OPS_ALERT_WEBHOOK_URL || "";
 const tempUploadRetentionHours = Math.max(Number(process.env.TEMP_UPLOAD_RETENTION_HOURS || 24), 1);
 const outboxRetentionDays = Math.max(Number(process.env.OUTBOX_RETENTION_DAYS || 30), 1);
@@ -90,11 +92,14 @@ const allowedOrigins = new Set(
 );
 const errorWebhookUrl = process.env.ERROR_WEBHOOK_URL || "";
 const securityTelemetryEvents = new Set(["AUTH_ATTEMPT", "BID_ATTEMPT"]);
-let notificationQueueSupportsProcessedAt = true;
 let securityEventsTableAvailable = true;
+const requiredSchemaMigrations = ["0001_bid_queue_hardening", "0002_metadata_rls_hardening"];
 
 if (!supabaseUrl || !supabaseServiceRoleKey || !tokenSigningSecret) {
   throw new Error("SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY, and APP_SECRET are required for the backend.");
+}
+if (process.env.NODE_ENV === "production" && adminApiToken) {
+  throw new Error("ADMIN_API_TOKEN must be disabled in production. Use named user sessions or scoped service credentials instead.");
 }
 const malwareConfigCheck = validateMalwareScanConfiguration(process.env.NODE_ENV, malwareScanMode, malwareScanCommand);
 if (!malwareConfigCheck.ok) {
@@ -133,7 +138,7 @@ app.use(cors({
       callback(null, true);
       return;
     }
-    callback(new Error("Origin not allowed by CORS."));
+    callback(null, false);
   },
   credentials: true
 }));
@@ -150,7 +155,7 @@ app.use((req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self'; connect-src 'self' http://localhost:5174 http://127.0.0.1:5174;"
+    `default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data: https:; style-src 'self' https://fonts.googleapis.com; style-src-elem 'self' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com data:; script-src 'self'; connect-src 'self' ${Array.from(allowedOrigins).join(" ")};`
   );
   if (process.env.NODE_ENV === "production") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
@@ -169,8 +174,7 @@ app.use((req, res, next) => {
     return;
   }
   const source = origin || referer;
-  const allowed = Array.from(allowedOrigins).some((entry) => source.startsWith(entry));
-  if (!allowed) {
+  if (!isAllowedRequestSource(source)) {
     res.status(403).json({ error: "Request origin is not allowed." });
     return;
   }
@@ -260,6 +264,10 @@ type NotificationQueueItem = {
   payload: Record<string, unknown>;
   createdAt: string;
   processedAt?: string | null;
+  nextAttemptAt?: string | null;
+  attemptCount?: number;
+  claimToken?: string | null;
+  claimExpiresAt?: string | null;
   errorMessage?: string | null;
 };
 type BidAuditRow = {
@@ -286,7 +294,7 @@ type ItemRow = {
   archived_at: string | null;
 };
 type ItemFileRow = { item_id: string; kind: string; name: string; url: string };
-type BidRow = { item_id: string; bidder_alias: string; amount: number | string; bid_time: string; created_at: string };
+type BidRow = { item_id: string; bidder_alias: string; bidder_user_id?: string | null; amount: number | string; bid_time: string; created_at: string };
 type AuditRow = {
   id: string;
   event_type: string;
@@ -320,6 +328,10 @@ type NotificationRow = {
   payload_json: Record<string, unknown> | string;
   created_at: string;
   processed_at: string | null;
+  next_attempt_at: string | null;
+  attempt_count: number | null;
+  claim_token: string | null;
+  claim_expires_at: string | null;
   error_message: string | null;
 };
 
@@ -336,6 +348,14 @@ const smtpTransporter = notificationTransport === "smtp" && smtpHost && smtpUser
     })
   : null;
 let notificationProcessingInFlight = false;
+let maintenanceInFlight = false;
+
+class NotificationClaimLostError extends Error {
+  constructor(entryId: string) {
+    super(`Notification claim for ${entryId} expired before it could be finalized.`);
+    this.name = "NotificationClaimLostError";
+  }
+}
 
 const seedItems: Array<Omit<StoredItem, "images" | "documents"> & { images: StoredFileRef[]; documents: StoredFileRef[] }> = (() => {
   const now = Date.now();
@@ -389,8 +409,6 @@ const seedItems: Array<Omit<StoredItem, "images" | "documents"> & { images: Stor
     }
   ];
 })();
-
-const processedBidKeys = new Map<string, string>();
 
 const parseCookies = (req: express.Request) =>
   String(req.headers.cookie || "")
@@ -472,6 +490,51 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => cb(null, `${Date.now()}-${safeFileName(file.originalname)}`)
 });
 
+const detectFileSignatureMimeType = (filePath: string) => {
+  const descriptor = fs.openSync(filePath, "r");
+  try {
+    const header = Buffer.alloc(16);
+    fs.readSync(descriptor, header, 0, header.length, 0);
+    if (header.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return "image/jpeg";
+    if (header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+    if (header.subarray(0, 4).toString("ascii") === "RIFF" && header.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+    if (header.subarray(0, 4).toString("ascii") === "%PDF") return "application/pdf";
+    if (header.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))) {
+      return "application/msword";
+    }
+    if (header.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))) {
+      return "application/zip";
+    }
+    return null;
+  } finally {
+    fs.closeSync(descriptor);
+  }
+};
+
+const validateManagedFileContent = (filePath: string, originalName: string, kind: "image" | "document") => {
+  const detectedMimeType = detectFileSignatureMimeType(filePath);
+  const isOfficeZipDocument =
+    kind === "document"
+    && detectedMimeType === "application/zip"
+    && !originalName.toLowerCase().endsWith(".docx")
+    && !originalName.toLowerCase().endsWith(".xlsx");
+  const allowed =
+    kind === "image"
+      ? Boolean(detectedMimeType && allowedImageTypes.has(detectedMimeType))
+      : Boolean(detectedMimeType && (allowedDocumentTypes.has(detectedMimeType) || (
+          detectedMimeType === "application/zip"
+          && !isOfficeZipDocument
+        )));
+  if (!allowed) {
+    removeFileIfExists(filePath);
+    throw new Error(`Uploaded ${kind} content does not match an allowed file signature.`);
+  }
+  if (isOfficeZipDocument) {
+    removeFileIfExists(filePath);
+    throw new Error("ZIP archives are not accepted as standalone documents. Upload Office files or PDFs only.");
+  }
+};
+
 const upload = multer({
   storage,
   limits: { files: 16, fileSize: 8 * 1024 * 1024 },
@@ -552,7 +615,10 @@ const runMalwareScan = async (filePath: string) => {
       const parts = malwareScanCommand.split(/\s+/).filter(Boolean);
       const [command, ...args] = parts;
       if (!command) throw new Error("MALWARE_SCAN_COMMAND is not configured.");
-      await execFileAsync(command, [...args, quarantinePath], { maxBuffer: 10 * 1024 * 1024 });
+      await execFileAsync(command, [...args, quarantinePath], {
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: malwareScanTimeoutMs
+      });
     }
     return quarantinePath;
   } catch (error) {
@@ -561,6 +627,19 @@ const runMalwareScan = async (filePath: string) => {
       message: error instanceof Error ? error.message : "Malware scan failed."
     });
     throw new Error(error instanceof Error ? `Malware scan failed: ${error.message}` : "Malware scan failed.");
+  }
+};
+
+const verifyMalwareScannerHealth = async () => {
+  if (malwareScanMode !== "command") return;
+  const probePath = path.join(tempUploadsDir, `scanner-probe-${randomUUID()}.txt`);
+  fs.writeFileSync(probePath, `scanner-health-check:${new Date().toISOString()}\n`, "utf8");
+  let scannedPath = "";
+  try {
+    scannedPath = await runMalwareScan(probePath);
+  } finally {
+    removeFileIfExists(probePath);
+    if (scannedPath) removeFileIfExists(scannedPath);
   }
 };
 
@@ -619,12 +698,41 @@ const ensureStorageBuckets = async () => {
   await ensureStorageBucket(documentBucket, false);
 };
 
+const isAllowedRequestSource = (source: string) => {
+  try {
+    return allowedOrigins.has(new URL(source).origin);
+  } catch {
+    return false;
+  }
+};
+
 const detectSecurityEventsTable = async () => {
   const result = await supabase.from("security_events").select("id").limit(1);
   if (result.error) {
     throw new Error(result.error.message);
   }
   securityEventsTableAvailable = true;
+};
+
+const verifyRequiredSchemaMigrations = async () => {
+  const result = await supabase.from("schema_migrations").select("version").in("version", requiredSchemaMigrations);
+  if (result.error) {
+    throw new Error(
+      `Database migration metadata is unavailable. Run docs/migrations/0001_bid_queue_hardening.sql first. Details: ${result.error.message}`
+    );
+  }
+  const applied = new Set((result.data || []).map((row: { version: string }) => row.version));
+  const missing = requiredSchemaMigrations.filter((version) => !applied.has(version));
+  if (missing.length) {
+    throw new Error(`Missing database migrations: ${missing.join(", ")}. Run docs/migrations before starting the server.`);
+  }
+};
+
+const pruneExpiredDatabaseRows = async () => {
+  const now = new Date().toISOString();
+  const securityEventsCutoff = new Date(Date.now() - securityEventsRetentionMs).toISOString();
+  await handleSupabase(await supabase.from("bid_idempotency_keys").delete().lte("expires_at", now));
+  await handleSupabase(await supabase.from("security_events").delete().lte("created_at", securityEventsCutoff));
 };
 
 const removeFileIfExists = (filePath: string) => {
@@ -655,15 +763,6 @@ const handleSupabaseMaybe = <T>(result: { data: T | null; error: { message: stri
   if (result.error && !allowNotFound) throw new Error(result.error.message);
   return result.data;
 };
-
-const isMissingProcessedAtColumnError = (error: unknown) =>
-  error instanceof Error && error.message.toLowerCase().includes("notification_queue.processed_at");
-
-const isMissingSecurityEventsTableError = (error: unknown) =>
-  error instanceof Error && (
-    error.message.toLowerCase().includes("security_events")
-    || error.message.toLowerCase().includes("relation") && error.message.toLowerCase().includes("does not exist")
-  );
 
 const getClientKey = (req: express.Request, extra = "") =>
   `${req.ip || req.socket.remoteAddress || "unknown"}:${extra}`;
@@ -1090,19 +1189,13 @@ const queueNotification = async (
     status: "pending" as const,
     payload_json: payload,
     created_at: new Date().toISOString(),
+    processed_at: null,
+    next_attempt_at: new Date().toISOString(),
+    attempt_count: 0,
+    claim_token: null,
+    claim_expires_at: null,
     error_message: null
   };
-  if (notificationQueueSupportsProcessedAt) {
-    const result = await supabase.from("notification_queue").insert({
-      ...basePayload,
-      processed_at: null
-    });
-    if (!result.error) return;
-    if (!isMissingProcessedAtColumnError(new Error(result.error.message))) {
-      throw new Error(result.error.message);
-    }
-    notificationQueueSupportsProcessedAt = false;
-  }
   await handleSupabase(await supabase.from("notification_queue").insert(basePayload));
 };
 
@@ -1152,7 +1245,7 @@ const mapItem = (
     amount: Number(bid.amount),
     time: bid.bid_time,
     createdAt: bid.created_at,
-    bidderUserId: bidAuditLookup.get(row.id)?.get(bid.created_at)
+    bidderUserId: bid.bidder_user_id || bidAuditLookup.get(row.id)?.get(bid.created_at)
   })),
   createdAt: row.created_at,
   archivedAt: row.archived_at
@@ -1165,7 +1258,11 @@ const hydrateItems = async (rows: ItemRow[]) => {
     await supabase.from("item_files").select("item_id,kind,name,url").in("item_id", ids)
   ) as ItemFileRow[];
   const bids = handleSupabase(
-    await supabase.from("bids").select("item_id,bidder_alias,amount,bid_time,created_at").in("item_id", ids).order("created_at", { ascending: false })
+    await supabase
+      .from("bids")
+      .select("item_id,bidder_alias,bidder_user_id,amount,bid_time,created_at")
+      .in("item_id", ids)
+      .order("created_at", { ascending: false })
   ) as BidRow[];
   const bidAudits = handleSupabase(
     await supabase
@@ -1250,10 +1347,10 @@ const backfillLegacyBidAuditAttribution = async () => {
   const bidAudits = handleSupabase(
     await supabase
       .from("audits")
-      .select("id,actor,details_json")
+      .select("id,entity_id,actor,details_json,created_at")
       .eq("event_type", "BID_PLACED")
       .order("created_at", { ascending: false })
-  ) as Array<Pick<AuditRow, "id" | "actor" | "details_json">>;
+  ) as Array<Pick<AuditRow, "id" | "entity_id" | "actor" | "details_json" | "created_at">>;
   for (const audit of bidAudits) {
     const details = parseAuditDetails(audit.details_json);
     if (details.bidderUserId) continue;
@@ -1264,6 +1361,14 @@ const backfillLegacyBidAuditAttribution = async () => {
         .from("audits")
         .update({ details_json: { ...details, bidderUserId: matchedUserId } })
         .eq("id", audit.id)
+    );
+    await handleSupabase(
+      await supabase
+        .from("bids")
+        .update({ bidder_user_id: matchedUserId })
+        .eq("item_id", String(audit.entity_id))
+        .eq("created_at", String(audit.created_at))
+        .is("bidder_user_id", null)
     );
   }
 };
@@ -1332,147 +1437,109 @@ const getRecentAudits = async (limit = 20) => {
   }));
 };
 
+const mapNotificationRow = (row: NotificationRow): NotificationQueueItem => ({
+  id: row.id,
+  channel: row.channel,
+  eventType: row.event_type,
+  recipient: row.recipient,
+  subject: row.subject,
+  status: row.status,
+  payload: typeof row.payload_json === "string" ? JSON.parse(row.payload_json || "{}") : row.payload_json || {},
+  createdAt: row.created_at,
+  processedAt: row.processed_at,
+  nextAttemptAt: row.next_attempt_at,
+  attemptCount: Number(row.attempt_count || 0),
+  claimToken: row.claim_token,
+  claimExpiresAt: row.claim_expires_at,
+  errorMessage: row.error_message
+});
+
 const getNotificationQueue = async (limit = 20) => {
-  let rows: NotificationRow[];
-  try {
-    rows = handleSupabase(
-      await supabase
-        .from("notification_queue")
-        .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,error_message")
-        .order("created_at", { ascending: false })
-        .limit(limit)
-    ) as NotificationRow[];
-    notificationQueueSupportsProcessedAt = true;
-  } catch (error) {
-    if (!isMissingProcessedAtColumnError(error)) throw error;
-    notificationQueueSupportsProcessedAt = false;
-    rows = handleSupabase(
-      await supabase
-        .from("notification_queue")
-        .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,error_message")
-        .order("created_at", { ascending: false })
-        .limit(limit)
-    ) as NotificationRow[];
-  }
-  return rows.map((row) => ({
-    id: row.id,
-    channel: row.channel,
-    eventType: row.event_type,
-    recipient: row.recipient,
-    subject: row.subject,
-    status: row.status,
-    payload: typeof row.payload_json === "string" ? JSON.parse(row.payload_json || "{}") : row.payload_json || {},
-    createdAt: row.created_at,
-    processedAt: row.processed_at,
-    errorMessage: row.error_message
-  }));
+  const rows = handleSupabase(
+    await supabase
+      .from("notification_queue")
+      .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,next_attempt_at,attempt_count,claim_token,claim_expires_at,error_message")
+      .order("created_at", { ascending: false })
+      .limit(limit)
+  ) as NotificationRow[];
+  return rows.map(mapNotificationRow);
 };
 
 const getPendingNotificationQueue = async () => {
-  const now = new Date();
-  let rows: NotificationRow[];
-  if (notificationQueueSupportsProcessedAt) {
-    const staleBefore = new Date(Date.now() - notificationClaimTtlMs).toISOString();
-    try {
-      rows = handleSupabase(
-        await supabase
-          .from("notification_queue")
-          .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,error_message")
-          .eq("status", "pending")
-          .or(`processed_at.is.null,processed_at.lte.${staleBefore}`)
-          .order("created_at", { ascending: true })
-          .limit(10)
-      ) as NotificationRow[];
-    } catch (error) {
-      if (!isMissingProcessedAtColumnError(error)) throw error;
-      notificationQueueSupportsProcessedAt = false;
-      rows = handleSupabase(
-        await supabase
-          .from("notification_queue")
-          .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,error_message")
-          .eq("status", "pending")
-          .order("created_at", { ascending: true })
-          .limit(10)
-      ) as NotificationRow[];
-    }
-  } else {
-    rows = handleSupabase(
-      await supabase
-        .from("notification_queue")
-        .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,error_message")
-        .eq("status", "pending")
-        .order("created_at", { ascending: true })
-        .limit(10)
-    ) as NotificationRow[];
-  }
-  return rows.map((row) => ({
-    id: row.id,
-    channel: row.channel,
-    eventType: row.event_type,
-    recipient: row.recipient,
-    subject: row.subject,
-    status: row.status,
-    payload: typeof row.payload_json === "string" ? JSON.parse(row.payload_json || "{}") : row.payload_json || {},
-    createdAt: row.created_at,
-    processedAt: row.processed_at,
-    errorMessage: row.error_message
-  })).filter((row) => shouldProcessNotificationNow(((row.payload as Record<string, unknown>)._meta as Record<string, unknown> | undefined), now)) as NotificationQueueItem[];
+  const now = new Date().toISOString();
+  const rows = handleSupabase(
+    await supabase
+      .from("notification_queue")
+      .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,next_attempt_at,attempt_count,claim_token,claim_expires_at,error_message")
+      .eq("status", "pending")
+      .lte("next_attempt_at", now)
+      .or(`claim_expires_at.is.null,claim_expires_at.lte.${now}`)
+      .order("next_attempt_at", { ascending: true })
+      .order("created_at", { ascending: true })
+      .limit(10)
+  ) as NotificationRow[];
+  return rows.map(mapNotificationRow);
 };
 
 const claimNotificationQueueEntry = async (entryId: string) => {
   const claimTime = new Date().toISOString();
   const claimToken = `claim:${randomUUID()}`;
-  if (notificationQueueSupportsProcessedAt) {
-    const staleBefore = new Date(Date.now() - notificationClaimTtlMs).toISOString();
-    const result = await supabase
-      .from("notification_queue")
-      .update({ processed_at: claimTime, error_message: claimToken })
-      .eq("id", entryId)
-      .eq("status", "pending")
-      .or(`processed_at.is.null,processed_at.lte.${staleBefore}`)
-      .select("id")
-      .maybeSingle();
-    if (!result.error) return Boolean(result.data);
-    if (!isMissingProcessedAtColumnError(new Error(result.error.message))) {
-      throw new Error(result.error.message);
-    }
-    notificationQueueSupportsProcessedAt = false;
-  }
-  const fallbackResult = await supabase
+  const claimExpiresAt = new Date(Date.now() + notificationClaimTtlMs).toISOString();
+  const result = await supabase
     .from("notification_queue")
-    .update({ error_message: claimToken })
+    .update({
+      claim_token: claimToken,
+      claim_expires_at: claimExpiresAt,
+      processed_at: claimTime,
+      error_message: null
+    })
     .eq("id", entryId)
     .eq("status", "pending")
-    .select("id")
+    .lte("next_attempt_at", claimTime)
+    .or(`claim_expires_at.is.null,claim_expires_at.lte.${claimTime}`)
+    .select("id,claim_token")
     .maybeSingle();
-  if (fallbackResult.error) throw new Error(fallbackResult.error.message);
-  return Boolean(fallbackResult.data);
+  if (result.error) throw new Error(result.error.message);
+  return result.data?.claim_token === claimToken ? claimToken : null;
 };
 
 const updateNotificationOutcome = async (
   entryId: string,
+  claimToken: string,
   status: "pending" | "sent" | "failed",
   errorMessage: string | null,
   processedAt = new Date().toISOString(),
-  payloadOverride?: Record<string, unknown>
+  nextAttemptAt: string | null = processedAt,
+  attemptCount?: number
 ) => {
-  if (notificationQueueSupportsProcessedAt) {
-    const result = await supabase
-      .from("notification_queue")
-      .update({ status, processed_at: processedAt, error_message: errorMessage, ...(payloadOverride ? { payload_json: payloadOverride } : {}) })
-      .eq("id", entryId);
-    if (!result.error) return;
-    if (!isMissingProcessedAtColumnError(new Error(result.error.message))) {
-      throw new Error(result.error.message);
-    }
-    notificationQueueSupportsProcessedAt = false;
-  }
-  await handleSupabase(
+  const row = await handleSupabaseMaybe<{ id: string }>(
     await supabase
       .from("notification_queue")
-      .update({ status, error_message: errorMessage, ...(payloadOverride ? { payload_json: payloadOverride } : {}) })
+      .update({
+        status,
+        processed_at: processedAt,
+        next_attempt_at: nextAttemptAt,
+        attempt_count: attemptCount,
+        claim_token: null,
+        claim_expires_at: null,
+        error_message: errorMessage
+      })
       .eq("id", entryId)
+      .eq("claim_token", claimToken)
+      .select("id")
+      .maybeSingle(),
+    true
   );
+  if (!row) {
+    await sendOpsAlert("Notification claim was lost before outcome update", {
+      entryId,
+      status,
+      processedAt,
+      nextAttemptAt,
+      attemptCount: Number(attemptCount || 0)
+    });
+    throw new NotificationClaimLostError(entryId);
+  }
 };
 
 const escapeHtml = (value: unknown) =>
@@ -1579,10 +1646,10 @@ const renderNotificationContent = (entry: NotificationQueueItem) => {
   };
 };
 
-const deliverNotification = async (entry: NotificationQueueItem) => {
+const deliverNotification = async (entry: NotificationQueueItem, claimToken: string) => {
   const processedAt = new Date().toISOString();
   if (notificationTransport === "noop") {
-    await updateNotificationOutcome(entry.id, "sent", null, processedAt);
+    await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
     return;
   }
   if (notificationTransport === "smtp") {
@@ -1597,7 +1664,7 @@ const deliverNotification = async (entry: NotificationQueueItem) => {
       text: content.text,
       html: content.html
     });
-    await updateNotificationOutcome(entry.id, "sent", null, processedAt);
+    await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
     return;
   }
   const filePath = path.join(outboxDir, `${processedAt.replace(/[:.]/g, "-")}-${entry.id}.json`);
@@ -1611,7 +1678,7 @@ const deliverNotification = async (entry: NotificationQueueItem) => {
     createdAt: entry.createdAt,
     processedAt
   }, null, 2));
-  await updateNotificationOutcome(entry.id, "sent", null, processedAt);
+  await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
 };
 
 const processNotificationQueue = async () => {
@@ -1621,19 +1688,22 @@ const processNotificationQueue = async () => {
     const entries = await getPendingNotificationQueue();
     let processed = 0;
     for (const entry of entries) {
-      if (!(await claimNotificationQueueEntry(entry.id))) continue;
+      const claimToken = await claimNotificationQueueEntry(entry.id);
+      if (!claimToken) continue;
       try {
-        await deliverNotification(entry);
+        await deliverNotification(entry, claimToken);
         processed += 1;
       } catch (error) {
+        if (error instanceof NotificationClaimLostError) {
+          continue;
+        }
         const errorMessage = error instanceof Error ? error.message : "Notification processing failed.";
         const now = new Date();
-        const currentMeta = ((entry.payload as Record<string, unknown>)._meta || {}) as Record<string, unknown>;
-        const retry = buildNotificationMeta(currentMeta, errorMessage, now, notificationMaxAttempts);
-        const payloadWithMeta = {
-          ...(entry.payload || {}),
-          _meta: retry.meta
+        const currentMeta = {
+          attempts: Number(entry.attemptCount || 0),
+          nextAttemptAt: entry.nextAttemptAt || undefined
         };
+        const retry = buildNotificationMeta(currentMeta, errorMessage, now, notificationMaxAttempts);
         if (retry.nextStatus === "failed") {
           const deadLetterPath = path.join(deadLetterDir, `${now.toISOString().replace(/[:.]/g, "-")}-${entry.id}.json`);
           fs.writeFileSync(deadLetterPath, JSON.stringify({
@@ -1641,7 +1711,7 @@ const processNotificationQueue = async () => {
             eventType: entry.eventType,
             recipient: entry.recipient,
             subject: entry.subject,
-            payload: payloadWithMeta,
+            payload: entry.payload,
             errorMessage
           }, null, 2));
           await sendOpsAlert("Notification moved to dead letter", {
@@ -1654,10 +1724,12 @@ const processNotificationQueue = async () => {
         }
         await updateNotificationOutcome(
           entry.id,
+          claimToken,
           retry.nextStatus,
           errorMessage,
           now.toISOString(),
-          payloadWithMeta
+          retry.meta.nextAttemptAt || now.toISOString(),
+          retry.meta.attempts
         );
       }
     }
@@ -1665,6 +1737,28 @@ const processNotificationQueue = async () => {
   } finally {
     notificationProcessingInFlight = false;
   }
+};
+
+const runMaintenanceTasks = async () => {
+  if (maintenanceInFlight) return;
+  maintenanceInFlight = true;
+  try {
+    await pruneExpiredDatabaseRows();
+    pruneOperationalFiles();
+  } catch (error) {
+    await sendOpsAlert("Maintenance cleanup failed", {
+      errorMessage: error instanceof Error ? error.message : "Unknown maintenance error."
+    });
+  } finally {
+    maintenanceInFlight = false;
+  }
+};
+
+const startMaintenanceLoop = async () => {
+  await runMaintenanceTasks();
+  setInterval(() => {
+    void runMaintenanceTasks();
+  }, maintenancePollMs);
 };
 
 const shouldRunApiServer = notificationWorkerMode === "api" || notificationWorkerMode === "both";
@@ -1847,6 +1941,7 @@ const prepareManagedFile = async (
   if (kind === "document" && !documentExtensions.has(extension)) {
     throw new Error(`Unsupported document file type for ${path.basename(sourcePath)}.`);
   }
+  validateManagedFileContent(sourcePath, originalName, kind);
   const scannedPath = await runMalwareScan(sourcePath);
   try {
     const stored = await uploadFileToManagedStorage(scannedPath, kind, originalName);
@@ -1952,6 +2047,64 @@ const findExistingItemByLotOrSku = async (lot: string, sku: string) => {
 
 const validateBid = (item: StoredItem, amount: number) => {
   return validateBidAmount(item, amount, Date.now());
+};
+
+const placeBidAtomically = async (
+  item: StoredItem,
+  amount: number,
+  expectedCurrentBid: number,
+  bidderAlias: string,
+  bidderUserId: string,
+  idempotencyKey: string
+) => {
+  const bidId = randomUUID();
+  const createdAt = new Date().toISOString();
+  const idempotencyExpiresAt = new Date(Date.now() + sessionTtlMs).toISOString();
+  const result = await supabase.rpc("place_auction_bid", {
+    p_item_id: item.id,
+    p_bid_id: bidId,
+    p_bidder_alias: bidderAlias,
+    p_bidder_user_id: bidderUserId,
+    p_amount: amount,
+    p_expected_current_bid: expectedCurrentBid,
+    p_idempotency_key: idempotencyKey || null,
+    p_created_at: createdAt,
+    p_idempotency_expires_at: idempotencyExpiresAt
+  });
+  if (result.error) {
+    const message = result.error.message || "Unable to place bid.";
+    if (message.includes("ITEM_NOT_FOUND")) {
+      return { ok: false as const, status: 404, error: "Item not found." };
+    }
+    if (message.includes("IDEMPOTENCY_KEY_CONFLICT")) {
+      return { ok: false as const, status: 409, error: "Duplicate bid submission detected." };
+    }
+    if (message.includes("BID_STATE_CHANGED")) {
+      return { ok: false as const, status: 409, error: "Item bid state changed. Refresh and try again." };
+    }
+    if (message.includes("BIDDING_CLOSED")) {
+      return { ok: false as const, status: 400, error: "Bidding is closed or not yet open for this item." };
+    }
+    if (message.includes("BID_TOO_LOW:")) {
+      const requiredBid = message.split("BID_TOO_LOW:")[1]?.trim() || "";
+      return { ok: false as const, status: 400, error: `Bid must be at least ${requiredBid}.` };
+    }
+    if (message.includes("INVALID_INCREMENT:")) {
+      const increment = message.split("INVALID_INCREMENT:")[1]?.trim() || "";
+      return { ok: false as const, status: 400, error: `Bid must increase by ${increment}.` };
+    }
+    throw new Error(message);
+  }
+
+  const row = Array.isArray(result.data) ? result.data[0] : result.data;
+  return {
+    ok: true as const,
+    bidId: String(row?.bid_id || bidId),
+    bidSequence: Number(row?.bid_sequence || 0),
+    currentBid: Number(row?.current_bid || amount),
+    previousBidderUserId: row?.previous_bidder_user_id ? String(row.previous_bidder_user_id) : null,
+    duplicate: Boolean(row?.duplicate)
+  };
 };
 
 const checkBidRateLimit = async (req: express.Request, actor: string, itemId: string) =>
@@ -3348,10 +3501,6 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
     res.status(429).json({ error: "Too many bid attempts. Please wait and try again." });
     return;
   }
-  if (idempotencyKey && processedBidKeys.get(idempotencyKey) === req.params.id) {
-    res.status(409).json({ error: "Duplicate bid submission detected." });
-    return;
-  }
   const item = await getItemById(req.params.id);
   if (!item) {
     res.status(404).json({ error: "Item not found." });
@@ -3368,41 +3517,55 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
     res.status(400).json({ error: validation.error });
     return;
   }
-  const previousLeader = item.currentBid > 0
-    ? item.bids.find((bid) => bid.amount === item.currentBid && Boolean(bid.bidderUserId))
-    : undefined;
+  const persistedBidderUserId = auth.userId && auth.userId !== "admin-token" ? auth.userId : "";
   const biddingUser = auth.userId ? await getUserById(auth.userId) : null;
-  const bidRows = handleSupabase(await supabase.from("bids").select("id").eq("item_id", item.id)) as Array<{ id: string }>;
-  const bidSequence = bidRows.length + 1;
-  const bidAlias = `Bidder-${String(bidSequence).padStart(3, "0")}`;
-  const createdAt = new Date().toISOString();
-  await handleSupabase(await supabase.from("bids").insert({
-    id: randomUUID(),
-    item_id: item.id,
-    bidder_alias: bidAlias,
+  const bidResult = await placeBidAtomically(
+    item,
     amount,
-    bid_time: formatBidTime(createdAt),
-    created_at: createdAt
-  }));
-  await handleSupabase(await supabase.from("items").update({ current_bid: amount }).eq("id", item.id));
-  if (idempotencyKey) processedBidKeys.set(idempotencyKey, item.id);
+    expectedCurrentBid,
+    "Bidder",
+    persistedBidderUserId,
+    idempotencyKey
+  );
+  if (!bidResult.ok) {
+    res.status(bidResult.status).json({ error: bidResult.error });
+    return;
+  }
+  if (bidResult.duplicate) {
+    res.status(409).json({ error: "Duplicate bid submission detected." });
+    return;
+  }
   await appendAudit(req, {
     eventType: "BID_PLACED",
     entityType: "bid",
     entityId: item.id,
     actor,
     actorType: auth.actorType,
-    details: { amount, bidSequence, auctionItemId: item.id, bidderUserId: auth.userId || "" }
+    details: {
+      amount,
+      bidSequence: bidResult.bidSequence,
+      auctionItemId: item.id,
+      bidId: bidResult.bidId,
+      bidderUserId: persistedBidderUserId
+    }
   });
   await queueBidActivityNotifications(
-    item,
+    { ...item, currentBid: bidResult.currentBid },
     {
       userId: auth.userId,
       email: biddingUser?.email,
       displayName: biddingUser?.display_name || actor
     },
     amount,
-    previousLeader
+    bidResult.previousBidderUserId && item.currentBid > 0
+      ? {
+          bidder: "",
+          bidderUserId: bidResult.previousBidderUserId,
+          amount: item.currentBid,
+          time: "",
+          createdAt: ""
+        }
+      : undefined
   );
   res.json(await getItemById(item.id));
 }));
@@ -3410,14 +3573,22 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
 app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error(error);
   void reportServerError(req, error);
-  res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error." });
+  const requestId = String((req as express.Request & { requestId?: string }).requestId || res.locals.requestId || "");
+  const safeError = process.env.NODE_ENV === "production"
+    ? `Internal server error. Request ID: ${requestId}`
+    : error instanceof Error
+      ? error.message
+      : "Internal server error.";
+  res.status(500).json({ error: safeError });
 });
 
 const start = async () => {
   await handleSupabase(await supabase.from("roles").select("name").limit(1));
+  await verifyRequiredSchemaMigrations();
   await detectSecurityEventsTable();
+  await verifyMalwareScannerHealth();
   await ensureStorageBuckets();
-  pruneOperationalFiles();
+  await startMaintenanceLoop();
   await seedRoles();
   await seedCategoriesIfEmpty();
   await seedItemsIfEmpty();
@@ -3444,8 +3615,14 @@ const start = async () => {
   });
 };
 
-void start().catch((error) => {
-  console.error("Unable to start API server.");
-  console.error(error);
-  process.exit(1);
-});
+const shouldAutoStart = process.argv[1] ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) : false;
+
+if (shouldAutoStart) {
+  void start().catch((error) => {
+    console.error("Unable to start API server.");
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+export { app, start };

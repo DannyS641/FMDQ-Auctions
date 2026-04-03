@@ -27,6 +27,13 @@ jobs:
       - name: Typecheck server
         run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck --types node server/index.ts
 
+      - name: Check migration inventory
+        run: npm run db:migrations:check
+        env:
+          REQUIRE_REMOTE_MIGRATION_CHECK: "1"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
       - name: Run security logic tests
         run: npm test
 

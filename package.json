@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "dev:server": "tsx server/index.ts",
     "dev:worker": "tsx server/worker.ts",
+    "db:migrate": "tsx scripts/apply-sql-migrations.ts",
+    "db:migrations:check": "tsx scripts/check-required-migrations.ts",
     "test": "node --import tsx --test tests/**/*.test.ts"
   },
   "dependencies": {
