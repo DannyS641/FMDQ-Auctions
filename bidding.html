@@ -40,26 +40,37 @@
       </div>
     </div>
     <div class="min-h-screen bg-ash" data-app-root>
-      <header class="border-b border-ink/8 bg-white/92 backdrop-blur">
-        <nav class="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-5">
+      <header class="bg-white px-4 py-4 md:px-6">
+        <nav class="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-4 rounded-[2rem] border border-ink/10 bg-white px-5 py-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)]">
           <a href="/bidding.html" class="flex items-center gap-3">
-            <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
+            <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-12 w-auto" />
           </a>
           <div class="flex flex-wrap items-center gap-2">
-            <a href="/bidding.html" class="rounded-full bg-[#1d326c] px-4 py-2 text-xs font-semibold text-white">Auction desk</a>
-            <a href="/dashboard.html" class="rounded-full border border-ink/10 bg-white/80 px-4 py-2 text-xs font-semibold text-ink transition hover:border-[#1d326c]/25 hover:text-[#1d326c]">Dashboard</a>
-            <a href="/my-bids.html" class="rounded-full border border-ink/10 bg-white/80 px-4 py-2 text-xs font-semibold text-ink transition hover:border-[#1d326c]/25 hover:text-[#1d326c]">My bids</a>
+            <a href="/bidding.html" class="inline-flex min-h-[3rem] items-center justify-center rounded-[0.9rem] bg-[#1d326c] px-6 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200">Auction desk</a>
+            <a href="/dashboard.html" class="inline-flex min-h-[3rem] items-center justify-center rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c]">Dashboard</a>
+            <a href="/my-bids.html" class="inline-flex min-h-[3rem] items-center justify-center rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c]">My bids</a>
           </div>
           <div class="flex flex-wrap items-center gap-3 text-xs">
             <span id="ad-status" class="hidden">Loading</span>
-            <div class="rounded-full border border-[#d7dfef] bg-[#eef3ff] px-4 py-2 font-semibold text-[#1d326c]">
+            <div class="inline-flex min-h-[3rem] items-center justify-center rounded-[0.9rem] bg-[#eef3ff] px-6 text-sm font-semibold text-[#1d326c]">
               Role: <span class="ml-1 text-ink" id="active-role-label">Guest</span>
             </div>
-            <a href="/profile.html" class="rounded-full border border-ink/10 bg-white/80 px-4 py-2 font-semibold text-ink">
+            <a href="/profile.html" class="inline-flex min-h-[3rem] items-center justify-center gap-2 whitespace-nowrap rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c]">
               <span id="ad-user">Checking</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">
+                <path d="M20 21a8 8 0 0 0-16 0" />
+                <circle cx="12" cy="8" r="4" />
+              </svg>
             </a>
-            <button id="ad-login" class="rounded-full bg-[#1d326c] px-4 py-2 font-semibold text-white">Sign in</button>
-            <button id="ad-logout" class="hidden rounded-full border border-ink/10 bg-white/80 px-4 py-2 font-semibold text-ink">Sign out</button>
+            <button id="ad-login" class="inline-flex min-h-[3rem] items-center justify-center rounded-[0.9rem] bg-[#1d326c] px-6 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200">Sign in</button>
+            <button id="ad-logout" class="hidden inline-flex min-h-[3rem] items-center justify-center gap-2 whitespace-nowrap rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c]" type="button">
+              <span>Sign out</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <path d="M16 17l5-5-5-5" />
+                <path d="M21 12H9" />
+              </svg>
+            </button>
           </div>
         </nav>
       </header>
@@ -98,7 +109,7 @@
                 <p class="mt-2 text-sm text-slate"><span id="item-count">0</span> items found</p>
               </div>
               <div class="flex flex-wrap items-center gap-3">
-                <div class="rounded-full border border-ink/10 bg-white px-4 py-2 text-xs text-slate">
+                <div class="rounded-[0.9rem] border border-ink/10 bg-white px-4 py-2 text-xs text-slate">
                   <span class="font-semibold text-ink" id="live-count">0</span> live - <span class="font-semibold text-ink" id="closing-count">0</span> closing soon
                 </div>
               </div>
@@ -129,8 +140,8 @@
               <p class="mt-2 text-sm text-slate">Create new listings, edit current items, export records, and inspect the notification spool from dedicated admin workspaces.</p>
             </div>
             <div class="flex flex-wrap items-center gap-3">
-              <a href="/operations.html" class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Open operations</a>
-              <a href="/admin-item.html" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">Open item manager</a>
+              <a href="/operations.html" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Open operations</a>
+              <a href="/admin-item.html" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Open item manager</a>
             </div>
           </div>
         </section>

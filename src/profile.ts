@@ -56,8 +56,8 @@ const init = async () => {
             <div><span class="text-slate">Last login:</span> <span class="font-semibold">${profile.lastLoginAt ? formatDate(profile.lastLoginAt) : "Never"}</span></div>
           </div>
           <div class="mt-6 flex flex-wrap gap-3">
-            <button id="profile-reset-password" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">Email me a reset link</button>
-            <button id="profile-signout" class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Sign out</button>
+            <button id="profile-reset-password" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Email me a reset link</button>
+            <button id="profile-signout" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Sign out</button>
           </div>
           <p id="profile-feedback" class="mt-4 rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">Manage your sessions and account security from here.</p>
         </div>
@@ -67,7 +67,7 @@ const init = async () => {
               <p class="text-xs uppercase tracking-[0.3em] text-slate">Session management</p>
               <h2 class="mt-2 text-2xl font-semibold text-ink">Devices and active sessions</h2>
             </div>
-            <button id="revoke-other-sessions" class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Revoke other sessions</button>
+            <button id="revoke-other-sessions" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Revoke other sessions</button>
           </div>
           <div class="mt-6 space-y-3">
             ${sessions.length ? sessions.map((entry) => `
@@ -78,7 +78,7 @@ const init = async () => {
                     <p class="mt-1 text-xs text-slate">Started ${formatDate(entry.createdAt)}</p>
                     <p class="mt-1 text-xs text-slate">Expires ${formatDate(entry.expiresAt)}</p>
                   </div>
-                  ${entry.current ? `<span class="rounded-full border border-ink/10 bg-white px-3 py-1 text-xs font-semibold text-ink">This browser</span>` : `<button data-revoke-session="${entry.id}" class="rounded-full border border-rose-200 px-4 py-2 text-xs font-semibold text-rose-700">Revoke</button>`}
+                  ${entry.current ? `<span class="rounded-full border border-ink/10 bg-white px-3 py-1 text-xs font-semibold text-ink">This browser</span>` : `<button data-revoke-session="${entry.id}" class="rounded-[0.9rem] border border-rose-200 px-4 py-2 text-xs font-semibold text-rose-700">Revoke</button>`}
                 </div>
               </div>
             `).join("") : `<p class="text-sm text-slate">No active sessions found.</p>`}

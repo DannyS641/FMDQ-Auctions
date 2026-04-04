@@ -25,7 +25,7 @@ const renderSignupPage = () => {
             <div class="w-full max-w-md">
               <div class="flex items-center justify-between gap-4">
                 <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
-                <a href="/signin.html" class="rounded-full border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate">Sign in</a>
+                <a href="/signin.html" class="rounded-[0.9rem] border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate">Sign in</a>
               </div>
 
               <h3 class="mt-6 font-display text-xl font-bold leading-tight text-ink md:text-[1.4rem]">Set up your account</h3>
@@ -36,9 +36,9 @@ const renderSignupPage = () => {
                 <input id="signup-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
                 <div class="flex items-center gap-2 rounded-2xl border border-ink/10 bg-white px-4 py-3">
                   <input id="signup-password" type="password" class="w-full bg-transparent text-sm outline-none" placeholder="Password (8+ chars, upper, lower, number, symbol)" />
-                  <button id="signup-password-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show password"></button>
+                  <button id="signup-password-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-[0.9rem] text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show password"></button>
                 </div>
-                <button type="submit" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Create account</button>
+                <button type="submit" class="rounded-[0.9rem] bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Create account</button>
               </form>
 
               <p id="signup-note" class="mt-4 min-h-[1.25rem] rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">Create your account to receive a verification link.</p>
@@ -59,8 +59,8 @@ const renderSignupPage = () => {
           <h4 class="mt-3 font-display text-2xl font-semibold text-ink">Confirm your agreement</h4>
           <p class="mt-4 text-sm leading-6 text-slate">By clicking this, you agree to the <a href="/terms.html" target="_blank" rel="noreferrer" class="font-semibold text-ink underline underline-offset-4">Terms &amp; Conditions</a>, <a href="/auction-rules.html" target="_blank" rel="noreferrer" class="font-semibold text-ink underline underline-offset-4">Auction Rules</a>, and <a href="/declaration.html" target="_blank" rel="noreferrer" class="font-semibold text-ink underline underline-offset-4">Declaration</a> for the FMDQ Auctions Portal.</p>
           <div class="mt-6 flex flex-wrap items-center justify-end gap-3">
-            <button id="signup-consent-cancel" type="button" class="rounded-full border border-ink/15 px-5 py-3 text-sm font-semibold text-ink">Cancel</button>
-            <button id="signup-consent-confirm" type="button" class="rounded-full bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">I agree, create account</button>
+            <button id="signup-consent-cancel" type="button" class="rounded-[0.9rem] border border-ink/15 px-5 py-3 text-sm font-semibold text-ink">Cancel</button>
+            <button id="signup-consent-confirm" type="button" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">I agree, create account</button>
           </div>
         </div>
       </div>

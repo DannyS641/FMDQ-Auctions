@@ -21,6 +21,12 @@ const revealApp = () => {
 
 const formatMoney = (value: number) => `NGN ${value.toLocaleString("en-NG")}`;
 const formatDate = (value: string) => new Date(value).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
+const renderWonStatus = () => `
+  <span class="inline-flex items-center gap-2 text-xs font-semibold text-ink">
+    <span class="h-2.5 w-2.5 rounded-full bg-[#d4af37]"></span>
+    <span>Won</span>
+  </span>
+`;
 
 const renderShell = (content: string) => {
   const root = document.querySelector<HTMLDivElement>("#won-app");
@@ -60,7 +66,7 @@ const init = async () => {
                 <article class="rounded-3xl border border-ink/10 bg-white p-5">
                   <div class="flex items-center justify-between gap-3">
                     <p class="text-xs uppercase tracking-[0.3em] text-slate">${item.category}</p>
-                    <span class="rounded-full bg-[#fff7e8] px-3 py-1 text-xs font-semibold text-[#9a6408]">Won</span>
+                    ${renderWonStatus()}
                   </div>
                   <h2 class="mt-3 text-xl font-semibold text-ink">${item.title}</h2>
                   <p class="mt-2 text-xs text-slate">Lot ${item.lot} · ${item.location}</p>
@@ -69,7 +75,7 @@ const init = async () => {
                     <div class="flex items-center justify-between"><span class="text-slate">Auction ended</span><span class="font-semibold text-ink">${formatDate(item.endTime)}</span></div>
                     <div class="flex items-center justify-between"><span class="text-slate">Winning event</span><span class="font-semibold text-ink">${formatDate(item.wonAt)}</span></div>
                   </div>
-                  <a href="/item.html?id=${item.id}" class="mt-5 inline-flex rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Open details</a>
+                  <a href="/item.html?id=${item.id}" class="mt-5 inline-flex rounded-[0.9rem] bg-[#1d326c] px-4 py-2 text-xs font-semibold text-white">Open details</a>
                 </article>
               `).join("")
             : `<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">No won auctions are assigned to this user yet. In this build, wins are resolved from the audit trail of closed auctions.</div>`}

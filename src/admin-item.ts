@@ -258,8 +258,8 @@ const renderManager = () => {
             <p class="mt-2 text-sm text-slate">Create items, review current listings, edit records, and remove listings from one page.</p>
           </div>
           <div class="flex items-center gap-3">
-            <button id="create-item-btn" type="button" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">Add new item</button>
-            <button id="refresh-items-btn" type="button" class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Refresh list</button>
+            <button id="create-item-btn" type="button" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Add new item</button>
+            <button id="refresh-items-btn" type="button" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Refresh list</button>
           </div>
         </div>
 
@@ -270,7 +270,7 @@ const renderManager = () => {
               <h2 class="mt-2 text-2xl font-semibold text-ink">${formHeading}</h2>
               <p class="mt-2 text-sm text-slate">${formSummary}</p>
             </div>
-            ${selectedItem ? `<a href="/item.html?id=${selectedItem.id}" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">View item</a>` : ""}
+            ${selectedItem ? `<a href="/item.html?id=${selectedItem.id}" class="rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">View item</a>` : ""}
           </div>
 
           <div class="mt-6 rounded-3xl border border-ink/10 bg-white p-5">
@@ -280,7 +280,7 @@ const renderManager = () => {
                 <h3 class="mt-2 text-xl font-semibold text-ink">Upload CSV + ZIP bundle</h3>
                 <p class="mt-2 text-sm text-slate">Import many items at once. Put one row per item in the CSV, then add matching image/document filenames in the ZIP.</p>
               </div>
-              <button id="download-import-template" type="button" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Download template</button>
+              <button id="download-import-template" type="button" class="rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Download template</button>
             </div>
             <div class="mt-5 grid gap-4 md:grid-cols-2">
               <label class="grid gap-3 rounded-3xl border border-ink/10 bg-ink/5 p-4">
@@ -288,7 +288,7 @@ const renderManager = () => {
                 <input id="bulk-import-csv" type="file" accept=".csv,text/csv" class="hidden" />
                 <div class="flex flex-wrap items-center justify-between gap-3">
                   <span id="bulk-import-csv-name" class="text-sm text-slate">No CSV selected</span>
-                  <span class="rounded-full border border-ink/20 bg-white px-4 py-2 text-xs font-semibold text-ink">Choose CSV</span>
+                  <span class="rounded-[0.9rem] border border-ink/20 bg-white px-4 py-2 text-xs font-semibold text-ink">Choose CSV</span>
                 </div>
               </label>
               <label class="grid gap-3 rounded-3xl border border-ink/10 bg-ink/5 p-4">
@@ -296,12 +296,12 @@ const renderManager = () => {
                 <input id="bulk-import-zip" type="file" accept=".zip,application/zip" class="hidden" />
                 <div class="flex flex-wrap items-center justify-between gap-3">
                   <span id="bulk-import-zip-name" class="text-sm text-slate">Optional ZIP bundle</span>
-                  <span class="rounded-full border border-ink/20 bg-white px-4 py-2 text-xs font-semibold text-ink">Choose ZIP</span>
+                  <span class="rounded-[0.9rem] border border-ink/20 bg-white px-4 py-2 text-xs font-semibold text-ink">Choose ZIP</span>
                 </div>
               </label>
             </div>
             <div class="mt-5 flex flex-wrap items-center gap-3">
-              <button id="bulk-import-submit" type="button" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">Import items</button>
+              <button id="bulk-import-submit" type="button" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Import items</button>
               <p id="bulk-import-feedback" class="text-sm text-slate"></p>
             </div>
             ${state.bulkImportReport ? `
@@ -401,7 +401,7 @@ const renderManager = () => {
               </div>
               <div class="mt-4 flex flex-wrap items-center gap-3">
                 <input id="new-category-name" class="min-w-[220px] flex-1 rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="New category name" />
-                <button id="add-category-btn" type="button" class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Add category</button>
+                <button id="add-category-btn" type="button" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Add category</button>
               </div>
               <p id="category-feedback" class="mt-3 text-sm text-slate"></p>
               <div class="mt-4 flex flex-wrap gap-2">
@@ -454,7 +454,7 @@ const renderManager = () => {
                 <input id="admin-images" type="file" multiple accept="image/*" class="hidden" />
                 <div class="flex flex-wrap items-center justify-between gap-3">
                   <span id="admin-images-name" class="text-sm text-slate">No images selected</span>
-                  <span class="rounded-full border border-ink/20 bg-ink/5 px-4 py-2 text-xs font-semibold text-ink">Choose images</span>
+                  <span class="rounded-[0.9rem] border border-ink/20 bg-ink/5 px-4 py-2 text-xs font-semibold text-ink">Choose images</span>
                 </div>
               </label>
               <label class="grid gap-3 rounded-2xl border border-ink/10 bg-white p-4">
@@ -465,16 +465,16 @@ const renderManager = () => {
                 </select>
                 <div class="flex flex-wrap items-center justify-between gap-3">
                   <span id="admin-documents-name" class="text-sm text-slate">No documents selected</span>
-                  <span class="rounded-full border border-ink/20 bg-ink/5 px-4 py-2 text-xs font-semibold text-ink">Choose documents</span>
+                  <span class="rounded-[0.9rem] border border-ink/20 bg-ink/5 px-4 py-2 text-xs font-semibold text-ink">Choose documents</span>
                 </div>
               </label>
             </div>
             <div class="md:col-span-2 flex flex-wrap items-center gap-3">
-              <button type="submit" class="rounded-full bg-ink px-6 py-3 text-sm font-semibold text-white">${state.mode === "edit" ? "Save changes" : "Create item"}</button>
+              <button type="submit" class="rounded-[0.9rem] bg-ink px-6 py-3 text-sm font-semibold text-white">${state.mode === "edit" ? "Save changes" : "Create item"}</button>
               ${selectedItem?.archivedAt
-                ? `<button id="restore-current-item-btn" type="button" class="rounded-full border border-emerald-200 px-6 py-3 text-sm font-semibold text-emerald-700">Restore item</button>`
+                ? `<button id="restore-current-item-btn" type="button" class="rounded-[0.9rem] border border-emerald-200 px-6 py-3 text-sm font-semibold text-emerald-700">Restore item</button>`
                 : selectedItem
-                  ? `<button id="delete-current-item-btn" type="button" class="rounded-full border border-rose-200 px-6 py-3 text-sm font-semibold text-rose-700">Archive item</button>`
+                  ? `<button id="delete-current-item-btn" type="button" class="rounded-[0.9rem] border border-rose-200 px-6 py-3 text-sm font-semibold text-rose-700">Archive item</button>`
                   : ""}
             </div>
             <p id="admin-feedback" class="md:col-span-2 text-sm text-slate"></p>
@@ -492,9 +492,9 @@ const renderManager = () => {
         </div>
 
         <div class="mt-5 flex flex-wrap gap-2">
-          <button data-list-filter="all" type="button" class="rounded-full px-4 py-2 text-xs font-semibold ${state.listFilter === "all" ? "bg-ink text-white" : "border border-ink/15 text-ink"}">All (${state.items.length})</button>
-          <button data-list-filter="active" type="button" class="rounded-full px-4 py-2 text-xs font-semibold ${state.listFilter === "active" ? "bg-ink text-white" : "border border-ink/15 text-ink"}">Active (${activeItemsCount})</button>
-          <button data-list-filter="archived" type="button" class="rounded-full px-4 py-2 text-xs font-semibold ${state.listFilter === "archived" ? "bg-ink text-white" : "border border-ink/15 text-ink"}">Archived (${archivedItemsCount})</button>
+          <button data-list-filter="all" type="button" class="rounded-[0.9rem] px-4 py-2 text-xs font-semibold ${state.listFilter === "all" ? "bg-ink text-white" : "border border-ink/15 text-ink"}">All (${state.items.length})</button>
+          <button data-list-filter="active" type="button" class="rounded-[0.9rem] px-4 py-2 text-xs font-semibold ${state.listFilter === "active" ? "bg-ink text-white" : "border border-ink/15 text-ink"}">Active (${activeItemsCount})</button>
+          <button data-list-filter="archived" type="button" class="rounded-[0.9rem] px-4 py-2 text-xs font-semibold ${state.listFilter === "archived" ? "bg-ink text-white" : "border border-ink/15 text-ink"}">Archived (${archivedItemsCount})</button>
         </div>
 
         <div class="mt-6 space-y-4">
@@ -513,11 +513,11 @@ const renderManager = () => {
                     </div>
                   </div>
                   <div class="mt-4 flex flex-wrap items-center gap-2">
-                    <button data-edit-item="${item.id}" type="button" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Edit</button>
+                    <button data-edit-item="${item.id}" type="button" class="rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Edit</button>
                     ${item.archivedAt
-                      ? `<button data-restore-item="${item.id}" type="button" class="rounded-full border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-700">Restore</button>`
-                      : `<button data-delete-item="${item.id}" type="button" class="rounded-full border border-rose-200 px-4 py-2 text-xs font-semibold text-rose-700">Archive</button>`}
-                    <a href="/item.html?id=${item.id}" class="rounded-full border border-ink/10 px-4 py-2 text-xs font-semibold text-ink">View</a>
+                      ? `<button data-restore-item="${item.id}" type="button" class="rounded-[0.9rem] border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-700">Restore</button>`
+                      : `<button data-delete-item="${item.id}" type="button" class="rounded-[0.9rem] border border-rose-200 px-4 py-2 text-xs font-semibold text-rose-700">Archive</button>`}
+                    <a href="/item.html?id=${item.id}" class="rounded-[0.9rem] border border-ink/10 px-4 py-2 text-xs font-semibold text-ink">View</a>
                   </div>
                 </article>
               `).join("")
@@ -526,9 +526,9 @@ const renderManager = () => {
 
         ${filteredItems.length > itemsPerPage ? `
           <div class="mt-6 flex items-center justify-between gap-3 border-t border-ink/10 pt-4">
-            <button id="items-prev-page" type="button" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink ${state.listPage === 1 ? "opacity-50" : ""}" ${state.listPage === 1 ? "disabled" : ""}>Previous</button>
+            <button id="items-prev-page" type="button" class="rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink ${state.listPage === 1 ? "opacity-50" : ""}" ${state.listPage === 1 ? "disabled" : ""}>Previous</button>
             <p class="text-xs font-semibold uppercase tracking-[0.24em] text-slate">Page ${state.listPage} of ${totalPages}</p>
-            <button id="items-next-page" type="button" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink ${state.listPage === totalPages ? "opacity-50" : ""}" ${state.listPage === totalPages ? "disabled" : ""}>Next</button>
+            <button id="items-next-page" type="button" class="rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink ${state.listPage === totalPages ? "opacity-50" : ""}" ${state.listPage === totalPages ? "disabled" : ""}>Next</button>
           </div>
         ` : ""}
       </aside>
@@ -541,8 +541,8 @@ const renderManager = () => {
           <h3 class="mt-3 text-2xl font-semibold text-ink">${confirmationTitle}</h3>
           <p class="mt-3 text-sm text-slate">${confirmationMessage}</p>
           <div class="mt-6 flex items-center justify-end gap-3">
-            <button id="modal-cancel-btn" type="button" class="rounded-full border border-ink/15 px-5 py-3 text-sm font-semibold text-ink">Cancel</button>
-            <button id="modal-confirm-btn" type="button" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">${state.confirmation?.kind === "category" ? "Delete" : "Archive"}</button>
+            <button id="modal-cancel-btn" type="button" class="rounded-[0.9rem] border border-ink/15 px-5 py-3 text-sm font-semibold text-ink">Cancel</button>
+            <button id="modal-confirm-btn" type="button" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">${state.confirmation?.kind === "category" ? "Delete" : "Archive"}</button>
           </div>
         </div>
       </div>

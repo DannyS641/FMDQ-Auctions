@@ -32,14 +32,14 @@ const renderSigninPage = () => {
             <div class="w-full max-w-md">
               <div class="flex items-center justify-between gap-4">
                 <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
-                <a href="/index.html" class="rounded-full border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate">Back</a>
+                <a href="/index.html" class="rounded-[0.9rem] border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate">Back</a>
               </div>
 
               <p class="mt-8 text-[11px] uppercase tracking-[0.34em] text-slate">FMDQ Auctions Portal</p>
               <h3 class="mt-6 font-display text-xl font-bold leading-tight text-ink md:text-[1.4rem]">Welcome back</h3>
               <p class="mt-4 font-display text-base text-slate">Sign in to continue to the bidding desk.</p>
 
-              <div class="mt-8 rounded-full border border-ink/10 bg-[#faf9f7] px-5 py-4">
+              <div class="mt-8 rounded-[0.9rem] border border-ink/10 bg-[#faf9f7] px-5 py-4">
                 <p class="text-[11px] uppercase tracking-[0.28em] text-slate">User</p>
                 <p id="session-user" class="mt-1 font-display text-base font-semibold text-ink">${session.signedIn ? session.displayName : "No active session"}</p>
               </div>
@@ -54,8 +54,8 @@ const renderSigninPage = () => {
                 session.signedIn
                   ? `
                     <div class="grid gap-3">
-                      <button id="logout-btn" class="rounded-full border border-ink/15 bg-white px-6 py-3.5 font-display text-base font-semibold text-ink">Sign out</button>
-                      <button id="continue-btn" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Continue to bidding</button>
+                      <button id="logout-btn" class="rounded-[0.9rem] border border-ink/15 bg-white px-6 py-3.5 font-display text-base font-semibold text-ink">Sign out</button>
+                      <button id="continue-btn" class="rounded-[0.9rem] bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Continue to bidding</button>
                     </div>
                   `
                   : `
@@ -64,14 +64,14 @@ const renderSigninPage = () => {
                       <input id="login-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
                       <div class="flex items-center gap-2 rounded-2xl border border-ink/10 bg-white px-4 py-3">
                         <input id="login-password" type="password" class="w-full bg-transparent text-sm outline-none" placeholder="Password" />
-                        <button id="login-password-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show password"></button>
+                        <button id="login-password-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-[0.9rem] text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show password"></button>
                       </div>
                       <a href="/reset-password.html" class="text-right text-xs font-semibold text-[#1d326c]">Forgot password?</a>
-                      <button type="submit" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Sign in</button>
+                      <button type="submit" class="rounded-[0.9rem] bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">Sign in</button>
                     </form>
                     <button id="resend-verification-btn" class="mt-3 hidden text-left text-xs font-semibold text-[#1d326c]">Resend verification email</button>
                     <div class="mt-6 grid gap-3">
-                      <a href="/signup.html" class="rounded-full border border-ink/15 bg-white px-6 py-3.5 text-center font-display text-base font-semibold text-ink shadow-[0_8px_25px_rgba(11,14,18,0.07)]">Create account</a>
+                      <a href="/signup.html" class="rounded-[0.9rem] border border-ink/15 bg-white px-6 py-3.5 text-center font-display text-base font-semibold text-ink shadow-[0_8px_25px_rgba(11,14,18,0.07)]">Create account</a>
                     </div>
                   `
               }

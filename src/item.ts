@@ -221,7 +221,7 @@ const renderItem = (item: AuctionItem) => {
         </div>
         ${
           session.role === "Admin" || session.role === "SuperAdmin"
-            ? `<a href="/admin-item.html?id=${item.id}" class="mt-5 inline-flex rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Edit item</a>`
+            ? `<a href="/admin-item.html?id=${item.id}" class="mt-5 inline-flex rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Edit item</a>`
             : ""
         }
       </div>
@@ -241,7 +241,7 @@ const renderItem = (item: AuctionItem) => {
             <button
               id="bid-step"
               type="button"
-              class="rounded-full border border-ink/20 px-4 py-3 text-sm font-semibold text-ink"
+              class="rounded-[0.9rem] border border-ink/20 px-4 py-3 text-sm font-semibold text-ink"
               aria-label="Increase bid"
               ${bidState.allowed ? "" : "disabled"}
             >
@@ -251,12 +251,12 @@ const renderItem = (item: AuctionItem) => {
           <button
             id="bid-submit"
             type="submit"
-            class="w-full rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white"
+            class="w-full rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white"
             ${bidState.allowed ? "" : "disabled"}
           >
             Place bid
           </button>
-          ${!readAuthSession().signedIn ? `<a href="/signin.html" class="block w-full rounded-full border border-ink/20 px-5 py-3 text-center text-sm font-semibold text-ink">Sign in</a>` : ""}
+          ${!readAuthSession().signedIn ? `<a href="/signin.html" class="block w-full rounded-[0.9rem] border border-ink/20 px-5 py-3 text-center text-sm font-semibold text-ink">Sign in</a>` : ""}
           <p id="bid-hint" class="text-xs text-slate">${bidState.message}</p>
         </form>
       </div>

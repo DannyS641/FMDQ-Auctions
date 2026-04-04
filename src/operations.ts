@@ -105,7 +105,7 @@ const renderPageButtons = (totalItems: number, currentPage: number, kind: "audit
       <button
         data-page-kind="${kind}"
         data-page-number="${page}"
-        class="h-10 min-w-10 rounded-full px-3 text-xs font-semibold transition ${
+        class="h-10 min-w-10 rounded-[0.9rem] px-3 text-xs font-semibold transition ${
           active
             ? "bg-[#1d326c] text-white"
             : "border border-ink/10 bg-white text-ink hover:border-[#1d326c]/25 hover:text-[#1d326c]"
@@ -314,8 +314,8 @@ const renderPage = (
               </label>
             </div>
             <div class="mt-5 flex flex-wrap gap-3">
-              <button id="spool-item-sheet" class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Spool item sheet</button>
-              <button id="spool-audit-bundle" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">Spool audit bundle</button>
+              <button id="spool-item-sheet" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Spool item sheet</button>
+              <button id="spool-audit-bundle" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Spool audit bundle</button>
             </div>
             <p id="spool-feedback" class="mt-4 text-sm text-slate">Use these controls to spool by auction ID or date range.</p>
           </div>
@@ -329,7 +329,7 @@ const renderPage = (
               <p class="text-xs uppercase tracking-[0.3em] text-slate">Audit search</p>
               <h2 class="mt-2 text-2xl font-semibold text-ink">Activity trail</h2>
             </div>
-            <button id="apply-audit-filters" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">Apply filters</button>
+            <button id="apply-audit-filters" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Apply filters</button>
           </div>
           <div class="mt-5 grid gap-3 md:grid-cols-2">
             <input id="audit-item-id" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm" placeholder="Item ID" />
@@ -368,9 +368,9 @@ const renderPage = (
             <p class="mt-2 text-sm text-slate">Issue password resets, disable or re-enable users, and review role assignments from one panel.</p>
           </div>
           <div class="flex flex-wrap gap-3">
-            <button data-bulk-reset="all" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">Reset all users</button>
-            <button data-bulk-reset="role" data-bulk-role="Bidder" class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Reset all bidders</button>
-            <button data-bulk-reset="role" data-bulk-role="Admin" class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Reset all admins</button>
+            <button data-bulk-reset="all" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Reset all users</button>
+            <button data-bulk-reset="role" data-bulk-role="Bidder" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Reset all bidders</button>
+            <button data-bulk-reset="role" data-bulk-role="Admin" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Reset all admins</button>
           </div>
         </div>
         <p id="reset-feedback" class="mt-4 rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">Use these controls to issue password reset emails, disable users, and manage roles.</p>
@@ -393,21 +393,21 @@ const renderPage = (
                   </div>
                   ${isSuperAdmin ? `
                     <div class="mt-3 flex flex-wrap gap-2">
-                      <select data-role-select="${user.id}" class="rounded-full border border-ink/10 bg-white px-4 py-2 text-xs text-ink">
+                      <select data-role-select="${user.id}" class="rounded-[0.9rem] border border-ink/10 bg-white px-4 py-2 text-xs text-ink">
                         <option value="">Assign role</option>
                         ${roles.map((role) => `<option value="${role}">${role}</option>`).join("")}
                       </select>
-                      <button data-assign-role="${user.id}" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Assign</button>
+                      <button data-assign-role="${user.id}" class="rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Assign</button>
                     </div>
                   ` : ""}
                 </div>
                 <div class="flex min-w-[260px] flex-col gap-2">
-                  <button data-user-reset="${user.id}" class="rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Send reset</button>
+                  <button data-user-reset="${user.id}" class="rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Send reset</button>
                   ${user.status === "disabled"
-                    ? `<button data-user-enable="${user.id}" class="rounded-full border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800">Enable user</button>`
+                    ? `<button data-user-enable="${user.id}" class="rounded-[0.9rem] border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800">Enable user</button>`
                     : `
-                        <input data-disable-reason="${user.id}" class="rounded-full border border-ink/10 px-4 py-2 text-xs" placeholder="Disable reason (audit note)" />
-                        <button data-user-disable="${user.id}" class="rounded-full border border-rose-200 px-4 py-2 text-xs font-semibold text-rose-700">Disable user</button>
+                        <input data-disable-reason="${user.id}" class="rounded-[0.9rem] border border-ink/10 px-4 py-2 text-xs" placeholder="Disable reason (audit note)" />
+                        <button data-user-disable="${user.id}" class="rounded-[0.9rem] border border-rose-200 px-4 py-2 text-xs font-semibold text-rose-700">Disable user</button>
                       `}
                 </div>
               </div>
@@ -423,15 +423,15 @@ const renderPage = (
             <h2 class="mt-2 text-2xl font-semibold text-ink">Upload user CSV</h2>
             <p class="mt-2 text-sm text-slate">Import users with email, display name, optional roles, and optional status.</p>
             <div class="mt-5 flex flex-wrap items-center gap-3">
-              <label class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">
+              <label class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">
                 <input id="bulk-user-csv" type="file" accept=".csv,text/csv" class="hidden" />
                 Choose CSV
               </label>
               <span id="bulk-user-csv-name" class="text-sm text-slate">No file selected</span>
             </div>
             <div class="mt-5 flex flex-wrap gap-3">
-              <button id="bulk-user-import" class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white">Import users</button>
-              <button id="download-user-template" class="rounded-full border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Download template</button>
+              <button id="bulk-user-import" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Import users</button>
+              <button id="download-user-template" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Download template</button>
             </div>
             <p id="bulk-user-feedback" class="mt-4 text-sm text-slate">Template columns: email, display_name, roles, status.</p>
           </div>

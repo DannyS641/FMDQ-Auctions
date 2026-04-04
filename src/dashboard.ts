@@ -76,7 +76,7 @@ const init = async () => {
       <div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">
         <p class="font-semibold text-ink">Unable to load your dashboard right now.</p>
         <p class="mt-3">Please refresh the page or try again in a moment.</p>
-        <button id="dashboard-retry" type="button" class="mt-6 rounded-full bg-[#1d326c] px-6 py-3 text-sm font-semibold text-white">Try again</button>
+        <button id="dashboard-retry" type="button" class="mt-6 rounded-[0.9rem] bg-[#1d326c] px-6 py-3 text-sm font-semibold text-white">Try again</button>
       </div>
     `);
     document.querySelector<HTMLButtonElement>("#dashboard-retry")?.addEventListener("click", () => {

@@ -288,11 +288,18 @@ const resolveRole = () => {
   return (session.role as Role) || "Guest";
 };
 
-const formatStatusClass = (status: Status) => {
-  if (status === "Live") return "bg-neon text-white";
-  if (status === "Upcoming") return "bg-gold text-white";
-  return "bg-slate text-white";
+const getStatusDotClass = (status: Status) => {
+  if (status === "Live") return "bg-emerald-500";
+  if (status === "Upcoming") return "bg-[#d4af37]";
+  return "bg-slate";
 };
+
+const renderStatusLabel = (status: Status) => `
+  <span class="inline-flex items-center gap-2 text-xs font-semibold text-ink">
+    <span class="h-2.5 w-2.5 rounded-full ${getStatusDotClass(status)}"></span>
+    <span>${status}</span>
+  </span>
+`;
 
 const getStatus = (item: AuctionItem): Status => {
   const nowTime = Date.now();
@@ -353,8 +360,8 @@ const renderCategoryTabs = () => {
       return `
         <button
           data-category-tab="${category}"
-          class="rounded-full border px-4 py-2 text-sm font-semibold ${
-            isActive ? "border-ink bg-ink text-white" : "border-ink/20 text-ink"
+          class="rounded-[0.9rem] border px-4 py-2 text-sm font-semibold ${
+            isActive ? "border-[#1d326c] bg-[#1d326c] text-white" : "border-ink/20 text-ink"
           }"
         >
           ${category}
@@ -495,12 +502,7 @@ const renderItems = () => {
         >
           <div class="flex items-center justify-between gap-3">
             <p class="text-xs uppercase tracking-[0.3em] text-slate">${item.category}</p>
-            <span
-              data-status-id="${item.id}"
-              class="rounded-full px-3 py-1 text-xs font-semibold ${formatStatusClass(status)}"
-            >
-              ${status}
-            </span>
+            <span data-status-id="${item.id}">${renderStatusLabel(status)}</span>
           </div>
           <h3 class="text-lg font-semibold leading-snug text-ink clamp-2">${item.title}</h3>
           <p class="text-xs text-slate leading-tight">Lot ${item.lot} - ${item.location}</p>
@@ -511,22 +513,22 @@ const renderItems = () => {
                 : `<div class="h-full w-full rounded-2xl photo-placeholder"></div>`
             }
           </div>
-          <div class="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <p class="text-xs uppercase tracking-[0.3em] text-slate">Current bid</p>
-              <p class="mt-1 font-semibold text-ink">${currentBid}</p>
+          <div class="grid grid-cols-2 gap-6 text-sm">
+            <div class="min-w-0">
+              <p class="whitespace-nowrap text-[11px] uppercase tracking-[0.22em] text-slate">Current bid</p>
+              <p class="mt-1 truncate font-semibold text-ink">${currentBid}</p>
             </div>
-            <div>
-              <p class="text-xs uppercase tracking-[0.3em] text-slate">Reserve</p>
-              <p class="mt-1 font-semibold text-ink">${reserveLabel}</p>
-              <p class="mt-1 text-xs text-slate">${reserveOutcome}</p>
+            <div class="min-w-0">
+              <p class="whitespace-nowrap text-[11px] uppercase tracking-[0.22em] text-slate">Reserve</p>
+              <p class="mt-1 truncate font-semibold text-ink">${reserveLabel}</p>
+              <p class="mt-1 truncate text-xs text-slate">${reserveOutcome}</p>
             </div>
           </div>
-          <div class="flex items-center justify-between text-xs text-slate">
-            <span data-countdown data-countdown-id="${item.id}">${countdown.label} ${formatDuration(
+          <div class="flex items-center justify-between gap-3 text-xs text-slate">
+            <span class="min-w-0 truncate" data-countdown data-countdown-id="${item.id}">${countdown.label} ${formatDuration(
               countdown.ms
             )}</span>
-            <a href="/item.html?id=${item.id}" class="rounded-full border border-ink/10 px-3 py-1 font-semibold text-ink">View details</a>
+            <a href="/item.html?id=${item.id}" class="shrink-0 rounded-[0.9rem] bg-[#1d326c] px-4 py-2 font-semibold text-white">View details</a>
           </div>
         </article>
       `;
@@ -585,7 +587,7 @@ const renderDetail = () => {
         <h2 class="mt-2 text-2xl font-semibold text-ink">${item.title}</h2>
         <p class="mt-2 text-sm text-slate">${item.description}</p>
       </div>
-      <span class="rounded-full px-3 py-1 text-xs font-semibold ${formatStatusClass(status)}">${status}</span>
+      ${renderStatusLabel(status)}
     </div>
     <div class="mt-6 grid gap-6 md:grid-cols-[0.9fr_1.1fr]">
       <div class="space-y-4">
@@ -610,16 +612,16 @@ const renderDetail = () => {
           </p>
         </div>
         <div class="grid grid-cols-2 gap-4">
-          <div>
-            <p class="text-xs uppercase tracking-[0.3em] text-slate">Current bid</p>
-            <p class="mt-1 font-semibold text-ink">${
+          <div class="min-w-0">
+            <p class="whitespace-nowrap text-[11px] uppercase tracking-[0.22em] text-slate">Current bid</p>
+            <p class="mt-1 truncate font-semibold text-ink">${
               item.currentBid > 0 ? formatMoney(item.currentBid) : "No bids"
             }</p>
           </div>
-          <div>
-            <p class="text-xs uppercase tracking-[0.3em] text-slate">Reserve</p>
-            <p class="mt-1 font-semibold text-ink">${reserveLine}</p>
-            <p class="mt-1 text-xs text-slate">${reserveOutcome}</p>
+          <div class="min-w-0">
+            <p class="whitespace-nowrap text-[11px] uppercase tracking-[0.22em] text-slate">Reserve</p>
+            <p class="mt-1 truncate font-semibold text-ink">${reserveLine}</p>
+            <p class="mt-1 truncate text-xs text-slate">${reserveOutcome}</p>
           </div>
           <div>
             <p class="text-xs uppercase tracking-[0.3em] text-slate">Starts</p>
@@ -638,7 +640,7 @@ const renderDetail = () => {
           <p class="mt-1 text-sm text-ink">Location: ${item.location}</p>
           <p class="mt-1 text-sm text-ink">SKU: ${item.sku}</p>
         </div>
-        <a href="/item.html?id=${item.id}" class="mt-4 inline-flex w-fit rounded-full border border-ink/20 px-4 py-2 text-center text-xs font-semibold text-ink">Open full item page</a>
+        <a href="/item.html?id=${item.id}" class="mt-4 inline-flex w-fit rounded-[0.9rem] border border-ink/20 px-4 py-2 text-center text-xs font-semibold text-ink">Open full item page</a>
       </div>
     </div>
     <form id="bid-form" class="mt-6 space-y-3">
@@ -655,7 +657,7 @@ const renderDetail = () => {
           <button
             id="bid-step"
             type="button"
-            class="rounded-full border border-ink/20 px-4 py-3 text-sm font-semibold text-ink"
+            class="rounded-[0.9rem] border border-ink/20 px-4 py-3 text-sm font-semibold text-ink"
             aria-label="Increase bid"
           >
             ▲
@@ -664,7 +666,7 @@ const renderDetail = () => {
         <button
           id="bid-submit"
           type="submit"
-          class="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white"
+          class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white"
           ${canBid(item) ? "" : "disabled"}
         >
           Place bid
@@ -780,8 +782,8 @@ const updateCountdowns = () => {
     const item = items.find((entry) => entry.id === itemId);
     if (!item) return;
     const status = getStatus(item);
-    element.textContent = status;
-    element.className = `rounded-full px-3 py-1 text-xs font-semibold ${formatStatusClass(status)}`;
+    element.innerHTML = renderStatusLabel(status);
+    element.className = "";
   });
 
   updateSummaryCounts();
@@ -813,6 +815,18 @@ const updateRoleUi = () => {
   renderHistory();
 };
 
+const renderAdLogoutButton = (label: string) => {
+  if (!adLogout) return;
+  adLogout.innerHTML = `
+    <span>${label}</span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="M16 17l5-5-5-5" />
+      <path d="M21 12H9" />
+    </svg>
+  `;
+};
+
 const initSessionUi = async () => {
   if (!adUser || !adLogin || !adLogout || !activeRoleLabel) return;
   try {
@@ -827,14 +841,14 @@ const initSessionUi = async () => {
   });
   adLogout.addEventListener("click", async () => {
     adLogout.disabled = true;
-    adLogout.textContent = "Signing out...";
+    renderAdLogoutButton("Signing out...");
     try {
       await logoutAccount();
       updateRoleUi();
       window.location.href = "/signin.html";
     } finally {
       adLogout.disabled = false;
-      adLogout.textContent = "Sign out";
+      renderAdLogoutButton("Sign out");
     }
   });
 };

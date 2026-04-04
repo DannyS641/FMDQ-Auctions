@@ -34,6 +34,13 @@ const getReserveOutcome = (item: AuctionItem) => {
   return item.currentBid >= item.reserve ? "Reserve met" : "Reserve not met";
 };
 
+const renderClosedStatus = () => `
+  <span class="inline-flex items-center gap-2 text-xs font-semibold text-ink">
+    <span class="h-2.5 w-2.5 rounded-full bg-slate"></span>
+    <span>Closed</span>
+  </span>
+`;
+
 const renderShell = (content: string) => {
   const root = document.querySelector<HTMLDivElement>("#closed-app");
   if (!root) return;
@@ -59,7 +66,7 @@ const renderClosed = (items: AuctionItem[]) => {
               <article class="rounded-3xl border border-ink/10 bg-white p-5">
                 <div class="flex items-center justify-between gap-3">
                   <p class="text-xs uppercase tracking-[0.3em] text-slate">${item.category}</p>
-                  <span class="rounded-full bg-slate px-3 py-1 text-xs font-semibold text-white">Closed</span>
+                  ${renderClosedStatus()}
                 </div>
                 <h2 class="mt-3 text-xl font-semibold text-ink">${item.title}</h2>
                 <p class="mt-2 text-xs text-slate">Lot ${item.lot} · ${item.location}</p>
@@ -77,7 +84,7 @@ const renderClosed = (items: AuctionItem[]) => {
                     <p class="mt-1 text-sm font-semibold text-ink">${formatDate(item.endTime)}</p>
                   </div>
                 </div>
-                <a href="/item.html?id=${item.id}" class="mt-5 inline-flex rounded-full border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Open details</a>
+                <a href="/item.html?id=${item.id}" class="mt-5 inline-flex rounded-[0.9rem] bg-[#1d326c] px-4 py-2 text-xs font-semibold text-white">Open details</a>
               </article>
             `).join("")
           : `<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">No closed auctions are available yet.</div>`}

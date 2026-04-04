@@ -21,7 +21,7 @@ const renderPage = () => {
           <section class="w-full max-w-md rounded-[2rem] bg-white px-6 py-8 md:px-10">
             <div class="flex items-center justify-between gap-4">
               <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
-              <a href="/signin.html" class="rounded-full border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate">Sign in</a>
+              <a href="/signin.html" class="rounded-[0.9rem] border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate">Sign in</a>
             </div>
 
             <h3 class="mt-6 font-display text-xl font-bold leading-tight text-ink">${isResetMode ? "Set a new password" : "Request a reset link"}</h3>
@@ -30,16 +30,16 @@ const renderPage = () => {
               ${isResetMode ? `
                 <div class="flex items-center gap-2 rounded-2xl border border-ink/10 bg-white px-4 py-3">
                   <input id="reset-password" type="password" class="w-full bg-transparent text-sm outline-none" placeholder="New password (8+ chars, upper, lower, number, symbol)" />
-                  <button id="reset-password-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show new password"></button>
+                  <button id="reset-password-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-[0.9rem] text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show new password"></button>
                 </div>
                 <div class="flex items-center gap-2 rounded-2xl border border-ink/10 bg-white px-4 py-3">
                   <input id="reset-password-confirm" type="password" class="w-full bg-transparent text-sm outline-none" placeholder="Confirm new password" />
-                  <button id="reset-password-confirm-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show confirm new password"></button>
+                  <button id="reset-password-confirm-toggle" type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-[0.9rem] text-[#1d326c] transition-colors hover:bg-[#eef4ff]" aria-label="Show confirm new password"></button>
                 </div>
               ` : `
                 <input id="reset-email" type="email" class="rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="Email address" />
               `}
-              <button type="submit" class="rounded-full bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">${isResetMode ? "Update password" : "Send reset link"}</button>
+              <button type="submit" class="rounded-[0.9rem] bg-[#1d326c] px-6 py-3.5 font-display text-base font-semibold text-white">${isResetMode ? "Update password" : "Send reset link"}</button>
             </form>
             <p id="reset-note" class="mt-5 min-h-[1.25rem] rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">${isResetMode ? "Reset links expire after 1 hour." : "We’ll email a reset link if an active account exists for the address you provide."}</p>
           </section>
