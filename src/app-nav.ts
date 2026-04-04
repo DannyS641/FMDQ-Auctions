@@ -8,13 +8,13 @@ type NavOptions = {
 };
 
 const navShellClass =
-  "mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-4 rounded-[2rem] border border-ink/10 bg-white px-5 py-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)]";
+  "mx-auto flex w-full max-w-[112rem] flex-col items-center gap-4 rounded-[2rem] border border-ink/10 bg-white px-5 py-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] lg:flex-row lg:flex-nowrap lg:justify-between lg:px-8";
 
 const navActionClass =
-  "inline-flex min-h-[3rem] items-center justify-center gap-2 whitespace-nowrap rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c]";
+  "inline-flex min-h-[3rem] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c]";
 
 const baseLinkClass = (active: boolean) =>
-  `inline-flex min-h-[3rem] items-center justify-center px-6 text-sm font-semibold transition duration-200 ${
+  `inline-flex min-h-[3rem] shrink-0 items-center justify-center whitespace-nowrap px-6 text-sm font-semibold transition duration-200 ${
     active
       ? "rounded-[0.9rem] bg-[#1d326c] text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)]"
       : "rounded-[0.9rem] bg-white text-ink hover:bg-[#eef3ff] hover:text-[#1d326c]"
@@ -42,18 +42,18 @@ export const renderAppHeader = (session: AuthSession, options: NavOptions = {}) 
   return `
     <header class="bg-white px-4 py-4 md:px-6">
       <nav class="${navShellClass}">
-        <a href="/bidding.html" class="flex items-center gap-3">
+        <a href="/bidding.html" class="flex shrink-0 items-center gap-3">
           <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-12 w-auto" />
         </a>
-        <div class="flex flex-wrap items-center gap-2">
+        <div class="flex w-full flex-wrap items-center justify-center gap-2 lg:w-auto lg:flex-1 lg:flex-nowrap">
           <a href="/bidding.html" class="${baseLinkClass(active === "desk")}">Auction desk</a>
           <a href="/dashboard.html" class="${baseLinkClass(active === "dashboard")}">Dashboard</a>
           <a href="/my-bids.html" class="${baseLinkClass(active === "bids")}">My bids</a>
           ${canSeeAdmin ? `<a href="/admin-item.html" class="${baseLinkClass(active === "admin")}">Items</a>` : ""}
           ${canSeeAdmin ? `<a href="/operations.html" class="${baseLinkClass(active === "operations")}">Operations</a>` : ""}
         </div>
-        <div class="flex flex-wrap items-center gap-3">
-          ${session.signedIn ? `<div class="inline-flex min-h-[3rem] items-center justify-center rounded-[0.9rem] bg-[#eef3ff] px-6 text-sm font-semibold text-[#1d326c]">Role: ${session.role}</div>` : ""}
+        <div class="flex w-full flex-wrap items-center justify-center gap-3 lg:w-auto lg:flex-nowrap lg:justify-end">
+          ${session.signedIn ? `<div class="inline-flex min-h-[3rem] shrink-0 items-center justify-center whitespace-nowrap rounded-[0.9rem] bg-[#eef3ff] px-6 text-sm font-semibold text-[#1d326c]">Role: ${session.role}</div>` : ""}
           <a href="/profile.html" class="${navActionClass}"><span>${session.signedIn ? session.displayName : "Profile"}</span>${profileIcon}</a>
           ${
             session.signedIn

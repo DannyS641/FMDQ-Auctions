@@ -56,7 +56,7 @@ const init = async () => {
             <div><span class="text-slate">Last login:</span> <span class="font-semibold">${profile.lastLoginAt ? formatDate(profile.lastLoginAt) : "Never"}</span></div>
           </div>
           <div class="mt-6 flex flex-wrap gap-3">
-            <button id="profile-reset-password" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Email me a reset link</button>
+            <button id="profile-reset-password" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Email me a reset link</button>
             <button id="profile-signout" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Sign out</button>
           </div>
           <p id="profile-feedback" class="mt-4 rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">Manage your sessions and account security from here.</p>

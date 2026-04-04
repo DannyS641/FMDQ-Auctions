@@ -258,7 +258,7 @@ const renderManager = () => {
             <p class="mt-2 text-sm text-slate">Create items, review current listings, edit records, and remove listings from one page.</p>
           </div>
           <div class="flex items-center gap-3">
-            <button id="create-item-btn" type="button" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Add new item</button>
+            <button id="create-item-btn" type="button" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Add new item</button>
             <button id="refresh-items-btn" type="button" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Refresh list</button>
           </div>
         </div>
@@ -301,7 +301,7 @@ const renderManager = () => {
               </label>
             </div>
             <div class="mt-5 flex flex-wrap items-center gap-3">
-              <button id="bulk-import-submit" type="button" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Import items</button>
+              <button id="bulk-import-submit" type="button" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Import items</button>
               <p id="bulk-import-feedback" class="text-sm text-slate"></p>
             </div>
             ${state.bulkImportReport ? `
@@ -470,7 +470,7 @@ const renderManager = () => {
               </label>
             </div>
             <div class="md:col-span-2 flex flex-wrap items-center gap-3">
-              <button type="submit" class="rounded-[0.9rem] bg-ink px-6 py-3 text-sm font-semibold text-white">${state.mode === "edit" ? "Save changes" : "Create item"}</button>
+              <button type="submit" class="rounded-[0.9rem] bg-[#1d326c] px-6 py-3 text-sm font-semibold text-white">${state.mode === "edit" ? "Save changes" : "Create item"}</button>
               ${selectedItem?.archivedAt
                 ? `<button id="restore-current-item-btn" type="button" class="rounded-[0.9rem] border border-emerald-200 px-6 py-3 text-sm font-semibold text-emerald-700">Restore item</button>`
                 : selectedItem
@@ -492,9 +492,9 @@ const renderManager = () => {
         </div>
 
         <div class="mt-5 flex flex-wrap gap-2">
-          <button data-list-filter="all" type="button" class="rounded-[0.9rem] px-4 py-2 text-xs font-semibold ${state.listFilter === "all" ? "bg-ink text-white" : "border border-ink/15 text-ink"}">All (${state.items.length})</button>
-          <button data-list-filter="active" type="button" class="rounded-[0.9rem] px-4 py-2 text-xs font-semibold ${state.listFilter === "active" ? "bg-ink text-white" : "border border-ink/15 text-ink"}">Active (${activeItemsCount})</button>
-          <button data-list-filter="archived" type="button" class="rounded-[0.9rem] px-4 py-2 text-xs font-semibold ${state.listFilter === "archived" ? "bg-ink text-white" : "border border-ink/15 text-ink"}">Archived (${archivedItemsCount})</button>
+          <button data-list-filter="all" type="button" class="rounded-[0.9rem] px-4 py-2 text-xs font-semibold ${state.listFilter === "all" ? "bg-[#1d326c] text-white" : "border border-ink/15 text-ink"}">All (${state.items.length})</button>
+          <button data-list-filter="active" type="button" class="rounded-[0.9rem] px-4 py-2 text-xs font-semibold ${state.listFilter === "active" ? "bg-[#1d326c] text-white" : "border border-ink/15 text-ink"}">Active (${activeItemsCount})</button>
+          <button data-list-filter="archived" type="button" class="rounded-[0.9rem] px-4 py-2 text-xs font-semibold ${state.listFilter === "archived" ? "bg-[#1d326c] text-white" : "border border-ink/15 text-ink"}">Archived (${archivedItemsCount})</button>
         </div>
 
         <div class="mt-6 space-y-4">
@@ -542,7 +542,7 @@ const renderManager = () => {
           <p class="mt-3 text-sm text-slate">${confirmationMessage}</p>
           <div class="mt-6 flex items-center justify-end gap-3">
             <button id="modal-cancel-btn" type="button" class="rounded-[0.9rem] border border-ink/15 px-5 py-3 text-sm font-semibold text-ink">Cancel</button>
-            <button id="modal-confirm-btn" type="button" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">${state.confirmation?.kind === "category" ? "Delete" : "Archive"}</button>
+            <button id="modal-confirm-btn" type="button" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">${state.confirmation?.kind === "category" ? "Delete" : "Archive"}</button>
           </div>
         </div>
       </div>

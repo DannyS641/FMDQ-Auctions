@@ -62,7 +62,7 @@ const renderVerifyPage = (message: string, state: "pending" | "success" | "error
             <p id="verify-message" class="text-sm">${message}</p>
           </div>
           <div class="mt-6 flex flex-wrap gap-3">
-            <a href="/signin.html" class="rounded-[0.9rem] bg-ink px-6 py-3 text-sm font-semibold text-white">Go to sign in</a>
+            <a href="/signin.html" class="rounded-[0.9rem] bg-[#1d326c] px-6 py-3 text-sm font-semibold text-white">Go to sign in</a>
             ${email && state !== "success" ? `<button id="resend-verification" class="rounded-[0.9rem] border border-ink/10 px-6 py-3 text-sm font-semibold text-ink">Resend verification</button>` : ""}
           </div>
         </div>

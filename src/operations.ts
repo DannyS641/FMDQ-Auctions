@@ -280,7 +280,7 @@ const renderPage = (
         </div>
         <div class="mt-6 grid gap-4 lg:grid-cols-[1fr_1fr]">
           <div class="grid gap-4">
-            <button id="spool-closed-auctions" class="rounded-3xl border border-ink/10 bg-ink px-5 py-4 text-left text-white">
+            <button id="spool-closed-auctions" class="rounded-[0.9rem] border border-[#1d326c] bg-[#1d326c] px-5 py-4 text-left text-white">
               <p class="text-xs uppercase tracking-[0.3em] text-white/70">Closed auctions</p>
               <p class="mt-2 text-lg font-semibold">Spool closed auction details</p>
             </button>
@@ -315,7 +315,7 @@ const renderPage = (
             </div>
             <div class="mt-5 flex flex-wrap gap-3">
               <button id="spool-item-sheet" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Spool item sheet</button>
-              <button id="spool-audit-bundle" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Spool audit bundle</button>
+              <button id="spool-audit-bundle" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Spool audit bundle</button>
             </div>
             <p id="spool-feedback" class="mt-4 text-sm text-slate">Use these controls to spool by auction ID or date range.</p>
           </div>
@@ -329,7 +329,7 @@ const renderPage = (
               <p class="text-xs uppercase tracking-[0.3em] text-slate">Audit search</p>
               <h2 class="mt-2 text-2xl font-semibold text-ink">Activity trail</h2>
             </div>
-            <button id="apply-audit-filters" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Apply filters</button>
+            <button id="apply-audit-filters" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Apply filters</button>
           </div>
           <div class="mt-5 grid gap-3 md:grid-cols-2">
             <input id="audit-item-id" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm" placeholder="Item ID" />
@@ -368,7 +368,7 @@ const renderPage = (
             <p class="mt-2 text-sm text-slate">Issue password resets, disable or re-enable users, and review role assignments from one panel.</p>
           </div>
           <div class="flex flex-wrap gap-3">
-            <button data-bulk-reset="all" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Reset all users</button>
+            <button data-bulk-reset="all" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Reset all users</button>
             <button data-bulk-reset="role" data-bulk-role="Bidder" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Reset all bidders</button>
             <button data-bulk-reset="role" data-bulk-role="Admin" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Reset all admins</button>
           </div>
@@ -430,7 +430,7 @@ const renderPage = (
               <span id="bulk-user-csv-name" class="text-sm text-slate">No file selected</span>
             </div>
             <div class="mt-5 flex flex-wrap gap-3">
-              <button id="bulk-user-import" class="rounded-[0.9rem] bg-ink px-5 py-3 text-sm font-semibold text-white">Import users</button>
+              <button id="bulk-user-import" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Import users</button>
               <button id="download-user-template" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Download template</button>
             </div>
             <p id="bulk-user-feedback" class="mt-4 text-sm text-slate">Template columns: email, display_name, roles, status.</p>
