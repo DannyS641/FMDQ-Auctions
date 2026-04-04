@@ -150,7 +150,7 @@ const renderShell = (content: string) => {
   root.innerHTML = `
     <div class="min-h-screen bg-ash">
       ${renderAppHeader(readAuthSession(), { active: "operations", showAdminLinks: true })}
-      <main class="mx-auto w-full max-w-7xl px-6 py-10">${content}</main>
+      <main class="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10">${content}</main>
     </div>
   `;
   wireAppHeader();
@@ -158,7 +158,7 @@ const renderShell = (content: string) => {
 };
 
 const renderError = (message: string) => {
-  renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">${message}</div>`);
+  renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">${message}</div>`);
 };
 
 const renderAuditTiles = () => {
@@ -257,7 +257,7 @@ const renderPage = (
   renderShell(`
     <section>
       <p class="text-xs uppercase tracking-[0.3em] text-slate">Operations desk</p>
-      <h1 class="mt-2 text-3xl font-semibold text-ink">Platform controls</h1>
+      <h1 class="mt-2 text-2xl font-semibold text-ink sm:text-3xl">Platform controls</h1>
       <p class="mt-3 text-sm text-slate">Monitor activity, manage users and roles, review audits, and generate operational bundles from one workspace.</p>
 
       <div class="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -268,11 +268,11 @@ const renderPage = (
         <div class="rounded-3xl border border-ink/10 bg-white p-5"><p class="text-xs uppercase tracking-[0.3em] text-slate">Audit events</p><p class="mt-2 text-3xl font-semibold text-ink">${operations.summary.auditCount}</p><p class="mt-2 text-xs text-slate">Admins ${operations.summary.adminUsers ?? users.filter((user) => user.roles.includes("Admin")).length} · Super admins ${operations.summary.superAdminUsers ?? users.filter((user) => user.roles.includes("SuperAdmin")).length}</p></div>
       </div>
 
-      <section class="mt-10 rounded-3xl border border-ink/10 bg-white p-6">
+      <section class="mt-10 rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p class="text-xs uppercase tracking-[0.3em] text-slate">Spool workspace</p>
-            <h2 class="mt-2 text-2xl font-semibold text-ink">Generate auction bundles</h2>
+            <h2 class="mt-2 text-xl font-semibold text-ink sm:text-2xl">Generate auction bundles</h2>
           </div>
           <div class="rounded-2xl border border-ink/10 bg-ink/5 px-4 py-3 text-sm text-slate">
             Closed auctions: <span class="font-semibold text-ink">${items.filter((item) => new Date(item.endTime).getTime() < Date.now() && !item.archivedAt).length}</span> · Wins: <span class="font-semibold text-ink">${wins.length}</span>
@@ -323,13 +323,13 @@ const renderPage = (
       </section>
 
       <div class="mt-10 grid gap-6 xl:grid-cols-[1fr_1fr]">
-        <section class="rounded-3xl border border-ink/10 bg-white p-6">
+        <section class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
           <div class="flex flex-wrap items-center justify-between gap-4">
             <div>
               <p class="text-xs uppercase tracking-[0.3em] text-slate">Audit search</p>
-              <h2 class="mt-2 text-2xl font-semibold text-ink">Activity trail</h2>
+              <h2 class="mt-2 text-xl font-semibold text-ink sm:text-2xl">Activity trail</h2>
             </div>
-            <button id="apply-audit-filters" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Apply filters</button>
+            <button id="apply-audit-filters" class="w-full rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white sm:w-auto">Apply filters</button>
           </div>
           <div class="mt-5 grid gap-3 md:grid-cols-2">
             <input id="audit-item-id" class="rounded-2xl border border-ink/10 px-4 py-3 text-sm" placeholder="Item ID" />
@@ -347,10 +347,10 @@ const renderPage = (
           </div>
         </section>
 
-        <section class="rounded-3xl border border-ink/10 bg-white p-6">
+        <section class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
           <div>
             <p class="text-xs uppercase tracking-[0.3em] text-slate">Notification spool</p>
-            <h2 class="mt-2 text-2xl font-semibold text-ink">Queued messages</h2>
+            <h2 class="mt-2 text-xl font-semibold text-ink sm:text-2xl">Queued messages</h2>
           </div>
           <div id="notification-results" class="mt-4 space-y-3"></div>
           <div class="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-ink/10 pt-4">
@@ -360,17 +360,17 @@ const renderPage = (
         </section>
       </div>
 
-      <section class="mt-10 rounded-3xl border border-ink/10 bg-white p-6">
+      <section class="mt-10 rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p class="text-xs uppercase tracking-[0.3em] text-slate">User security</p>
-            <h2 class="mt-2 text-2xl font-semibold text-ink">Accounts, resets, and access</h2>
+            <h2 class="mt-2 text-xl font-semibold text-ink sm:text-2xl">Accounts, resets, and access</h2>
             <p class="mt-2 text-sm text-slate">Issue password resets, disable or re-enable users, and review role assignments from one panel.</p>
           </div>
           <div class="flex flex-wrap gap-3">
-            <button data-bulk-reset="all" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Reset all users</button>
-            <button data-bulk-reset="role" data-bulk-role="Bidder" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Reset all bidders</button>
-            <button data-bulk-reset="role" data-bulk-role="Admin" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Reset all admins</button>
+            <button data-bulk-reset="all" class="w-full rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white sm:w-auto">Reset all users</button>
+            <button data-bulk-reset="role" data-bulk-role="Bidder" class="w-full rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink sm:w-auto">Reset all bidders</button>
+            <button data-bulk-reset="role" data-bulk-role="Admin" class="w-full rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink sm:w-auto">Reset all admins</button>
           </div>
         </div>
         <p id="reset-feedback" class="mt-4 rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">Use these controls to issue password reset emails, disable users, and manage roles.</p>
@@ -378,7 +378,7 @@ const renderPage = (
           ${users.length ? users.map((user) => `
             <div class="rounded-2xl border border-ink/10 bg-ink/5 p-4">
               <div class="flex flex-wrap items-start justify-between gap-4">
-                <div class="min-w-[260px] flex-1">
+                <div class="min-w-0 flex-1">
                   <p class="text-sm font-semibold text-ink">${user.displayName}</p>
                   <p class="mt-1 text-xs text-slate">${user.email}</p>
                   <p class="mt-2 text-xs text-slate">Roles: ${user.roles.length ? user.roles.join(", ") : "None"} · Status: ${user.status}</p>
@@ -401,7 +401,7 @@ const renderPage = (
                     </div>
                   ` : ""}
                 </div>
-                <div class="flex min-w-[260px] flex-col gap-2">
+                <div class="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:min-w-[260px]">
                   <button data-user-reset="${user.id}" class="rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Send reset</button>
                   ${user.status === "disabled"
                     ? `<button data-user-enable="${user.id}" class="rounded-[0.9rem] border border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800">Enable user</button>`
@@ -418,9 +418,9 @@ const renderPage = (
 
       ${isSuperAdmin ? `
         <section class="mt-10 grid gap-6 xl:grid-cols-[1fr_1fr]">
-          <div class="rounded-3xl border border-ink/10 bg-white p-6">
+          <div class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
             <p class="text-xs uppercase tracking-[0.3em] text-slate">Bulk user import</p>
-            <h2 class="mt-2 text-2xl font-semibold text-ink">Upload user CSV</h2>
+            <h2 class="mt-2 text-xl font-semibold text-ink sm:text-2xl">Upload user CSV</h2>
             <p class="mt-2 text-sm text-slate">Import users with email, display name, optional roles, and optional status.</p>
             <div class="mt-5 flex flex-wrap items-center gap-3">
               <label class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">
@@ -430,14 +430,14 @@ const renderPage = (
               <span id="bulk-user-csv-name" class="text-sm text-slate">No file selected</span>
             </div>
             <div class="mt-5 flex flex-wrap gap-3">
-              <button id="bulk-user-import" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Import users</button>
-              <button id="download-user-template" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Download template</button>
+              <button id="bulk-user-import" class="w-full rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white sm:w-auto">Import users</button>
+              <button id="download-user-template" class="w-full rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink sm:w-auto">Download template</button>
             </div>
             <p id="bulk-user-feedback" class="mt-4 text-sm text-slate">Template columns: email, display_name, roles, status.</p>
           </div>
-          <div class="rounded-3xl border border-ink/10 bg-white p-6">
+          <div class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
             <p class="text-xs uppercase tracking-[0.3em] text-slate">Auction outcomes</p>
-            <h2 class="mt-2 text-2xl font-semibold text-ink">Reserve visibility snapshot</h2>
+            <h2 class="mt-2 text-xl font-semibold text-ink sm:text-2xl">Reserve visibility snapshot</h2>
             <div class="mt-5 grid gap-3">
               ${items.slice(0, 6).map((item) => `
                 <div class="rounded-2xl border border-ink/10 bg-ink/5 p-4">

@@ -18,8 +18,8 @@ const renderPage = () => {
       <div class="relative mx-auto flex min-h-[calc(100vh-1.5rem)] w-full max-w-6xl overflow-hidden rounded-[2rem] border border-white/70 bg-white/55 shadow-[0_24px_70px_rgba(148,163,184,0.28)] backdrop-blur-xl md:rounded-[2.75rem]">
         <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.88),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(226,232,240,0.5),transparent_30%)]"></div>
         <main class="relative z-10 flex w-full items-center justify-center p-6 md:p-10">
-          <section class="w-full max-w-md rounded-[2rem] bg-white px-6 py-8 md:px-10">
-            <div class="flex items-center justify-between gap-4">
+          <section class="w-full max-w-md rounded-[2rem] bg-white px-5 py-8 md:px-10">
+            <div class="flex flex-wrap items-center justify-between gap-4">
               <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
               <a href="/signin.html" class="rounded-[0.9rem] border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate">Sign in</a>
             </div>

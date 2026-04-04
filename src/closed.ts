@@ -47,7 +47,7 @@ const renderShell = (content: string) => {
   root.innerHTML = `
     <div class="min-h-screen bg-ash">
       ${renderAppHeader(readAuthSession(), { active: "desk" })}
-      <main class="mx-auto w-full max-w-7xl px-6 py-10">${content}</main>
+      <main class="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10">${content}</main>
     </div>
   `;
   wireAppHeader();
@@ -58,7 +58,7 @@ const renderClosed = (items: AuctionItem[]) => {
   renderShell(`
     <section>
       <p class="text-xs uppercase tracking-[0.3em] text-slate">Auction archive</p>
-      <h1 class="mt-2 text-3xl font-semibold text-ink">Closed auctions</h1>
+      <h1 class="mt-2 text-2xl font-semibold text-ink sm:text-3xl">Closed auctions</h1>
       <p class="mt-3 text-sm text-slate">${items.length} completed listings are available for review.</p>
       <div class="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         ${items.length
@@ -87,7 +87,7 @@ const renderClosed = (items: AuctionItem[]) => {
                 <a href="/item.html?id=${item.id}" class="mt-5 inline-flex rounded-[0.9rem] bg-[#1d326c] px-4 py-2 text-xs font-semibold text-white">Open details</a>
               </article>
             `).join("")
-          : `<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">No closed auctions are available yet.</div>`}
+          : `<div class="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">No closed auctions are available yet.</div>`}
       </div>
     </section>
   `);
@@ -103,7 +103,7 @@ const init = async () => {
       .sort((left, right) => new Date(right.endTime).getTime() - new Date(left.endTime).getTime());
     renderClosed(items);
   } catch {
-    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">Unable to load closed auctions right now.</div>`);
+    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">Unable to load closed auctions right now.</div>`);
   }
 };
 

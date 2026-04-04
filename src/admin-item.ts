@@ -138,7 +138,7 @@ const renderShell = (content: string) => {
   root.innerHTML = `
     <div class="min-h-screen bg-ash">
       ${renderAppHeader(readAuthSession(), { active: "admin", showAdminLinks: true })}
-      <main class="mx-auto w-full max-w-7xl px-6 py-10">${content}</main>
+      <main class="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10">${content}</main>
     </div>
   `;
   wireAppHeader();
@@ -146,8 +146,8 @@ const renderShell = (content: string) => {
 
 const renderAccessDenied = () => {
   renderShell(`
-    <div class="rounded-3xl border border-ink/10 bg-white p-8">
-      <h1 class="text-2xl font-semibold text-ink">Admin access required</h1>
+    <div class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-8">
+      <h1 class="text-xl font-semibold text-ink sm:text-2xl">Admin access required</h1>
       <p class="mt-3 text-sm text-slate">Only admins can manage auction items from this page.</p>
     </div>
   `);
@@ -156,8 +156,8 @@ const renderAccessDenied = () => {
 
 const renderMessage = (title: string, message: string) => {
   renderShell(`
-    <div class="rounded-3xl border border-ink/10 bg-white p-8">
-      <h1 class="text-2xl font-semibold text-ink">${title}</h1>
+    <div class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-8">
+      <h1 class="text-xl font-semibold text-ink sm:text-2xl">${title}</h1>
       <p class="mt-3 text-sm text-slate">${message}</p>
     </div>
   `);
@@ -250,24 +250,24 @@ const renderManager = () => {
 
   renderShell(`
     <section class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-      <div class="rounded-3xl border border-ink/10 bg-white p-8">
+      <div class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-8">
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p class="text-xs uppercase tracking-[0.3em] text-slate">Admin workflow</p>
-            <h1 class="mt-2 text-3xl font-semibold text-ink">Item manager</h1>
+            <h1 class="mt-2 text-2xl font-semibold text-ink sm:text-3xl">Item manager</h1>
             <p class="mt-2 text-sm text-slate">Create items, review current listings, edit records, and remove listings from one page.</p>
           </div>
-          <div class="flex items-center gap-3">
-            <button id="create-item-btn" type="button" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Add new item</button>
-            <button id="refresh-items-btn" type="button" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Refresh list</button>
+          <div class="flex w-full flex-wrap items-center gap-3 sm:w-auto">
+            <button id="create-item-btn" type="button" class="w-full rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white sm:w-auto">Add new item</button>
+            <button id="refresh-items-btn" type="button" class="w-full rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink sm:w-auto">Refresh list</button>
           </div>
         </div>
 
-        <div class="mt-8 rounded-3xl border border-ink/10 bg-ink/5 p-6">
+        <div class="mt-8 rounded-3xl border border-ink/10 bg-ink/5 p-4 sm:p-6">
           <div class="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p class="text-xs uppercase tracking-[0.3em] text-slate">${state.mode === "edit" ? "Edit mode" : "Create mode"}</p>
-              <h2 class="mt-2 text-2xl font-semibold text-ink">${formHeading}</h2>
+              <h2 class="mt-2 break-words text-xl font-semibold text-ink sm:text-2xl">${formHeading}</h2>
               <p class="mt-2 text-sm text-slate">${formSummary}</p>
             </div>
             ${selectedItem ? `<a href="/item.html?id=${selectedItem.id}" class="rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">View item</a>` : ""}
@@ -280,7 +280,7 @@ const renderManager = () => {
                 <h3 class="mt-2 text-xl font-semibold text-ink">Upload CSV + ZIP bundle</h3>
                 <p class="mt-2 text-sm text-slate">Import many items at once. Put one row per item in the CSV, then add matching image/document filenames in the ZIP.</p>
               </div>
-              <button id="download-import-template" type="button" class="rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Download template</button>
+              <button id="download-import-template" type="button" class="w-full rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink sm:w-auto">Download template</button>
             </div>
             <div class="mt-5 grid gap-4 md:grid-cols-2">
               <label class="grid gap-3 rounded-3xl border border-ink/10 bg-ink/5 p-4">
@@ -301,7 +301,7 @@ const renderManager = () => {
               </label>
             </div>
             <div class="mt-5 flex flex-wrap items-center gap-3">
-              <button id="bulk-import-submit" type="button" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Import items</button>
+              <button id="bulk-import-submit" type="button" class="w-full rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white sm:w-auto">Import items</button>
               <p id="bulk-import-feedback" class="text-sm text-slate"></p>
             </div>
             ${state.bulkImportReport ? `
@@ -400,8 +400,8 @@ const renderManager = () => {
                 </div>
               </div>
               <div class="mt-4 flex flex-wrap items-center gap-3">
-                <input id="new-category-name" class="min-w-[220px] flex-1 rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="New category name" />
-                <button id="add-category-btn" type="button" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Add category</button>
+                <input id="new-category-name" class="min-w-0 flex-1 rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm" placeholder="New category name" />
+                <button id="add-category-btn" type="button" class="w-full rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink sm:w-auto">Add category</button>
               </div>
               <p id="category-feedback" class="mt-3 text-sm text-slate"></p>
               <div class="mt-4 flex flex-wrap gap-2">
@@ -470,7 +470,7 @@ const renderManager = () => {
               </label>
             </div>
             <div class="md:col-span-2 flex flex-wrap items-center gap-3">
-              <button type="submit" class="rounded-[0.9rem] bg-[#1d326c] px-6 py-3 text-sm font-semibold text-white">${state.mode === "edit" ? "Save changes" : "Create item"}</button>
+              <button type="submit" class="w-full rounded-[0.9rem] bg-[#1d326c] px-6 py-3 text-sm font-semibold text-white sm:w-auto">${state.mode === "edit" ? "Save changes" : "Create item"}</button>
               ${selectedItem?.archivedAt
                 ? `<button id="restore-current-item-btn" type="button" class="rounded-[0.9rem] border border-emerald-200 px-6 py-3 text-sm font-semibold text-emerald-700">Restore item</button>`
                 : selectedItem
@@ -482,11 +482,11 @@ const renderManager = () => {
         </div>
       </div>
 
-      <aside class="rounded-3xl border border-ink/10 bg-white p-8">
+      <aside class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-8">
         <div class="flex items-center justify-between gap-4">
           <div>
             <p class="text-xs uppercase tracking-[0.3em] text-slate">Current items</p>
-            <h2 class="mt-2 text-2xl font-semibold text-ink">${filteredItems.length} listings</h2>
+            <h2 class="mt-2 text-xl font-semibold text-ink sm:text-2xl">${filteredItems.length} listings</h2>
             <p class="mt-2 text-sm text-slate">Showing ${startItemNumber}-${endItemNumber} of ${filteredItems.length}</p>
           </div>
         </div>

@@ -17,7 +17,7 @@ const renderShell = (content: string) => {
   root.innerHTML = `
     <div class="min-h-screen bg-ash">
       ${renderAppHeader(readAuthSession(), { active: "bids" })}
-      <main class="mx-auto w-full max-w-7xl px-6 py-10">${content}</main>
+      <main class="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10">${content}</main>
     </div>
   `;
   wireAppHeader();
@@ -28,7 +28,7 @@ const init = async () => {
   await fetchCurrentSession().catch(() => undefined);
   const session = readAuthSession();
   if (!session.signedIn) {
-    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">Sign in first to review your bid history.</div>`);
+    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">Sign in first to review your bid history.</div>`);
     return;
   }
   try {
@@ -36,15 +36,15 @@ const init = async () => {
     renderShell(`
       <section>
         <p class="text-xs uppercase tracking-[0.3em] text-slate">Bidder workspace</p>
-        <h1 class="mt-2 text-3xl font-semibold text-ink">My bids</h1>
+        <h1 class="mt-2 text-2xl font-semibold text-ink sm:text-3xl">My bids</h1>
         <p class="mt-3 text-sm text-slate">${bids.length} auction listing(s) currently have bids from ${session.displayName}.</p>
         <div class="mt-8 grid gap-4">
           ${bids.length ? bids.map((entry) => `
-            <article class="rounded-3xl border border-ink/10 bg-white p-6">
+            <article class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
               <div class="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <p class="text-xs uppercase tracking-[0.3em] text-slate">${entry.category}</p>
-                  <h2 class="mt-2 text-2xl font-semibold text-ink">${entry.title}</h2>
+                  <h2 class="mt-2 break-words text-xl font-semibold text-ink sm:text-2xl">${entry.title}</h2>
                   <p class="mt-2 text-sm text-slate">Lot ${entry.lot}</p>
                 </div>
                 <span class="rounded-full border border-ink/10 bg-ink/5 px-3 py-1 text-xs font-semibold text-ink">${entry.status}</span>
@@ -57,12 +57,12 @@ const init = async () => {
               </div>
               <a href="/item.html?id=${entry.itemId}" class="mt-6 inline-flex rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink">Open listing</a>
             </article>
-          `).join("") : `<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">No bid history is available for your account yet.</div>`}
+          `).join("") : `<div class="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">No bid history is available for your account yet.</div>`}
         </div>
       </section>
     `);
   } catch {
-    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">Unable to load your bids right now.</div>`);
+    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">Unable to load your bids right now.</div>`);
   }
 };
 

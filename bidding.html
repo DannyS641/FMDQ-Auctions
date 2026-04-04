@@ -41,30 +41,46 @@
     </div>
     <div class="min-h-screen bg-ash" data-app-root>
       <header class="bg-white px-4 py-4 md:px-6">
-        <nav class="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-4 rounded-[2rem] border border-ink/10 bg-white px-5 py-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)]">
-          <a href="/bidding.html" class="flex items-center gap-3">
-            <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-12 w-auto" />
-          </a>
-          <div class="flex flex-wrap items-center gap-2">
-            <a href="/bidding.html" class="inline-flex min-h-[3rem] items-center justify-center rounded-[0.9rem] bg-[#1d326c] px-6 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200">Auction desk</a>
-            <a href="/dashboard.html" class="inline-flex min-h-[3rem] items-center justify-center rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c]">Dashboard</a>
-            <a href="/my-bids.html" class="inline-flex min-h-[3rem] items-center justify-center rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c]">My bids</a>
+        <nav class="mx-auto flex w-full max-w-[112rem] flex-col items-center gap-4 rounded-[1.5rem] border border-ink/10 bg-white px-4 py-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] sm:rounded-[2rem] sm:px-5 lg:flex-row lg:flex-nowrap lg:justify-between lg:px-8">
+          <div class="flex w-full items-center justify-between gap-4 lg:w-auto">
+            <a href="/bidding.html" class="flex shrink-0 items-center gap-3">
+              <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto sm:h-12" />
+            </a>
+            <button
+              id="ad-mobile-menu-toggle"
+              type="button"
+              class="inline-flex h-12 w-12 items-center justify-center rounded-[0.9rem] bg-[#eef3ff] text-[#1d326c] lg:hidden"
+              aria-label="Open navigation menu"
+              aria-expanded="false"
+              aria-controls="ad-mobile-menu"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="h-6 w-6">
+                <path d="M4 7h16" />
+                <path d="M4 12h16" />
+                <path d="M4 17h16" />
+              </svg>
+            </button>
           </div>
-          <div class="flex flex-wrap items-center gap-3 text-xs">
+          <div class="hidden w-full items-center justify-center gap-2 lg:flex lg:w-auto lg:flex-1">
+            <a href="/bidding.html" class="inline-flex min-h-[3rem] w-full shrink-0 items-center justify-center rounded-[0.9rem] bg-[#1d326c] px-5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200 sm:w-auto sm:px-6 sm:whitespace-nowrap">Auction desk</a>
+            <a href="/dashboard.html" class="inline-flex min-h-[3rem] w-full shrink-0 items-center justify-center rounded-[0.9rem] bg-white px-5 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c] sm:w-auto sm:px-6 sm:whitespace-nowrap">Dashboard</a>
+            <a href="/my-bids.html" class="inline-flex min-h-[3rem] w-full shrink-0 items-center justify-center rounded-[0.9rem] bg-white px-5 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c] sm:w-auto sm:px-6 sm:whitespace-nowrap">My bids</a>
+          </div>
+          <div class="hidden w-full items-center justify-center gap-3 text-xs lg:flex lg:w-auto lg:flex-nowrap lg:justify-end">
             <span id="ad-status" class="hidden">Loading</span>
-            <div class="inline-flex min-h-[3rem] items-center justify-center rounded-[0.9rem] bg-[#eef3ff] px-6 text-sm font-semibold text-[#1d326c]">
+            <div class="inline-flex min-h-[3rem] w-full items-center justify-center rounded-[0.9rem] bg-[#eef3ff] px-4 text-sm font-semibold text-[#1d326c] sm:w-auto sm:px-6 sm:whitespace-nowrap">
               Role: <span class="ml-1 text-ink" id="active-role-label">Guest</span>
             </div>
-            <a href="/profile.html" class="inline-flex min-h-[3rem] items-center justify-center gap-2 whitespace-nowrap rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c]">
-              <span id="ad-user">Checking</span>
+            <a href="/profile.html" class="inline-flex min-h-[3rem] w-full max-w-full items-center justify-center gap-2 rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c] sm:w-auto sm:whitespace-nowrap">
+              <span id="ad-user" class="min-w-0 truncate">Checking</span>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">
                 <path d="M20 21a8 8 0 0 0-16 0" />
                 <circle cx="12" cy="8" r="4" />
               </svg>
             </a>
-            <button id="ad-login" class="inline-flex min-h-[3rem] items-center justify-center rounded-[0.9rem] bg-[#1d326c] px-6 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200">Sign in</button>
-            <button id="ad-logout" class="hidden inline-flex min-h-[3rem] items-center justify-center gap-2 whitespace-nowrap rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c]" type="button">
-              <span>Sign out</span>
+            <button id="ad-login" class="inline-flex min-h-[3rem] w-full items-center justify-center rounded-[0.9rem] bg-[#1d326c] px-6 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200 sm:w-auto">Sign in</button>
+            <button id="ad-logout" class="hidden inline-flex min-h-[3rem] w-full max-w-full items-center justify-center gap-2 rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-[#1d326c] sm:w-auto sm:whitespace-nowrap" type="button">
+              <span class="min-w-0 truncate">Sign out</span>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
                 <path d="M16 17l5-5-5-5" />
@@ -72,10 +88,38 @@
               </svg>
             </button>
           </div>
+          <div id="ad-mobile-menu" class="hidden w-full space-y-3 border-t border-ink/10 pt-4 lg:hidden">
+            <div class="grid grid-cols-1 gap-2">
+              <a href="/bidding.html" class="inline-flex min-h-[3rem] w-full items-center justify-center rounded-[0.9rem] bg-[#1d326c] px-5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)]">Auction desk</a>
+              <a href="/dashboard.html" class="inline-flex min-h-[3rem] w-full items-center justify-center rounded-[0.9rem] bg-white px-5 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-[#1d326c]">Dashboard</a>
+              <a href="/my-bids.html" class="inline-flex min-h-[3rem] w-full items-center justify-center rounded-[0.9rem] bg-white px-5 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-[#1d326c]">My bids</a>
+            </div>
+            <div class="grid grid-cols-1 gap-3">
+              <div class="inline-flex min-h-[3rem] w-full items-center justify-center rounded-[0.9rem] bg-[#eef3ff] px-4 text-sm font-semibold text-[#1d326c]">
+                Role: <span class="ml-1 text-ink" id="active-role-label-mobile">Guest</span>
+              </div>
+              <a href="/profile.html" class="inline-flex min-h-[3rem] w-full items-center justify-center gap-2 rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-[#1d326c]">
+                <span id="ad-user-mobile" class="min-w-0 truncate">Checking</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">
+                  <path d="M20 21a8 8 0 0 0-16 0" />
+                  <circle cx="12" cy="8" r="4" />
+                </svg>
+              </a>
+              <button id="ad-login-mobile" class="inline-flex min-h-[3rem] w-full items-center justify-center rounded-[0.9rem] bg-[#1d326c] px-6 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)]">Sign in</button>
+              <button id="ad-logout-mobile" class="hidden inline-flex min-h-[3rem] w-full items-center justify-center gap-2 rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-[#1d326c]" type="button">
+                <span class="min-w-0 truncate">Sign out</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <path d="M16 17l5-5-5-5" />
+                  <path d="M21 12H9" />
+                </svg>
+              </button>
+            </div>
+          </div>
         </nav>
       </header>
 
-      <main class="mx-auto w-full max-w-7xl px-6 py-8">
+      <main class="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
         <div class="grid gap-8 lg:grid-cols-[280px_1fr]">
           <aside class="space-y-4 rounded-3xl border border-ink/10 bg-white p-4" data-reveal>
             <div class="flex items-center justify-between text-[11px] uppercase tracking-[0.2em] text-slate">

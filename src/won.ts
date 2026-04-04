@@ -34,7 +34,7 @@ const renderShell = (content: string) => {
   root.innerHTML = `
     <div class="min-h-screen bg-ash">
       ${renderAppHeader(readAuthSession(), { active: "desk" })}
-      <main class="mx-auto w-full max-w-7xl px-6 py-10">${content}</main>
+      <main class="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10">${content}</main>
     </div>
   `;
   wireAppHeader();
@@ -45,7 +45,7 @@ const init = async () => {
   await fetchCurrentSession().catch(() => undefined);
   const session = readAuthSession();
   if (!session.signedIn) {
-    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">Sign in first to review auctions won by your current user.</div>`);
+    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">Sign in first to review auctions won by your current user.</div>`);
     return;
   }
 
@@ -58,7 +58,7 @@ const init = async () => {
     renderShell(`
       <section>
         <p class="text-xs uppercase tracking-[0.3em] text-slate">Bid outcomes</p>
-        <h1 class="mt-2 text-3xl font-semibold text-ink">Won auctions</h1>
+        <h1 class="mt-2 text-2xl font-semibold text-ink sm:text-3xl">Won auctions</h1>
         <p class="mt-3 text-sm text-slate">${wins.length} closed listings are currently attributed to ${session.displayName}.</p>
         <div class="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
           ${wins.length
@@ -78,12 +78,12 @@ const init = async () => {
                   <a href="/item.html?id=${item.id}" class="mt-5 inline-flex rounded-[0.9rem] bg-[#1d326c] px-4 py-2 text-xs font-semibold text-white">Open details</a>
                 </article>
               `).join("")
-            : `<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">No won auctions are assigned to this user yet. In this build, wins are resolved from the audit trail of closed auctions.</div>`}
+            : `<div class="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">No won auctions are assigned to this user yet. In this build, wins are resolved from the audit trail of closed auctions.</div>`}
         </div>
       </section>
     `);
   } catch {
-    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">Unable to load won auctions right now.</div>`);
+    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">Unable to load won auctions right now.</div>`);
   }
 };
 

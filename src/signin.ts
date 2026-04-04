@@ -17,8 +17,8 @@ const revealApp = () => {
 const renderSigninPage = () => {
   const session = readAuthSession();
   document.body.innerHTML = `
-    <div class="h-screen overflow-hidden bg-[linear-gradient(135deg,#f8fafc_0%,#eef4f1_45%,#ffffff_100%)] p-3 md:p-4">
-      <div class="relative mx-auto flex h-full w-full max-w-7xl overflow-hidden rounded-[2rem] border border-white/70 bg-white/55 shadow-[0_24px_70px_rgba(148,163,184,0.28)] backdrop-blur-xl md:rounded-[2.75rem]">
+    <div class="min-h-screen bg-[linear-gradient(135deg,#f8fafc_0%,#eef4f1_45%,#ffffff_100%)] p-3 md:p-4">
+      <div class="relative mx-auto flex min-h-[calc(100svh-1.5rem)] w-full max-w-7xl overflow-hidden rounded-[2rem] border border-white/70 bg-white/55 shadow-[0_24px_70px_rgba(148,163,184,0.28)] backdrop-blur-xl md:min-h-[calc(100svh-2rem)] md:rounded-[2.75rem]">
         <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.88),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(226,232,240,0.5),transparent_30%)]"></div>
         <main class="relative z-10 grid h-full w-full items-center gap-4 p-3 md:gap-6 md:p-6 xl:grid-cols-[0.8fr_1.2fr]">
           <aside class="relative hidden h-full xl:block">
@@ -28,9 +28,9 @@ const renderSigninPage = () => {
             </div>
           </aside>
 
-          <section class="flex h-full min-h-0 items-center justify-center rounded-[2rem] bg-white px-6 py-8 md:px-10 md:py-8 lg:px-14">
+          <section class="flex min-h-0 items-center justify-center rounded-[2rem] bg-white px-5 py-8 md:px-10 md:py-8 lg:px-14">
             <div class="w-full max-w-md">
-              <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-wrap items-center justify-between gap-4">
                 <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
                 <a href="/index.html" class="rounded-[0.9rem] border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate">Back</a>
               </div>

@@ -243,9 +243,15 @@ const adminPanel = document.querySelector<HTMLElement>("#admin");
 
 const adStatus = document.querySelector<HTMLSpanElement>("#ad-status");
 const adUser = document.querySelector<HTMLSpanElement>("#ad-user");
+const adUserMobile = document.querySelector<HTMLSpanElement>("#ad-user-mobile");
 const adLogin = document.querySelector<HTMLButtonElement>("#ad-login");
+const adLoginMobile = document.querySelector<HTMLButtonElement>("#ad-login-mobile");
 const adLogout = document.querySelector<HTMLButtonElement>("#ad-logout");
+const adLogoutMobile = document.querySelector<HTMLButtonElement>("#ad-logout-mobile");
+const adMobileMenu = document.querySelector<HTMLDivElement>("#ad-mobile-menu");
+const adMobileMenuToggle = document.querySelector<HTMLButtonElement>("#ad-mobile-menu-toggle");
 const activeRoleLabel = document.querySelector<HTMLSpanElement>("#active-role-label");
+const activeRoleLabelMobile = document.querySelector<HTMLSpanElement>("#active-role-label-mobile");
 
 const revealApp = () => {
   window.requestAnimationFrame(() => {
@@ -498,7 +504,7 @@ const renderItems = () => {
       return `
         <article
           data-item-card="${item.id}"
-          class="card-hover grid min-h-[520px] grid-rows-[2rem_4rem_1.75rem_11rem_4rem_2.75rem] gap-y-3 rounded-3xl border ${highlight} bg-white p-5"
+          class="card-hover grid min-h-[500px] grid-rows-[2rem_4rem_1.75rem_11rem_4rem_2.75rem] gap-y-3 rounded-3xl border ${highlight} bg-white p-4 sm:min-h-[520px] sm:p-5"
         >
           <div class="flex items-center justify-between gap-3">
             <p class="text-xs uppercase tracking-[0.3em] text-slate">${item.category}</p>
@@ -571,9 +577,9 @@ const renderDetail = () => {
     ? item.documents
         .map(
           (doc) => `
-            <a href="${resolveMediaUrl(doc.url)}" class="flex items-center justify-between rounded-2xl border border-ink/10 bg-white px-4 py-2 text-xs text-ink" target="_blank" rel="noreferrer">
-              <span>${doc.name}</span>
-              <span class="text-slate">Download</span>
+            <a href="${resolveMediaUrl(doc.url)}" class="flex items-center justify-between gap-3 rounded-2xl border border-ink/10 bg-white px-4 py-2 text-xs text-ink" target="_blank" rel="noreferrer">
+              <span class="min-w-0 truncate">${doc.name}</span>
+              <span class="shrink-0 text-slate">Download</span>
             </a>
           `
         )
@@ -584,27 +590,27 @@ const renderDetail = () => {
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
         <p class="text-xs uppercase tracking-[0.3em] text-slate">Lot ${item.lot} - ${item.category}</p>
-        <h2 class="mt-2 text-2xl font-semibold text-ink">${item.title}</h2>
+        <h2 class="mt-2 break-words text-xl font-semibold text-ink sm:text-2xl">${item.title}</h2>
         <p class="mt-2 text-sm text-slate">${item.description}</p>
       </div>
       ${renderStatusLabel(status)}
     </div>
     <div class="mt-6 grid gap-6 md:grid-cols-[0.9fr_1.1fr]">
       <div class="space-y-4">
-        <div class="flex h-72 items-center justify-center overflow-hidden rounded-3xl border border-ink/10 bg-white p-2">
+        <div class="flex h-56 items-center justify-center overflow-hidden rounded-3xl border border-ink/10 bg-white p-2 sm:h-72">
           ${
             mainImage
               ? `<img src="${resolveMediaUrl(mainImage)}" alt="${item.title}" class="h-full w-full object-contain" />`
               : `<div class="h-full w-full rounded-3xl photo-placeholder"></div>`
           }
         </div>
-        ${thumbnailGrid ? `<div class="grid grid-cols-4 gap-3">${thumbnailGrid}</div>` : ""}
+        ${thumbnailGrid ? `<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">${thumbnailGrid}</div>` : ""}
         <div>
           <p class="text-xs uppercase tracking-[0.3em] text-slate">Documents</p>
           <div class="mt-3 space-y-2">${documentsList}</div>
         </div>
       </div>
-      <div class="space-y-4 text-sm">
+      <div class="min-w-0 space-y-4 text-sm">
         <div class="rounded-2xl border border-ink/10 bg-ink/5 p-4">
           <p class="text-xs uppercase tracking-[0.3em] text-slate">Countdown</p>
           <p class="mt-2 text-lg font-semibold text-ink" data-countdown data-countdown-id="${item.id}">
@@ -640,12 +646,12 @@ const renderDetail = () => {
           <p class="mt-1 text-sm text-ink">Location: ${item.location}</p>
           <p class="mt-1 text-sm text-ink">SKU: ${item.sku}</p>
         </div>
-        <a href="/item.html?id=${item.id}" class="mt-4 inline-flex w-fit rounded-[0.9rem] border border-ink/20 px-4 py-2 text-center text-xs font-semibold text-ink">Open full item page</a>
+        <a href="/item.html?id=${item.id}" class="mt-4 inline-flex w-full rounded-[0.9rem] border border-ink/20 px-4 py-2 text-center text-xs font-semibold text-ink sm:w-fit">Open full item page</a>
       </div>
     </div>
     <form id="bid-form" class="mt-6 space-y-3">
-      <div class="flex flex-wrap items-center gap-3">
-        <div class="flex flex-1 items-center gap-2">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div class="flex min-w-0 flex-1 items-center gap-2">
           <input
             id="bid-amount"
             type="number"
@@ -666,7 +672,7 @@ const renderDetail = () => {
         <button
           id="bid-submit"
           type="submit"
-          class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white"
+          class="w-full rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white sm:w-auto"
           ${canBid(item) ? "" : "disabled"}
         >
           Place bid
@@ -751,12 +757,12 @@ const renderHistory = () => {
     ? item.bids
         .map(
           (bid) => `
-          <div class="flex items-center justify-between rounded-2xl border border-ink/10 bg-ink/5 px-4 py-3">
-            <div>
+          <div class="flex items-center justify-between gap-4 rounded-2xl border border-ink/10 bg-ink/5 px-4 py-3">
+            <div class="min-w-0">
               <p class="text-sm font-semibold text-ink">${canViewReserve() ? bid.bidder : "Anonymous bidder"}</p>
               <p class="text-xs text-slate">${bid.time}</p>
             </div>
-            <p class="text-sm font-semibold text-ink">${formatMoney(bid.amount)}</p>
+            <p class="shrink-0 text-sm font-semibold text-ink">${formatMoney(bid.amount)}</p>
           </div>
         `
         )
@@ -795,17 +801,29 @@ const updateRoleUi = () => {
   if (activeRoleLabel) {
     activeRoleLabel.textContent = state.role;
   }
+  if (activeRoleLabelMobile) {
+    activeRoleLabelMobile.textContent = state.role;
+  }
   if (adStatus) {
     adStatus.textContent = session.signedIn ? "Signed in" : "Signed out";
   }
   if (adUser) {
     adUser.textContent = session.signedIn ? session.displayName : "No active session";
   }
+  if (adUserMobile) {
+    adUserMobile.textContent = session.signedIn ? session.displayName : "No active session";
+  }
   if (adLogin) {
     adLogin.classList.toggle("hidden", session.signedIn);
   }
+  if (adLoginMobile) {
+    adLoginMobile.classList.toggle("hidden", session.signedIn);
+  }
   if (adLogout) {
     adLogout.classList.toggle("hidden", !session.signedIn);
+  }
+  if (adLogoutMobile) {
+    adLogoutMobile.classList.toggle("hidden", !session.signedIn);
   }
   if (adminPanel) {
     adminPanel.classList.toggle("hidden", !(state.role === "Admin" || state.role === "SuperAdmin"));
@@ -815,9 +833,9 @@ const updateRoleUi = () => {
   renderHistory();
 };
 
-const renderAdLogoutButton = (label: string) => {
-  if (!adLogout) return;
-  adLogout.innerHTML = `
+const renderAdLogoutButton = (button: HTMLButtonElement | null, label: string) => {
+  if (!button) return;
+  button.innerHTML = `
     <span>${label}</span>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -839,17 +857,35 @@ const initSessionUi = async () => {
   adLogin.addEventListener("click", () => {
     window.location.href = "/signin.html";
   });
-  adLogout.addEventListener("click", async () => {
-    adLogout.disabled = true;
-    renderAdLogoutButton("Signing out...");
+  adLoginMobile?.addEventListener("click", () => {
+    window.location.href = "/signin.html";
+  });
+  adMobileMenuToggle?.addEventListener("click", () => {
+    if (!adMobileMenu) return;
+    const isHidden = adMobileMenu.classList.toggle("hidden");
+    adMobileMenuToggle.setAttribute("aria-expanded", String(!isHidden));
+    adMobileMenuToggle.setAttribute("aria-label", isHidden ? "Open navigation menu" : "Close navigation menu");
+  });
+
+  const handleLogout = async (button: HTMLButtonElement | null) => {
+    if (!button) return;
+    button.disabled = true;
+    renderAdLogoutButton(button, "Signing out...");
     try {
       await logoutAccount();
       updateRoleUi();
       window.location.href = "/signin.html";
     } finally {
-      adLogout.disabled = false;
-      renderAdLogoutButton("Sign out");
+      button.disabled = false;
+      renderAdLogoutButton(button, "Sign out");
     }
+  };
+
+  adLogout.addEventListener("click", () => {
+    void handleLogout(adLogout);
+  });
+  adLogoutMobile?.addEventListener("click", () => {
+    void handleLogout(adLogoutMobile);
   });
 };
 

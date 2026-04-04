@@ -103,8 +103,8 @@ const renderEmpty = (message: string) => {
   const container = document.querySelector<HTMLDivElement>("#item-view");
   if (!container) return;
   container.innerHTML = `
-    <div class="rounded-3xl border border-ink/10 bg-white p-8">
-      <h1 class="text-2xl font-semibold text-ink">Item not available</h1>
+    <div class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-8">
+      <h1 class="text-xl font-semibold text-ink sm:text-2xl">Item not available</h1>
       <p class="mt-3 text-sm text-slate">${message}</p>
     </div>
   `;
@@ -163,7 +163,7 @@ const renderItem = (item: AuctionItem) => {
     <section class="space-y-6">
       <div>
         <p class="text-xs uppercase tracking-[0.3em] text-slate">Lot ${item.lot} - ${item.category}</p>
-        <h1 class="mt-2 text-3xl font-semibold text-ink">${item.title}</h1>
+        <h1 class="mt-2 break-words text-2xl font-semibold text-ink sm:text-3xl">${item.title}</h1>
         <p class="mt-3 text-sm text-slate">${item.description}</p>
       </div>
       <div class="space-y-4">
@@ -177,7 +177,7 @@ const renderItem = (item: AuctionItem) => {
       </div>
     </section>
     <aside class="space-y-6">
-      <div class="rounded-3xl border border-ink/10 bg-white p-6">
+      <div class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
         <p class="text-xs uppercase tracking-[0.3em] text-slate">Auction details</p>
         <div class="mt-4 space-y-3 text-sm text-ink">
           <div class="flex items-center justify-between">
@@ -225,10 +225,10 @@ const renderItem = (item: AuctionItem) => {
             : ""
         }
       </div>
-      <div class="rounded-3xl border border-ink/10 bg-white p-6">
+      <div class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
         <p class="text-xs uppercase tracking-[0.3em] text-slate">Place bid</p>
         <form id="bid-form" class="mt-4 space-y-3">
-          <div class="flex items-center gap-2">
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
               id="bid-amount"
               type="number"
@@ -260,7 +260,7 @@ const renderItem = (item: AuctionItem) => {
           <p id="bid-hint" class="text-xs text-slate">${bidState.message}</p>
         </form>
       </div>
-      <div class="rounded-3xl border border-ink/10 bg-white p-6">
+      <div class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
         <p class="text-xs uppercase tracking-[0.3em] text-slate">Bid history</p>
         <div class="mt-4 space-y-3">
           ${item.bids.length ?

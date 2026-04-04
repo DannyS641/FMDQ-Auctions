@@ -8,7 +8,7 @@
   }
 
   body {
-    @apply bg-ash text-ink font-body;
+    @apply overflow-x-hidden bg-ash text-ink font-body;
   }
 
   h1, h2, h3, h4, h5, h6 {

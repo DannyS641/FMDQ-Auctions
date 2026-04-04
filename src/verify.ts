@@ -44,13 +44,13 @@ const renderVerifyPage = (message: string, state: "pending" | "success" | "error
   document.body.innerHTML = `
     <div class="min-h-screen bg-[linear-gradient(135deg,#f8fafc_0%,#eef4f1_45%,#ffffff_100%)] p-4">
       <div class="mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-3xl items-center justify-center">
-        <div class="w-full rounded-[2rem] border border-white/70 bg-white/70 p-8 shadow-[0_24px_70px_rgba(148,163,184,0.22)] backdrop-blur-xl md:p-12">
-          <div class="flex items-center justify-between gap-4">
+        <div class="w-full rounded-[2rem] border border-white/70 bg-white/70 p-5 shadow-[0_24px_70px_rgba(148,163,184,0.22)] backdrop-blur-xl sm:p-8 md:p-12">
+          <div class="flex flex-wrap items-center justify-between gap-4">
             <img src="/slides/fmdq-logo.png" alt="FMDQ" class="h-10 w-auto" />
             <a href="/signin.html" class="rounded-[0.9rem] border border-ink/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate">Sign in</a>
           </div>
           <p class="mt-8 text-[11px] uppercase tracking-[0.34em] text-slate">Email verification</p>
-          <h1 class="mt-4 font-display text-4xl font-bold leading-none text-ink md:text-[2.8rem]">${
+          <h1 class="mt-4 font-display text-3xl font-bold leading-none text-ink sm:text-4xl md:text-[2.8rem]">${
             state === "success" ? "Account verified" : state === "error" ? "Verification issue" : "Check your inbox"
           }</h1>
           <p class="mt-4 text-base text-slate">${
@@ -62,8 +62,8 @@ const renderVerifyPage = (message: string, state: "pending" | "success" | "error
             <p id="verify-message" class="text-sm">${message}</p>
           </div>
           <div class="mt-6 flex flex-wrap gap-3">
-            <a href="/signin.html" class="rounded-[0.9rem] bg-[#1d326c] px-6 py-3 text-sm font-semibold text-white">Go to sign in</a>
-            ${email && state !== "success" ? `<button id="resend-verification" class="rounded-[0.9rem] border border-ink/10 px-6 py-3 text-sm font-semibold text-ink">Resend verification</button>` : ""}
+            <a href="/signin.html" class="w-full rounded-[0.9rem] bg-[#1d326c] px-6 py-3 text-center text-sm font-semibold text-white sm:w-auto">Go to sign in</a>
+            ${email && state !== "success" ? `<button id="resend-verification" class="w-full rounded-[0.9rem] border border-ink/10 px-6 py-3 text-sm font-semibold text-ink sm:w-auto">Resend verification</button>` : ""}
           </div>
         </div>
       </div>

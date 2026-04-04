@@ -25,7 +25,7 @@ const renderShell = (content: string) => {
   root.innerHTML = `
     <div class="min-h-screen bg-ash">
       ${renderAppHeader(readAuthSession(), { active: "profile" })}
-      <main class="mx-auto w-full max-w-7xl px-6 py-10">${content}</main>
+      <main class="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10">${content}</main>
     </div>
   `;
   wireAppHeader();
@@ -36,7 +36,7 @@ const init = async () => {
   await fetchCurrentSession().catch(() => undefined);
   const session = readAuthSession();
   if (!session.signedIn) {
-    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">Sign in first to view your profile.</div>`);
+    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">Sign in first to view your profile.</div>`);
     return;
   }
 
@@ -44,9 +44,9 @@ const init = async () => {
     const [profile, sessions] = await Promise.all([fetchMyProfile(), fetchMySessions()]);
     renderShell(`
       <section class="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
-        <div class="rounded-3xl border border-ink/10 bg-white p-6">
+        <div class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
           <p class="text-xs uppercase tracking-[0.3em] text-slate">My profile</p>
-          <h1 class="mt-2 text-3xl font-semibold text-ink">${profile.displayName}</h1>
+          <h1 class="mt-2 break-words text-2xl font-semibold text-ink sm:text-3xl">${profile.displayName}</h1>
           <div class="mt-6 space-y-3 text-sm text-ink">
             <div><span class="text-slate">Email:</span> <span class="font-semibold">${profile.email}</span></div>
             <div><span class="text-slate">Primary role:</span> <span class="font-semibold">${profile.role}</span></div>
@@ -56,18 +56,18 @@ const init = async () => {
             <div><span class="text-slate">Last login:</span> <span class="font-semibold">${profile.lastLoginAt ? formatDate(profile.lastLoginAt) : "Never"}</span></div>
           </div>
           <div class="mt-6 flex flex-wrap gap-3">
-            <button id="profile-reset-password" class="rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white">Email me a reset link</button>
-            <button id="profile-signout" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Sign out</button>
+            <button id="profile-reset-password" class="w-full rounded-[0.9rem] bg-[#1d326c] px-5 py-3 text-sm font-semibold text-white sm:w-auto">Email me a reset link</button>
+            <button id="profile-signout" class="w-full rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink sm:w-auto">Sign out</button>
           </div>
           <p id="profile-feedback" class="mt-4 rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">Manage your sessions and account security from here.</p>
         </div>
-        <div class="rounded-3xl border border-ink/10 bg-white p-6">
+        <div class="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
           <div class="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p class="text-xs uppercase tracking-[0.3em] text-slate">Session management</p>
-              <h2 class="mt-2 text-2xl font-semibold text-ink">Devices and active sessions</h2>
+              <h2 class="mt-2 text-xl font-semibold text-ink sm:text-2xl">Devices and active sessions</h2>
             </div>
-            <button id="revoke-other-sessions" class="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink">Revoke other sessions</button>
+            <button id="revoke-other-sessions" class="w-full rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink sm:w-auto">Revoke other sessions</button>
           </div>
           <div class="mt-6 space-y-3">
             ${sessions.length ? sessions.map((entry) => `
@@ -128,7 +128,7 @@ const init = async () => {
       });
     });
   } catch {
-    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-8 text-sm text-slate">Unable to load your profile right now.</div>`);
+    renderShell(`<div class="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">Unable to load your profile right now.</div>`);
   }
 };
 
