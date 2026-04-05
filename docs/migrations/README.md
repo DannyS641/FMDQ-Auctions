@@ -6,6 +6,14 @@ npm run db:migrate
 
 `npm run db:migrate` requires `SUPABASE_DB_URL` and a local `psql` client.
 
+For deployment, `npm run db:deploy` applies all migration files and then verifies the required versions in `public.schema_migrations`:
+
+```bash
+npm run db:deploy
+```
+
+On pushes to `main`, the GitHub CI workflow also runs `npm run db:migrate` before the remote migration check when `SUPABASE_DB_URL` is configured as a repository secret.
+
 After each migration, run:
 
 ```sql

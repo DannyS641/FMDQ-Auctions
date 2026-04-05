@@ -1,20 +1,27 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
+import { buildCsrfTokenValue } from "../server/security-logic.js";
 
+process.env.NODE_ENV ||= "development";
 process.env.SUPABASE_URL ||= "https://example.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 process.env.APP_SECRET ||= "test-app-secret";
+process.env.CORS_ORIGINS ||= "http://localhost:5173";
 process.env.NOTIFICATION_WORKER_MODE = "api";
 
 const { app } = await import("../server/index.js");
+const trustedOrigin = "http://localhost:5173";
 
 const requestJson = async (server: http.Server, method: string, pathname: string) => {
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Test server did not bind to a TCP port.");
   }
-  const response = await fetch(`http://127.0.0.1:${address.port}${pathname}`, { method });
+  const response = await fetch(`http://127.0.0.1:${address.port}${pathname}`, {
+    method,
+    headers: ["POST", "PATCH", "PUT", "DELETE"].includes(method) ? { Origin: trustedOrigin } : undefined
+  });
   const body = await response.json();
   return { status: response.status, body };
 };
@@ -82,6 +89,57 @@ test("POST requests from untrusted origins are rejected", async () => {
   }
 });
 
+test("POST requests without an origin or referer are rejected", async () => {
+  const server = await startTestServer();
+  try {
+    const response = await requestJsonWithInit(server, "/api/auth/logout", {
+      method: "POST"
+    });
+    assert.equal(response.status, 403);
+    assert.deepEqual(response.body, { error: "Request origin is not allowed." });
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test("POST /api/auth/logout accepts trusted-origin requests with a valid CSRF token", async () => {
+  const server = await startTestServer();
+  try {
+    const sessionId = "test-session-id";
+    const csrfToken = buildCsrfTokenValue(String(process.env.APP_SECRET || ""), sessionId);
+    const response = await requestJsonWithInit(server, "/api/auth/logout", {
+      method: "POST",
+      headers: {
+        Cookie: `fmdq_session=${sessionId}`,
+        Origin: trustedOrigin,
+        "x-csrf-token": csrfToken
+      }
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, { ok: true });
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
+test("POST /api/auth/logout rejects trusted-origin requests with a stale CSRF token", async () => {
+  const server = await startTestServer();
+  try {
+    const response = await requestJsonWithInit(server, "/api/auth/logout", {
+      method: "POST",
+      headers: {
+        Cookie: "fmdq_session=test-session-id",
+        Origin: trustedOrigin,
+        "x-csrf-token": "stale-token"
+      }
+    });
+    assert.equal(response.status, 403);
+    assert.deepEqual(response.body, { error: "Invalid or missing CSRF token." });
+  } finally {
+    await stopTestServer(server);
+  }
+});
+
 test("anonymous users cannot access admin item restore or place bids", async () => {
   const server = await startTestServer();
   try {
@@ -94,6 +152,7 @@ test("anonymous users cannot access admin item restore or place bids", async () 
     const bidResponse = await requestJsonWithInit(server, "/api/items/item-1/bids", {
       method: "POST",
       headers: {
+        Origin: trustedOrigin,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({ amount: 1000, expectedCurrentBid: 0 })

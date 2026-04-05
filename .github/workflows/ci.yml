@@ -27,6 +27,12 @@ jobs:
       - name: Typecheck server
         run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck --types node server/index.ts
 
+      - name: Apply SQL migrations
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: npm run db:migrate
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
       - name: Check migration inventory
         run: npm run db:migrations:check
         env:
@@ -34,7 +40,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-      - name: Run security logic tests
+      - name: Run API and security tests
         run: npm test
 
   security:

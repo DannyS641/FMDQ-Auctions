@@ -43,12 +43,16 @@ const loadEnvFile = () => {
 loadEnvFile();
 
 const app = express();
+const runtimeEnvironment = process.env.NODE_ENV || "development";
 const port = Number(process.env.PORT || 5174);
 const sessionCookieName = "fmdq_session";
 const sessionTtlMs = 7 * 24 * 60 * 60 * 1000;
 const emailVerificationTtlMs = 24 * 60 * 60 * 1000;
 const passwordResetTtlMs = 60 * 60 * 1000;
-const adminApiToken = process.env.ADMIN_API_TOKEN || "";
+const configuredAdminApiToken = process.env.ADMIN_API_TOKEN || "";
+const adminApiTokenEnabled =
+  runtimeEnvironment === "development" && String(process.env.ENABLE_ADMIN_API_TOKEN || "").toLowerCase() === "true";
+const adminApiToken = adminApiTokenEnabled ? configuredAdminApiToken : "";
 const notificationRecipient = process.env.NOTIFY_TO || "operations@fmdq.example";
 const notificationTransport = (process.env.NOTIFY_TRANSPORT || "file").toLowerCase();
 const notificationPollMs = Math.max(Number(process.env.NOTIFY_POLL_MS || 5000), 1000);
@@ -71,7 +75,14 @@ const authRateWindowMs = 15 * 60_000;
 const authRateLimit = 10;
 const maxImportArchiveEntries = 150;
 const maxImportExtractedBytes = 100 * 1024 * 1024;
-const notificationClaimTtlMs = 10 * 60_000;
+const notificationClaimTtlMs = Math.max(Number(process.env.NOTIFICATION_CLAIM_TTL_MS || 10 * 60_000), 30_000);
+const notificationLeaseRenewMs = Math.max(
+  Math.min(
+    Number(process.env.NOTIFICATION_LEASE_RENEW_MS || Math.floor(notificationClaimTtlMs / 2)),
+    notificationClaimTtlMs - 1000
+  ),
+  1000
+);
 const securityEventsRetentionMs = Math.max(Number(process.env.SECURITY_EVENTS_RETENTION_DAYS || 30), 1) * 24 * 60 * 60 * 1000;
 const imageBucket = process.env.SUPABASE_IMAGE_BUCKET || "auction-images";
 const documentBucket = process.env.SUPABASE_DOCUMENT_BUCKET || "auction-documents";
@@ -90,6 +101,9 @@ const allowedOrigins = new Set(
     .map((value) => value.trim())
     .filter(Boolean)
 );
+const allowNoOriginMutations =
+  runtimeEnvironment !== "production"
+  && String(process.env.ALLOW_NO_ORIGIN_MUTATIONS || "").toLowerCase() === "true";
 const errorWebhookUrl = process.env.ERROR_WEBHOOK_URL || "";
 const securityTelemetryEvents = new Set(["AUTH_ATTEMPT", "BID_ATTEMPT"]);
 let securityEventsTableAvailable = true;
@@ -102,8 +116,10 @@ const requiredSchemaMigrations = [
 if (!supabaseUrl || !supabaseServiceRoleKey || !tokenSigningSecret) {
   throw new Error("SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY, and APP_SECRET are required for the backend.");
 }
-if (process.env.NODE_ENV === "production" && adminApiToken) {
-  throw new Error("ADMIN_API_TOKEN must be disabled in production. Use named user sessions or scoped service credentials instead.");
+if (configuredAdminApiToken && !adminApiTokenEnabled) {
+  throw new Error(
+    "ADMIN_API_TOKEN is only allowed when NODE_ENV=development and ENABLE_ADMIN_API_TOKEN=true. Remove it from shared/staging/production environments."
+  );
 }
 const malwareConfigCheck = validateMalwareScanConfiguration(process.env.NODE_ENV, malwareScanMode, malwareScanCommand);
 if (!malwareConfigCheck.ok) {
@@ -159,9 +175,9 @@ app.use((req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader(
     "Content-Security-Policy",
-    `default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data: https:; style-src 'self' https://fonts.googleapis.com; style-src-elem 'self' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com data:; script-src 'self'; connect-src 'self' ${Array.from(allowedOrigins).join(" ")};`
+    `default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data: https:; style-src 'self' https://fonts.googleapis.com; style-src-elem 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self'; connect-src 'self' ${Array.from(allowedOrigins).join(" ")};`
   );
-  if (process.env.NODE_ENV === "production") {
+  if (runtimeEnvironment === "production") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
   next();
@@ -174,7 +190,11 @@ app.use((req, res, next) => {
   const origin = String(req.headers.origin || "");
   const referer = String(req.headers.referer || "");
   if (!origin && !referer) {
-    next();
+    if (allowNoOriginMutations) {
+      next();
+      return;
+    }
+    res.status(403).json({ error: "Request origin is not allowed." });
     return;
   }
   const source = origin || referer;
@@ -1607,6 +1627,46 @@ const updateNotificationOutcome = async (
   }
 };
 
+const renewNotificationClaimLease = async (entryId: string, claimToken: string) => {
+  const nextClaimExpiry = new Date(Date.now() + notificationClaimTtlMs).toISOString();
+  const row = await handleSupabaseMaybe<{ id: string }>(
+    await supabase
+      .from("notification_queue")
+      .update({ claim_expires_at: nextClaimExpiry })
+      .eq("id", entryId)
+      .eq("claim_token", claimToken)
+      .select("id")
+      .maybeSingle(),
+    true
+  );
+  if (!row) {
+    await sendOpsAlert("Notification claim lease could not be renewed", {
+      entryId,
+      claimToken,
+      nextClaimExpiry
+    });
+    throw new NotificationClaimLostError(entryId);
+  }
+};
+
+const startNotificationClaimLeaseRenewal = (entryId: string, claimToken: string) => {
+  let renewalError: Error | null = null;
+  let latestRenewal = Promise.resolve();
+  const timer = setInterval(() => {
+    latestRenewal = renewNotificationClaimLease(entryId, claimToken).catch((error) => {
+      renewalError = error instanceof Error ? error : new Error("Unable to renew notification claim lease.");
+    });
+  }, notificationLeaseRenewMs);
+
+  return async () => {
+    clearInterval(timer);
+    await latestRenewal;
+    if (renewalError) {
+      throw renewalError;
+    }
+  };
+};
+
 const escapeHtml = (value: unknown) =>
   String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -1736,38 +1796,47 @@ const renderNotificationContent = async (entry: NotificationQueueItem) => {
 
 const deliverNotification = async (entry: NotificationQueueItem, claimToken: string) => {
   const processedAt = new Date().toISOString();
-  if (notificationTransport === "noop") {
-    await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
-    return;
-  }
-  if (notificationTransport === "smtp") {
-    if (!smtpTransporter) {
-      throw new Error("SMTP transport is enabled but SMTP_HOST, SMTP_USER, or SMTP_PASS is missing.");
+  const stopLeaseRenewal = startNotificationClaimLeaseRenewal(entry.id, claimToken);
+  try {
+    if (notificationTransport === "noop") {
+      await stopLeaseRenewal();
+      await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
+      return;
     }
-    const content = await renderNotificationContent(entry);
-    await smtpTransporter.sendMail({
-      from: smtpFrom,
-      to: entry.recipient,
+    if (notificationTransport === "smtp") {
+      if (!smtpTransporter) {
+        throw new Error("SMTP transport is enabled but SMTP_HOST, SMTP_USER, or SMTP_PASS is missing.");
+      }
+      const content = await renderNotificationContent(entry);
+      await smtpTransporter.sendMail({
+        from: smtpFrom,
+        to: entry.recipient,
+        subject: entry.subject,
+        text: content.text,
+        html: content.html,
+        attachments: content.attachments
+      });
+      await stopLeaseRenewal();
+      await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
+      return;
+    }
+    const filePath = path.join(outboxDir, `${processedAt.replace(/[:.]/g, "-")}-${entry.id}.json`);
+    fs.writeFileSync(filePath, JSON.stringify({
+      id: entry.id,
+      channel: entry.channel,
+      eventType: entry.eventType,
+      recipient: entry.recipient,
       subject: entry.subject,
-      text: content.text,
-      html: content.html,
-      attachments: content.attachments
-    });
+      payload: entry.payload,
+      createdAt: entry.createdAt,
+      processedAt
+    }, null, 2));
+    await stopLeaseRenewal();
     await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
-    return;
+  } catch (error) {
+    await stopLeaseRenewal().catch(() => undefined);
+    throw error;
   }
-  const filePath = path.join(outboxDir, `${processedAt.replace(/[:.]/g, "-")}-${entry.id}.json`);
-  fs.writeFileSync(filePath, JSON.stringify({
-    id: entry.id,
-    channel: entry.channel,
-    eventType: entry.eventType,
-    recipient: entry.recipient,
-    subject: entry.subject,
-    payload: entry.payload,
-    createdAt: entry.createdAt,
-    processedAt
-  }, null, 2));
-  await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
 };
 
 const processNotificationQueue = async () => {

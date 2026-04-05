@@ -83,6 +83,64 @@
     -moz-appearance: textfield;
   }
 
+  .boot-splash-card {
+    width: min(560px, 100%);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 32px;
+    background: rgba(255, 255, 255, 0.92);
+    padding: 40px 32px;
+    text-align: center;
+    box-shadow: 0 24px 70px rgba(148, 163, 184, 0.18);
+    font-family: "Space Grotesk", sans-serif;
+    color: #0f172a;
+  }
+
+  .boot-splash-card-muted {
+    background: rgba(255, 255, 255, 0.88);
+  }
+
+  .boot-splash-logo {
+    display: block;
+    height: 44px;
+    width: auto;
+    margin: 0 auto;
+  }
+
+  .boot-splash-label {
+    margin: 20px 0 0;
+    font-size: 12px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+
+  .static-page-logo {
+    height: 42px;
+    width: auto;
+  }
+
+  .static-page-kicker {
+    margin-top: 24px;
+    font-size: 12px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: #64748b;
+  }
+
+  .static-page-title {
+    margin-top: 12px;
+    font-size: 44px;
+    line-height: 1.05;
+  }
+
+  .slide-delay-4 {
+    animation-delay: 4s;
+  }
+
+  .slide-delay-8 {
+    animation-delay: 8s;
+  }
+
   .slide-fade {
     opacity: 0;
     animation: slideFade 12s infinite;
