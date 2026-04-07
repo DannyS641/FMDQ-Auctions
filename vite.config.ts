@@ -1,4 +1,5 @@
-﻿import { defineConfig } from "vite";
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
 
@@ -6,27 +7,41 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      "@": resolve(__dirname, "src"),
+    },
+  },
   server: {
-    port: 5173
+    port: 5173,
+    proxy: {
+      "/api": {
+        target: "http://localhost:5174",
+        changeOrigin: true,
+      },
+      "/uploads": {
+        target: "http://localhost:5174",
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     rollupOptions: {
-      input: {
-        main: resolve(__dirname, "index.html"),
-        bidding: resolve(__dirname, "bidding.html"),
-        item: resolve(__dirname, "item.html"),
-        signin: resolve(__dirname, "signin.html"),
-        signup: resolve(__dirname, "signup.html"),
-        resetPassword: resolve(__dirname, "reset-password.html"),
-        verify: resolve(__dirname, "verify.html"),
-        adminItem: resolve(__dirname, "admin-item.html"),
-        closed: resolve(__dirname, "closed.html"),
-        won: resolve(__dirname, "won.html"),
-        operations: resolve(__dirname, "operations.html"),
-        dashboard: resolve(__dirname, "dashboard.html"),
-        myBids: resolve(__dirname, "my-bids.html"),
-        profile: resolve(__dirname, "profile.html")
-      }
-    }
-  }
+      output: {
+        manualChunks: {
+          "react-vendor": ["react", "react-dom", "react-router-dom"],
+          "query-vendor": ["@tanstack/react-query"],
+          "ui-vendor": [
+            "@radix-ui/react-dialog",
+            "@radix-ui/react-alert-dialog",
+            "@radix-ui/react-select",
+            "@radix-ui/react-tabs",
+            "lucide-react",
+            "sonner",
+          ],
+        },
+      },
+    },
+  },
 });

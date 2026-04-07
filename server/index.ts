@@ -214,6 +214,19 @@ app.use((req, res, next) => {
       next();
       return;
     }
+    // Public auth endpoints authenticate via credentials/tokens — CSRF doesn't apply
+    const csrfExemptPaths = new Set([
+      "/api/auth/login",
+      "/api/auth/register",
+      "/api/auth/verify-email",
+      "/api/auth/request-password-reset",
+      "/api/auth/reset-password",
+      "/api/auth/resend-verification",
+    ]);
+    if (csrfExemptPaths.has(req.path)) {
+      next();
+      return;
+    }
     const sessionId = parseCookies(req)[sessionCookieName];
     if (!sessionId) {
       next();
@@ -469,8 +482,8 @@ const guessContentType = (name: string, fallback = "application/octet-stream") =
 };
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 const sanitizeDisplayName = (value: string) => value.trim().replace(/\s+/g, " ");
-const buildEmailVerificationUrl = (token: string) => `${appBaseUrl}/verify.html?token=${encodeURIComponent(token)}`;
-const buildPasswordResetUrl = (token: string) => `${appBaseUrl}/reset-password.html?token=${encodeURIComponent(token)}`;
+const buildEmailVerificationUrl = (token: string) => `${appBaseUrl}/verify?token=${encodeURIComponent(token)}`;
+const buildPasswordResetUrl = (token: string) => `${appBaseUrl}/reset-password?token=${encodeURIComponent(token)}`;
 const isStrongPassword = (value: string) =>
   value.length >= 8 &&
   /[A-Z]/.test(value) &&

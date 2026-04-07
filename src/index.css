@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    color: #0b0e12;
+  }
+
+  body {
+    background-color: #e6e8eb;
+    margin: 0;
+  }
+
+  /* Remove number input spinners */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
+}
+
+@layer utilities {
+  .no-spin::-webkit-inner-spin-button,
+  .no-spin::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .no-spin {
+    -moz-appearance: textfield;
+  }
+}
+
+/* Slide image fade animation for Landing page */
+@keyframes slideFade {
+  0%   { opacity: 1; }
+  30%  { opacity: 1; }
+  40%  { opacity: 0; }
+  90%  { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.slide-fade {
+  animation: slideFade 12s infinite;
+  opacity: 0;
+}
