@@ -27,11 +27,14 @@ const queryClient = new QueryClient({
   },
 });
 
-// Hides the static HTML loader immediately on React's first commit
+// Handoff from the static boot HTML to the mounted React app.
 const loader = document.getElementById("app-loader");
 if (loader) {
   // requestAnimationFrame ensures React has painted at least one frame
-  requestAnimationFrame(() => loader.classList.add("hidden"));
+  requestAnimationFrame(() => {
+    document.body.removeAttribute("data-app-loading");
+    loader.classList.add("hidden");
+  });
 }
 
 const root = document.getElementById("root");

@@ -13,7 +13,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export default function ItemDetail() {
   const { id } = useParams<{ id: string }>();
-  const { canViewReserve, isAdmin, role } = useAuth();
+  const { canViewReserve, isAdmin } = useAuth();
   const { data: item, isLoading, isError } = useAuctionItem(id ?? null);
 
   if (isLoading) {

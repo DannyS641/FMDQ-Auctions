@@ -110,7 +110,7 @@ export default function AdminItemForm() {
     onSuccess: (saved) => {
       toast.success(isEdit ? "Item updated." : "Item created.");
       void queryClient.invalidateQueries({ queryKey: queryKeys.items.all() });
-      navigate(`/bidding/${saved.id}`);
+      navigate(`/admin/items/${saved.id}`);
     },
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : "Save failed. Please try again.");
@@ -323,7 +323,7 @@ export default function AdminItemForm() {
           </Card>
 
           <div className="flex justify-end gap-3">
-            <Link to={isEdit ? `/bidding/${id}` : "/admin/items"}>
+            <Link to={isEdit ? `/admin/items` : "/admin/items"}>
               <Button type="button" variant="secondary">Cancel</Button>
             </Link>
             <Button type="submit" isLoading={saving} disabled={isEdit && !isDirty && imageFiles.length === 0 && docFiles.length === 0}>

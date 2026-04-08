@@ -1,6 +1,18 @@
 import { apiClient } from "@/lib/api-client";
 import type { AdminUser, AuditEntry, NotificationEntry, OperationsPayload, BulkImportReport } from "@/types";
 
+type AuditEntryApiRow = {
+  id: string;
+  event_type: string;
+  entity_type: string;
+  entity_id: string;
+  actor: string;
+  actor_type: string;
+  request_id: string;
+  details_json: unknown;
+  created_at: string;
+};
+
 export const getAdminUsers = async (): Promise<AdminUser[]> =>
   apiClient<AdminUser[]>("/api/admin/users");
 
@@ -59,7 +71,18 @@ export const getAudits = async (
   filters: Record<string, string> = {}
 ): Promise<AuditEntry[]> => {
   const params = new URLSearchParams(filters).toString();
-  return apiClient<AuditEntry[]>(`/api/admin/audits${params ? `?${params}` : ""}`);
+  const rows = await apiClient<AuditEntryApiRow[]>(`/api/admin/audits${params ? `?${params}` : ""}`);
+  return rows.map((row) => ({
+    id: row.id,
+    eventType: row.event_type,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    actor: row.actor,
+    actorType: row.actor_type,
+    requestId: row.request_id,
+    details: typeof row.details_json === "string" ? row.details_json : JSON.stringify(row.details_json ?? {}),
+    createdAt: row.created_at,
+  }));
 };
 
 export const getNotifications = async (): Promise<NotificationEntry[]> =>

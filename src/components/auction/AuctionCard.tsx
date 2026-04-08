@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { formatMoney } from "@/lib/formatters";
-import { getAuctionStatus, getReserveOutcome } from "@/lib/auction-utils";
+import { getAuctionStatus } from "@/lib/auction-utils";
 import { CountdownDisplay } from "./CountdownDisplay";
 import type { AuctionItem } from "@/types";
 

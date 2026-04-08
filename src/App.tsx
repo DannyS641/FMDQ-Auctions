@@ -24,6 +24,7 @@ const Won = lazy(() => import("@/pages/user/Won"));
 const Profile = lazy(() => import("@/pages/user/Profile"));
 
 // Admin pages
+const AdminItems = lazy(() => import("@/pages/admin/AdminItems"));
 const AdminItemForm = lazy(() => import("@/pages/admin/AdminItemForm"));
 const Operations = lazy(() => import("@/pages/admin/Operations"));
 
@@ -92,7 +93,8 @@ export function App() {
 
         {/* Admin only */}
         <Route element={<AdminRoute />}>
-          <Route path="/admin/items" element={<AdminItemForm />} />
+          <Route path="/admin/items" element={<AdminItems />} />
+          <Route path="/admin/items/new" element={<AdminItemForm />} />
           <Route path="/admin/items/:id" element={<AdminItemForm />} />
           <Route path="/operations" element={<Operations />} />
         </Route>
