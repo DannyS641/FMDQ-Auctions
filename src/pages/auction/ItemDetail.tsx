@@ -1,6 +1,8 @@
+import { useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { ChevronLeft } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
+import { Button } from "@/components/ui/Button";
 import { PageSpinner } from "@/components/ui/Spinner";
 import { BidForm } from "@/components/auction/BidForm";
 import { CountdownDisplay } from "@/components/auction/CountdownDisplay";
@@ -10,11 +12,13 @@ import { formatMoney, formatDate } from "@/lib/formatters";
 import { getAuctionStatus, getReserveOutcome } from "@/lib/auction-utils";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+const BID_HISTORY_PAGE_SIZE = 5;
 
 export default function ItemDetail() {
   const { id } = useParams<{ id: string }>();
   const { canViewReserve, isAdmin } = useAuth();
   const { data: item, isLoading, isError } = useAuctionItem(id ?? null);
+  const [bidHistoryPage, setBidHistoryPage] = useState(1);
 
   if (isLoading) {
     return (
@@ -41,6 +45,18 @@ export default function ItemDetail() {
   const status = getAuctionStatus(item);
   const mainImage = item.images[0];
   const extraImages = item.images.slice(1);
+  const sortedBids = useMemo(
+    () =>
+      [...item.bids].sort(
+        (a, b) => new Date(b.time ?? b.createdAt ?? 0).getTime() - new Date(a.time ?? a.createdAt ?? 0).getTime()
+      ),
+    [item.bids]
+  );
+  const totalBidPages = Math.max(1, Math.ceil(sortedBids.length / BID_HISTORY_PAGE_SIZE));
+  const visibleBids = useMemo(() => {
+    const start = (bidHistoryPage - 1) * BID_HISTORY_PAGE_SIZE;
+    return sortedBids.slice(start, start + BID_HISTORY_PAGE_SIZE);
+  }, [bidHistoryPage, sortedBids]);
 
   return (
     <PageShell maxWidth="6xl">
@@ -64,7 +80,7 @@ export default function ItemDetail() {
           <div className="space-y-4">
             {mainImage ? (
               <>
-                <div className="flex min-h-[28rem] items-center justify-center overflow-hidden rounded-[2rem] border border-ink/10 bg-white p-3 shadow-[0_20px_50px_rgba(15,23,42,0.08)] lg:min-h-[36rem]">
+                <div className="mx-auto flex min-h-[20rem] w-full max-w-2xl items-center justify-center overflow-hidden rounded-[2rem] border border-ink/10 bg-white p-3 shadow-[0_20px_50px_rgba(15,23,42,0.08)] lg:min-h-[24rem]">
                   <img
                     src={`${API_BASE}${mainImage.url}`}
                     alt={mainImage.name}
@@ -82,7 +98,7 @@ export default function ItemDetail() {
                 )}
               </>
             ) : (
-              <div className="h-[28rem] rounded-[2rem] border border-ink/10 bg-ink/5 lg:h-[36rem]" />
+              <div className="mx-auto h-[20rem] w-full max-w-2xl rounded-[2rem] border border-ink/10 bg-ink/5 lg:h-[24rem]" />
             )}
           </div>
 
@@ -176,9 +192,7 @@ export default function ItemDetail() {
               {item.bids.length === 0 ? (
                 <p className="text-sm text-slate">No bids recorded yet.</p>
               ) : (
-                [...item.bids]
-                  .sort((a, b) => new Date(b.time ?? b.createdAt ?? 0).getTime() - new Date(a.time ?? a.createdAt ?? 0).getTime())
-                  .map((bid, i) => (
+                visibleBids.map((bid, i) => (
                     <div key={i} className="flex items-center justify-between rounded-2xl border border-ink/10 bg-ink/5 px-4 py-2 text-sm">
                       <span>Anonymous bidder</span>
                       <span className="font-semibold">{formatMoney(bid.amount)}</span>
@@ -186,6 +200,31 @@ export default function ItemDetail() {
                   ))
               )}
             </div>
+            {sortedBids.length > BID_HISTORY_PAGE_SIZE && (
+              <div className="mt-4 flex items-center justify-between">
+                <p className="text-xs text-slate">
+                  Page {bidHistoryPage} of {totalBidPages}
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={bidHistoryPage === 1}
+                    onClick={() => setBidHistoryPage((current) => Math.max(1, current - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={bidHistoryPage === totalBidPages}
+                    onClick={() => setBidHistoryPage((current) => Math.min(totalBidPages, current + 1))}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         </aside>
       </div>

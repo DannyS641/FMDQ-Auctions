@@ -107,10 +107,10 @@ export default function AdminItemForm() {
         ? updateItem(id!, fd as unknown as globalThis.FormData)
         : createItem(fd as unknown as globalThis.FormData);
     },
-    onSuccess: (saved) => {
+    onSuccess: () => {
       toast.success(isEdit ? "Item updated." : "Item created.");
       void queryClient.invalidateQueries({ queryKey: queryKeys.items.all() });
-      navigate(`/admin/items/${saved.id}`);
+      navigate("/admin/items");
     },
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : "Save failed. Please try again.");
