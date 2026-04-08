@@ -1,5 +1,5 @@
 import { apiClient } from "@/lib/api-client";
-import type { AuctionItem, DashboardPayload, UserBidRecord, WonItem, BulkImportReport } from "@/types";
+import type { AuctionItem, DashboardPayload, UserBidRecord, WonItem, BulkImportReport, LandingStats } from "@/types";
 
 export const getItems = async (includeArchived = false): Promise<AuctionItem[]> =>
   apiClient<AuctionItem[]>(`/api/items${includeArchived ? "?includeArchived=1" : ""}`);
@@ -9,6 +9,9 @@ export const getItem = async (id: string, includeArchived = false): Promise<Auct
 
 export const getCategories = async (): Promise<string[]> =>
   apiClient<string[]>("/api/categories");
+
+export const getLandingStats = async (): Promise<LandingStats> =>
+  apiClient<LandingStats>("/api/landing-stats");
 
 export const placeBid = async (
   itemId: string,

@@ -1,8 +1,10 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/auth-context";
+import { useLandingStats } from "@/hooks/use-auction-items";
 
 export default function Landing() {
   const { isSignedIn } = useAuth();
+  const { data: stats } = useLandingStats();
 
   return (
     <section className="relative mx-auto grid w-full max-w-7xl flex-1 items-center gap-10 px-6 py-12 md:grid-cols-[1.2fr_0.8fr]">
@@ -33,15 +35,15 @@ export default function Landing() {
         </div>
         <div className="mt-8 grid gap-6 text-slate md:grid-cols-3">
           <div>
-            <p className="text-3xl font-semibold text-ink">326</p>
+            <p className="text-3xl font-semibold text-ink">{stats?.activeLots ?? "—"}</p>
             <p className="text-xs uppercase tracking-[0.3em] text-slate">Active lots</p>
           </div>
           <div>
-            <p className="text-3xl font-semibold text-ink">74</p>
+            <p className="text-3xl font-semibold text-ink">{stats?.verifiedBidders ?? "—"}</p>
             <p className="text-xs uppercase tracking-[0.3em] text-slate">Verified bidders</p>
           </div>
           <div>
-            <p className="text-3xl font-semibold text-ink">99.9%</p>
+            <p className="text-3xl font-semibold text-ink">{stats?.accountUptime ?? "—"}</p>
             <p className="text-xs uppercase tracking-[0.3em] text-slate">Account uptime</p>
           </div>
         </div>

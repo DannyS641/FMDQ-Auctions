@@ -1376,6 +1376,38 @@ const getRoles = async () => {
   return rows.map((row) => row.name);
 };
 
+const formatProcessUptime = (uptimeSeconds: number) => {
+  const totalMinutes = Math.max(0, Math.floor(uptimeSeconds / 60));
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+};
+
+const getLandingStats = async () => {
+  const items = await getItems();
+  const users = await listUsersWithRoles();
+  const now = Date.now();
+
+  const activeLots = items.filter((item) => {
+    if (item.archivedAt) return false;
+    return new Date(item.endTime).getTime() > now;
+  }).length;
+
+  const verifiedBidders = users.filter(
+    (user) => user.status === "active" && user.roles.includes("Bidder")
+  ).length;
+
+  return {
+    activeLots,
+    verifiedBidders,
+    accountUptime: formatProcessUptime(process.uptime()),
+  };
+};
+
 const mapItem = (
   row: ItemRow,
   files: ItemFileRow[],
@@ -3006,6 +3038,10 @@ app.get("/api/items/:id", asyncHandler(async (req, res) => {
 
 app.get("/api/categories", asyncHandler(async (req, res) => {
   res.json(await getCategories());
+}));
+
+app.get("/api/landing-stats", asyncHandler(async (req, res) => {
+  res.json(await getLandingStats());
 }));
 
 app.post("/api/categories", express.json({ limit: "128kb" }), requireAdminToken, asyncHandler(async (req, res) => {
