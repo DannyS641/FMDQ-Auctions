@@ -15,6 +15,7 @@ export type AuditEntry = {
   entityId: string;
   actor: string;
   actorType: string;
+  actorRole?: string | null;
   requestId: string;
   details: string;
   createdAt: string;

@@ -8,6 +8,7 @@ type AuditEntryApiRow = {
   entity_id: string;
   actor: string;
   actor_type: string;
+  actor_role?: string | null;
   request_id: string;
   details_json: unknown;
   created_at: string;
@@ -79,6 +80,7 @@ export const getAudits = async (
     entityId: row.entity_id,
     actor: row.actor,
     actorType: row.actor_type,
+    actorRole: row.actor_role ?? null,
     requestId: row.request_id,
     details: typeof row.details_json === "string" ? row.details_json : JSON.stringify(row.details_json ?? {}),
     createdAt: row.created_at,

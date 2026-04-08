@@ -75,6 +75,26 @@ const formatMetaValue = (value: unknown) => {
   return String(value);
 };
 
+const resolveActivityRoleLabel = (entry: AuditEntry, details: Record<string, unknown>) => {
+  if (entry.actorRole && entry.actorRole.trim()) {
+    return humanizeKey(entry.actorRole.trim());
+  }
+
+  const detailRole =
+    details.actorRole ||
+    details.role ||
+    details.roleName ||
+    details.userRole;
+
+  if (typeof detailRole === "string" && detailRole.trim()) {
+    return humanizeKey(detailRole.trim());
+  }
+
+  if (entry.actorType === "user") return "User";
+  if (!entry.actorType) return "System";
+  return humanizeKey(entry.actorType);
+};
+
 const buildActivityView = (entry: AuditEntry): ActivityView => {
   const details = parseActivityDetails(entry.details);
   const requestIp = String(details.requestIp || details.ip || details.clientIp || "—");
@@ -145,7 +165,7 @@ const buildActivityView = (entry: AuditEntry): ActivityView => {
     dateLabel: formatTimeAgo(entry.createdAt),
     dateValue: formatDate(entry.createdAt),
     userLabel: entry.actor || "System",
-    roleLabel: entry.actorType === "user" ? "Administrator" : humanizeKey(entry.actorType || "system"),
+    roleLabel: resolveActivityRoleLabel(entry, details),
     ip: requestIp,
     topic,
     context,
