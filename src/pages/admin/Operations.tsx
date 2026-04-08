@@ -27,6 +27,7 @@ import type { AdminUser, AuditEntry } from "@/types";
 
 type Tab = "overview" | "users" | "audits" | "notifications";
 const ACTIVITY_PAGE_SIZE = 10;
+const NOTIFICATION_PAGE_SIZE = 10;
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -73,6 +74,26 @@ const formatMetaValue = (value: unknown) => {
   if (value == null || value === "") return "—";
   if (Array.isArray(value)) return value.join(", ");
   return String(value);
+};
+
+const resolveActivityRoleLabel = (entry: AuditEntry, details: Record<string, unknown>) => {
+  if (entry.actorRole && entry.actorRole.trim()) {
+    return humanizeKey(entry.actorRole.trim());
+  }
+
+  const detailRole =
+    details.actorRole ||
+    details.role ||
+    details.roleName ||
+    details.userRole;
+
+  if (typeof detailRole === "string" && detailRole.trim()) {
+    return humanizeKey(detailRole.trim());
+  }
+
+  if (entry.actorType === "user") return "User";
+  if (!entry.actorType) return "System";
+  return humanizeKey(entry.actorType);
 };
 
 const buildActivityView = (entry: AuditEntry): ActivityView => {
@@ -145,7 +166,7 @@ const buildActivityView = (entry: AuditEntry): ActivityView => {
     dateLabel: formatTimeAgo(entry.createdAt),
     dateValue: formatDate(entry.createdAt),
     userLabel: entry.actor || "System",
-    roleLabel: entry.actorType === "user" ? "Administrator" : humanizeKey(entry.actorType || "system"),
+    roleLabel: resolveActivityRoleLabel(entry, details),
     ip: requestIp,
     topic,
     context,
@@ -763,6 +784,7 @@ function AuditsTab() {
 
 function NotificationsTab() {
   const queryClient = useQueryClient();
+  const [page, setPage] = useState(1);
 
   const { data: notifications, isLoading, isError } = useQuery({
     queryKey: queryKeys.admin.notifications(),
@@ -770,10 +792,17 @@ function NotificationsTab() {
     staleTime: 30_000,
   });
 
+  const totalPages = Math.max(1, Math.ceil((notifications?.length ?? 0) / NOTIFICATION_PAGE_SIZE));
+  const pagedNotifications = useMemo(() => {
+    const start = (page - 1) * NOTIFICATION_PAGE_SIZE;
+    return (notifications ?? []).slice(start, start + NOTIFICATION_PAGE_SIZE);
+  }, [notifications, page]);
+
   const { mutate: process, isPending: processing } = useMutation({
     mutationFn: processNotifications,
     onSuccess: (result) => {
       toast.success(`Processed ${result.processed} notification(s).`);
+      setPage(1);
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.notifications() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.operations() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.admin.audits() });
@@ -834,7 +863,7 @@ function NotificationsTab() {
                   <td colSpan={4} className="px-5 py-8 text-center text-sm text-slate">No notifications in queue.</td>
                 </tr>
               ) : (
-                notifications.map((n) => (
+                pagedNotifications.map((n) => (
                   <tr key={n.id} className="hover:bg-ash/50">
                     <td className="px-5 py-3 text-sm text-ink">{n.recipient}</td>
                     <td className="hidden px-5 py-3 text-slate sm:table-cell">{n.subject}</td>
@@ -849,6 +878,32 @@ function NotificationsTab() {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {!isLoading && !isError && (notifications?.length ?? 0) > NOTIFICATION_PAGE_SIZE && (
+        <div className="flex items-center justify-between rounded-3xl border border-ink/10 bg-white px-4 py-3">
+          <p className="text-sm text-slate">
+            Page {page} of {totalPages}
+          </p>
+          <div className="flex gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={page === 1}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={page === totalPages}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            >
+              Next
+            </Button>
+          </div>
         </div>
       )}
     </div>

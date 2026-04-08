@@ -27,15 +27,15 @@ export function AuctionCard({ item, onMouseEnter }: Props) {
       className="rounded-3xl border border-ink/10 bg-white p-5 transition duration-200 hover:border-neon/20 hover:shadow-[0_8px_30px_rgba(29,50,108,0.1)]"
     >
       {/* Image */}
-      <div className="flex h-48 items-center justify-center overflow-hidden rounded-2xl border border-ink/10 bg-ink/5">
+      <div className="flex aspect-[4/3] w-full items-center justify-center overflow-hidden rounded-2xl border border-ink/10 bg-white p-2">
         {thumb ? (
           <img
             src={`${API_BASE}${thumb}`}
             alt={item.title}
-            className="h-full w-full object-cover"
+            className="h-full w-full rounded-xl object-contain"
           />
         ) : (
-          <div className="h-full w-full rounded-2xl bg-ash" />
+          <div className="h-full w-full rounded-xl bg-ash" />
         )}
       </div>
 

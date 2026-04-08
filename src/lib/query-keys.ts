@@ -7,6 +7,7 @@ export const queryKeys = {
     list: (includeArchived = false) => ["items", "list", { includeArchived }] as const,
     detail: (id: string) => ["items", id] as const,
     categories: () => ["items", "categories"] as const,
+    landingStats: () => ["items", "landing-stats"] as const,
   },
   me: {
     profile: () => ["me", "profile"] as const,

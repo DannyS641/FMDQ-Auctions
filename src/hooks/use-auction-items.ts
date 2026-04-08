@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getItems, getItem, getCategories } from "@/api/items";
+import { getItems, getItem, getCategories, getLandingStats } from "@/api/items";
 import { queryKeys } from "@/lib/query-keys";
 import { getAuctionStatus } from "@/lib/auction-utils";
 import type { AuctionItem } from "@/types";
@@ -34,6 +34,16 @@ export function useCategories() {
     queryKey: queryKeys.items.categories(),
     queryFn: getCategories,
     staleTime: 5 * 60_000,
+  });
+}
+
+export function useLandingStats() {
+  return useQuery({
+    queryKey: queryKeys.items.landingStats(),
+    queryFn: getLandingStats,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    staleTime: 20_000,
   });
 }
 

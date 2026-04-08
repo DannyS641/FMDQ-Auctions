@@ -97,3 +97,9 @@ export type BulkImportReport = {
   failed: number;
   items: BulkImportReportItem[];
 };
+
+export type LandingStats = {
+  activeLots: number;
+  verifiedBidders: number;
+  accountUptime: string;
+};

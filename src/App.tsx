@@ -59,7 +59,7 @@ function AppShell() {
 // Auth pages have their own full-screen layout — no shell
 function AuthShell() {
   return (
-    <Suspense fallback={<PageSpinner />}>
+    <Suspense fallback={<PageSpinner fullScreen />}>
       <Outlet />
     </Suspense>
   );

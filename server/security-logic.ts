@@ -10,7 +10,7 @@ export type NotificationMeta = {
 export type DocumentAccessContext = {
   signedIn: boolean;
   adminAuthorized: boolean;
-  role: "Guest" | "Bidder" | "Observer" | "Admin" | "SuperAdmin";
+  role: "Guest" | "Bidder" | "ShopOwner" | "Admin" | "SuperAdmin";
   itemArchived: boolean;
   itemEnded: boolean;
   reserveState: "no_reserve" | "reserve_pending" | "reserve_met" | "reserve_not_met";
@@ -83,7 +83,7 @@ export const canAccessDocumentVisibility = (context: DocumentAccessContext, visi
 };
 
 export const ensureCanManageTargetRoles = (
-  actorRole: "Guest" | "Bidder" | "Observer" | "Admin" | "SuperAdmin",
+  actorRole: "Guest" | "Bidder" | "ShopOwner" | "Admin" | "SuperAdmin",
   targetRoles: string[]
 ) => {
   if (targetRoles.includes("SuperAdmin") && actorRole !== "SuperAdmin") {
