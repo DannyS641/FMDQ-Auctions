@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { RefreshCw, KeyRound } from "lucide-react";
+import { RefreshCw, KeyRound, Download } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
 import { SectionHeader } from "@/components/ui/SectionHeader";
@@ -21,9 +21,9 @@ import {
   bulkPasswordReset,
 } from "@/api/admin";
 import { queryKeys } from "@/lib/query-keys";
-import { formatTimeAgo } from "@/lib/formatters";
+import { formatDate, formatTimeAgo } from "@/lib/formatters";
 import { cn } from "@/lib/cn";
-import type { AdminUser } from "@/types";
+import type { AdminUser, AuditEntry, NotificationEntry, OperationsPayload } from "@/types";
 
 type Tab = "overview" | "users" | "audits" | "notifications";
 const ACTIVITY_PAGE_SIZE = 10;
@@ -35,6 +35,19 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "notifications", label: "Notifications" },
 ];
 
+type ActivityView = {
+  id: string;
+  dateLabel: string;
+  dateValue: string;
+  userLabel: string;
+  roleLabel: string;
+  ip: string;
+  topic: string;
+  context: string;
+  meta: string;
+  action: string;
+};
+
 const formatActivityEvent = (eventType: string) =>
   eventType
     .toLowerCase()
@@ -42,29 +55,122 @@ const formatActivityEvent = (eventType: string) =>
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 
-const formatActivityEntity = (entityType: string, entityId: string) => {
-  if (!entityId) return entityType || "System";
-  if (entityType === "system") return entityId;
-  return `${entityType} ${entityId}`;
+const parseActivityDetails = (details: string) => {
+  try {
+    return JSON.parse(details) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 };
 
-const formatActivityDetails = (details: string) => {
-  try {
-    const parsed = JSON.parse(details) as Record<string, unknown>;
-    const entries = Object.entries(parsed).filter(([, value]) => value != null && value !== "");
-    if (!entries.length) return "—";
-    return entries
-      .map(([key, value]) => {
-        const label = key
-          .replace(/([a-z])([A-Z])/g, "$1 $2")
-          .replace(/_/g, " ")
-          .replace(/\b\w/g, (char) => char.toUpperCase());
-        return `${label}: ${String(value)}`;
-      })
-      .join(" | ");
-  } catch {
-    return details || "—";
-  }
+const humanizeKey = (value: string) =>
+  value
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const formatMetaValue = (value: unknown) => {
+  if (value == null || value === "") return "—";
+  if (Array.isArray(value)) return value.join(", ");
+  return String(value);
+};
+
+const buildActivityView = (entry: AuditEntry): ActivityView => {
+  const details = parseActivityDetails(entry.details);
+  const requestIp = String(details.requestIp || details.ip || details.clientIp || "—");
+
+  const topic =
+    entry.entityType === "user" || entry.eventType.includes("SESSION") || entry.eventType.includes("PASSWORD")
+      ? "Users"
+      : entry.entityType === "item" || entry.eventType.includes("BID")
+        ? "Items"
+        : entry.eventType.includes("CATEGORY")
+          ? "Categories"
+          : entry.entityType === "export"
+            ? "Exports"
+            : "System";
+
+  const context =
+    entry.eventType.includes("SESSION")
+      ? "Session"
+      : entry.eventType.includes("PASSWORD")
+        ? "Password"
+        : entry.eventType.includes("ROLE")
+          ? "Roles"
+          : entry.entityType === "item"
+            ? "Auction item"
+            : entry.entityType === "user"
+              ? "User account"
+              : entry.entityType === "export"
+                ? "Data export"
+                : topic;
+
+  const actionMap: Record<string, string> = {
+    ACCOUNT_REGISTERED: "Registered",
+    ACCOUNT_VERIFIED: "Verified",
+    ACCOUNT_VERIFICATION_RESENT: "Verification Resent",
+    PASSWORD_RESET_REQUESTED: "Reset Requested",
+    PASSWORD_RESET_COMPLETED: "Password Reset",
+    PASSWORD_RESET_FORCED: "Password Reset Sent",
+    PASSWORD_RESET_BULK_FORCED: "Bulk Password Reset Sent",
+    SESSION_REVOKED: "Logged Out",
+    SESSIONS_REVOKED: "All Sessions Revoked",
+    USER_DISABLED: "Disabled",
+    USER_ENABLED: "Enabled",
+    USER_ROLE_ASSIGNED: "Role Assigned",
+    USER_ROLE_REMOVED: "Role Removed",
+    USER_BULK_IMPORTED: "Bulk Imported",
+    ITEM_CREATED: "Created",
+    ITEM_UPDATED: "Updated",
+    ITEM_ARCHIVED: "Archived",
+    ITEM_RESTORED: "Restored",
+    ITEM_BULK_IMPORTED: "Bulk Imported",
+    CATEGORY_DELETED: "Deleted",
+    BID_PLACED: "Bid Placed",
+    EXPORT_ITEMS: "Items Exported",
+    EXPORT_AUDITS: "Activity Exported",
+  };
+
+  const metaEntries = Object.entries(details).filter(([key, value]) => {
+    if (["requestIp", "ip", "clientIp"].includes(key)) return false;
+    return value != null && value !== "";
+  });
+
+  const meta = metaEntries.length
+    ? metaEntries.map(([key, value]) => `${humanizeKey(key)}: ${formatMetaValue(value)}`).join(" | ")
+    : "—";
+
+  return {
+    id: entry.id,
+    dateLabel: formatTimeAgo(entry.createdAt),
+    dateValue: formatDate(entry.createdAt),
+    userLabel: entry.actor || "System",
+    roleLabel: entry.actorType === "user" ? "Administrator" : humanizeKey(entry.actorType || "system"),
+    ip: requestIp,
+    topic,
+    context,
+    meta,
+    action: actionMap[entry.eventType] ?? formatActivityEvent(entry.eventType),
+  };
+};
+
+const csvEscape = (value: unknown) => {
+  const stringValue = String(value ?? "");
+  return `"${stringValue.replace(/"/g, '""')}"`;
+};
+
+const buildCsv = (rows: Array<Array<unknown>>) => rows.map((row) => row.map(csvEscape).join(",")).join("\n");
+
+const downloadCsv = (filename: string, content: string) => {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 };
 
 // ─── Overview ────────────────────────────────────────────────────────────────
@@ -419,32 +525,108 @@ function UsersTab() {
 function AuditsTab() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
+  const [selectedUser, setSelectedUser] = useState("all");
+  const [selectedTopic, setSelectedTopic] = useState("all");
+  const [selectedAction, setSelectedAction] = useState("all");
   const { data: audits, isLoading, isError } = useQuery({
     queryKey: queryKeys.admin.audits(),
     queryFn: () => getAudits(),
     staleTime: 30_000,
   });
 
-  const totalPages = Math.max(1, Math.ceil((audits?.length ?? 0) / ACTIVITY_PAGE_SIZE));
+  const activityRows = useMemo(() => (audits ?? []).map(buildActivityView), [audits]);
+  const userOptions = useMemo(
+    () => Array.from(new Set(activityRows.map((entry) => entry.userLabel))).sort(),
+    [activityRows]
+  );
+  const topicOptions = useMemo(
+    () => Array.from(new Set(activityRows.map((entry) => entry.topic))).sort(),
+    [activityRows]
+  );
+  const actionOptions = useMemo(
+    () => Array.from(new Set(activityRows.map((entry) => entry.action))).sort(),
+    [activityRows]
+  );
+
+  const filteredActivityRows = useMemo(
+    () =>
+      activityRows.filter((entry) => {
+        if (selectedUser !== "all" && entry.userLabel !== selectedUser) return false;
+        if (selectedTopic !== "all" && entry.topic !== selectedTopic) return false;
+        if (selectedAction !== "all" && entry.action !== selectedAction) return false;
+        return true;
+      }),
+    [activityRows, selectedAction, selectedTopic, selectedUser]
+  );
+
+  const totalPages = Math.max(1, Math.ceil(filteredActivityRows.length / ACTIVITY_PAGE_SIZE));
   const pagedAudits = useMemo(() => {
     const start = (page - 1) * ACTIVITY_PAGE_SIZE;
-    return (audits ?? []).slice(start, start + ACTIVITY_PAGE_SIZE);
-  }, [audits, page]);
+    return filteredActivityRows.slice(start, start + ACTIVITY_PAGE_SIZE);
+  }, [filteredActivityRows, page]);
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex justify-end">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => {
-            setPage(1);
-            void queryClient.invalidateQueries({ queryKey: queryKeys.admin.audits() });
-          }}
-        >
-          <RefreshCw size={14} />
-          Refresh activity log
-        </Button>
+      <div className="flex flex-wrap items-end justify-between gap-3 rounded-3xl border border-ink/10 bg-white p-4">
+        <div className="flex flex-wrap gap-3">
+          <div className="min-w-[11rem]">
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.15em] text-slate">User</label>
+            <select
+              value={selectedUser}
+              onChange={(e) => {
+                setSelectedUser(e.target.value);
+                setPage(1);
+              }}
+              className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-xs text-ink focus:outline-none focus:ring-2 focus:ring-neon"
+            >
+              <option value="all">All users</option>
+              {userOptions.map((user) => <option key={user} value={user}>{user}</option>)}
+            </select>
+          </div>
+          <div className="min-w-[11rem]">
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.15em] text-slate">Topic</label>
+            <select
+              value={selectedTopic}
+              onChange={(e) => {
+                setSelectedTopic(e.target.value);
+                setPage(1);
+              }}
+              className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-xs text-ink focus:outline-none focus:ring-2 focus:ring-neon"
+            >
+              <option value="all">All topics</option>
+              {topicOptions.map((topic) => <option key={topic} value={topic}>{topic}</option>)}
+            </select>
+          </div>
+          <div className="min-w-[11rem]">
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.15em] text-slate">Action</label>
+            <select
+              value={selectedAction}
+              onChange={(e) => {
+                setSelectedAction(e.target.value);
+                setPage(1);
+              }}
+              className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-xs text-ink focus:outline-none focus:ring-2 focus:ring-neon"
+            >
+              <option value="all">All actions</option>
+              {actionOptions.map((action) => <option key={action} value={action}>{action}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm text-slate">{filteredActivityRows.length} item(s)</p>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              setPage(1);
+              void queryClient.invalidateQueries({ queryKey: queryKeys.admin.audits() });
+            }}
+          >
+            <RefreshCw size={14} />
+            Refresh activity log
+          </Button>
+        </div>
       </div>
 
       {isLoading && <PageSpinner />}
@@ -455,30 +637,40 @@ function AuditsTab() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-ink/10 bg-ash text-left">
-                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Event</th>
-                <th className="hidden px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate sm:table-cell">Actor</th>
-                <th className="hidden px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate md:table-cell">Entity</th>
-                <th className="hidden px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate lg:table-cell">Details</th>
-                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Time</th>
+                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Date</th>
+                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">User</th>
+                <th className="hidden px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate md:table-cell">IP</th>
+                <th className="hidden px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate lg:table-cell">Topic</th>
+                <th className="hidden px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate xl:table-cell">Context</th>
+                <th className="hidden px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate xl:table-cell">Meta</th>
+                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-ink/5">
-              {(!audits || audits.length === 0) ? (
+              {filteredActivityRows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-5 py-8 text-center text-sm text-slate">No activity entries.</td>
+                  <td colSpan={7} className="px-5 py-8 text-center text-sm text-slate">No activity entries.</td>
                 </tr>
               ) : (
                 pagedAudits.map((entry) => (
                   <tr key={entry.id} className="hover:bg-ash/50">
                     <td className="px-5 py-3">
-                      <p className="text-sm font-semibold text-ink">{formatActivityEvent(entry.eventType)}</p>
+                      <p className="text-sm font-semibold text-ink">{entry.dateLabel}</p>
+                      <p className="text-xs text-slate">{entry.dateValue}</p>
                     </td>
-                    <td className="hidden px-5 py-3 text-slate sm:table-cell">{entry.actor}</td>
-                    <td className="hidden px-5 py-3 text-slate md:table-cell">
-                      {formatActivityEntity(entry.entityType, entry.entityId)}
+                    <td className="px-5 py-3">
+                      <p className="text-sm text-neon">{entry.userLabel}</p>
+                      <p className="text-xs text-slate">{entry.roleLabel}</p>
                     </td>
-                    <td className="hidden px-5 py-3 text-xs text-slate lg:table-cell">{formatActivityDetails(entry.details)}</td>
-                    <td className="px-5 py-3 text-xs text-slate">{formatTimeAgo(entry.createdAt)}</td>
+                    <td className="hidden px-5 py-3 text-slate md:table-cell">{entry.ip}</td>
+                    <td className="hidden px-5 py-3 text-slate lg:table-cell">{entry.topic}</td>
+                    <td className="hidden px-5 py-3 text-slate xl:table-cell">{entry.context}</td>
+                    <td className="hidden px-5 py-3 text-xs text-slate xl:table-cell">
+                      <div className="max-w-md whitespace-normal break-words">{entry.meta}</div>
+                    </td>
+                    <td className="px-5 py-3">
+                      <p className="text-sm text-neon">{entry.action}</p>
+                    </td>
                   </tr>
                 ))
               )}
@@ -592,11 +784,88 @@ function NotificationsTab() {
 
 export default function Operations() {
   const [tab, setTab] = useState<Tab>("overview");
+  const queryClient = useQueryClient();
+
+  const { mutate: exportOperationsCsv, isPending: exportingCsv } = useMutation({
+    mutationFn: async () => {
+      const [operations, users, audits, notifications] = await Promise.all([
+        queryClient.fetchQuery<OperationsPayload>({
+          queryKey: queryKeys.admin.operations(),
+          queryFn: getOperations,
+        }),
+        queryClient.fetchQuery<AdminUser[]>({
+          queryKey: queryKeys.admin.users(),
+          queryFn: getAdminUsers,
+        }),
+        queryClient.fetchQuery<AuditEntry[]>({
+          queryKey: queryKeys.admin.audits(),
+          queryFn: () => getAudits(),
+        }),
+        queryClient.fetchQuery<NotificationEntry[]>({
+          queryKey: queryKeys.admin.notifications(),
+          queryFn: getNotifications,
+        }),
+      ]);
+
+      const activityRows = audits.map(buildActivityView);
+      const rows: Array<Array<unknown>> = [
+        ["Section", "Field 1", "Field 2", "Field 3", "Field 4", "Field 5", "Field 6", "Field 7"],
+        ["Overview", "Metric", "Value", "", "", "", "", ""],
+        ...Object.entries(operations.summary).map(([key, value]) => ["Overview", humanizeKey(key), value, "", "", "", "", ""]),
+        ["", "", "", "", "", "", "", ""],
+        ["Users", "Name", "Email", "Status", "Roles", "Created", "Last Login", ""],
+        ...users.map((user) => [
+          "Users",
+          user.displayName,
+          user.email,
+          user.status,
+          user.roles.join(", "),
+          user.createdAt,
+          user.lastLoginAt || "Never",
+          "",
+        ]),
+        ["", "", "", "", "", "", "", ""],
+        ["Activity Log", "Date", "User", "IP", "Topic", "Context", "Meta", "Action"],
+        ...activityRows.map((row) => [
+          "Activity Log",
+          row.dateValue,
+          row.userLabel,
+          row.ip,
+          row.topic,
+          row.context,
+          row.meta,
+          row.action,
+        ]),
+        ["", "", "", "", "", "", "", ""],
+        ["Notifications", "Recipient", "Subject", "Status", "Created", "Processed", "Attempts", "Error"],
+        ...notifications.map((notification) => [
+          "Notifications",
+          notification.recipient,
+          notification.subject,
+          notification.status,
+          notification.createdAt,
+          notification.processedAt || "—",
+          notification.attemptCount ?? 0,
+          notification.errorMessage || "—",
+        ]),
+      ];
+
+      downloadCsv(`operations-export-${new Date().toISOString().slice(0, 10)}.csv`, buildCsv(rows));
+    },
+    onSuccess: () => toast.success("Operations CSV exported."),
+    onError: () => toast.error("Could not export operations CSV."),
+  });
 
   return (
     <PageShell>
       <div className="flex flex-col gap-6">
-        <SectionHeader title="Operations" description="System overview, user management, activity log, and notification queue." />
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <SectionHeader title="Operations" description="System overview, user management, activity log, and notification queue." />
+          <Button variant="secondary" isLoading={exportingCsv} onClick={() => exportOperationsCsv()}>
+            <Download size={16} />
+            Export operations CSV
+          </Button>
+        </div>
 
         {/* Tab bar */}
         <div className="flex gap-1 overflow-x-auto">

@@ -1,10 +1,9 @@
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, Pencil, RotateCcw, Archive } from "lucide-react";
+import { Plus, Star } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
-import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { PageSpinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
@@ -12,6 +11,8 @@ import { getItems, archiveItem, restoreItem } from "@/api/items";
 import { queryKeys } from "@/lib/query-keys";
 import { formatDate, formatMoney } from "@/lib/formatters";
 import { getAuctionStatus } from "@/lib/auction-utils";
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export default function AdminItems() {
   const queryClient = useQueryClient();
@@ -70,74 +71,116 @@ export default function AdminItems() {
             {!items || items.length === 0 ? (
               <div className="px-6 py-10 text-sm text-slate">No auction items found yet.</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[920px] text-sm">
+              <div className="w-full">
+                <table className="w-full table-fixed text-sm">
                   <thead>
                     <tr className="border-b border-ink/10 bg-ash text-left">
-                      <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Item</th>
-                      <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Status</th>
-                      <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Current bid</th>
-                      <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">End date</th>
-                      <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Archive</th>
-                      <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate text-right">Actions</th>
+                      <th className="w-10 px-3 py-3">
+                        <input type="checkbox" aria-label="Select all items" className="h-4 w-4 rounded border-ink/20 accent-neon" />
+                      </th>
+                      <th className="w-[32%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Name</th>
+                      <th className="w-[10%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">SKU</th>
+                      <th className="w-[8%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Stock</th>
+                      <th className="w-[15%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Price</th>
+                      <th className="w-[12%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Categories</th>
+                      <th className="hidden xl:table-cell w-[12%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Tags</th>
+                      <th className="hidden 2xl:table-cell w-[4%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate text-center">
+                        <Star size={14} className="mx-auto text-slate" />
+                      </th>
+                      <th className="w-[11%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Date</th>
+                      <th className="w-[10%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Author</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-ink/5">
                     {items.map((item) => {
                       const status = getAuctionStatus(item);
                       const isArchived = Boolean(item.archivedAt);
+                      const imageUrl = item.images[0]?.url ? `${API_BASE}${item.images[0].url}` : "";
+                      const priceLabel =
+                        item.currentBid > 0
+                          ? `Winning bid: ${formatMoney(item.currentBid)}`
+                          : `Starting bid: ${formatMoney(item.startBid)}`;
+                      const publishLabel = isArchived ? "Archived" : status === "Upcoming" ? "Scheduled" : "Published";
+                      const stockLabel = isArchived ? "Archived" : "In stock";
+                      const tagLabel = [item.condition, item.location].filter(Boolean).join(" · ");
                       return (
                         <tr key={item.id} className="transition hover:bg-ash/40">
-                          <td className="px-5 py-4">
-                            <p className="font-semibold text-ink">{item.title}</p>
-                            <p className="mt-1 text-xs text-slate">
-                              {item.category} · Lot {item.lot} · {item.sku}
-                            </p>
+                          <td className="px-3 py-4 align-top">
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${item.title}`}
+                              className="h-4 w-4 rounded border-ink/20 accent-neon"
+                            />
                           </td>
-                          <td className="px-5 py-4">
-                            <Badge status={status} />
+                          <td className="px-3 py-4 align-top">
+                            <div className="flex gap-3">
+                              <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-ink/10 bg-ash">
+                                {imageUrl ? (
+                                  <img src={imageUrl} alt={item.title} className="h-full w-full object-cover" />
+                                ) : (
+                                  <div className="text-[10px] text-slate">No image</div>
+                                )}
+                              </div>
+                              <div className="min-w-0 overflow-hidden">
+                                <Link to={`/admin/items/${item.id}`} className="line-clamp-2 font-semibold text-neon hover:underline">
+                                  {item.title}
+                                </Link>
+                                <p className="mt-1 text-xs text-slate">Lot: {item.lot}</p>
+                                <div className="mt-1 flex flex-wrap gap-2 text-xs">
+                                  <Link to={`/admin/items/${item.id}`} className="text-neon hover:underline">Edit</Link>
+                                  <Link to={`/bidding/${item.id}`} className="text-neon hover:underline">Preview</Link>
+                                  {isArchived ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => restore(item.id)}
+                                      className="text-neon hover:underline"
+                                      disabled={restoring}
+                                    >
+                                      Restore
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => archive(item.id)}
+                                      className="text-red-600 hover:underline"
+                                      disabled={archiving}
+                                    >
+                                      Archive
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
                           </td>
-                          <td className="px-5 py-4 font-semibold text-ink">
-                            {item.currentBid > 0 ? formatMoney(item.currentBid) : "No bids"}
+                          <td className="px-3 py-4 align-top text-slate break-words">
+                            {item.sku || "—"}
                           </td>
-                          <td className="px-5 py-4 text-slate">{formatDate(item.endTime)}</td>
-                          <td className="px-5 py-4">
+                          <td className="px-3 py-4 align-top">
                             {isArchived ? (
-                              <Badge status="closed" label="Archived" />
+                              <span className="text-xs font-semibold text-red-600">Archived</span>
                             ) : (
-                              <Badge status="active" label="Active" />
+                              <span className="text-xs font-semibold text-emerald-600">{stockLabel}</span>
                             )}
                           </td>
-                          <td className="px-5 py-4">
-                            <div className="flex items-center justify-end gap-2">
-                              <Link to={`/admin/items/${item.id}`}>
-                                <Button variant="ghost" size="sm">
-                                  <Pencil size={14} />
-                                  Edit
-                                </Button>
-                              </Link>
-                              {isArchived ? (
-                                <Button
-                                  variant="secondary"
-                                  size="sm"
-                                  isLoading={restoring}
-                                  onClick={() => restore(item.id)}
-                                >
-                                  <RotateCcw size={14} />
-                                  Restore
-                                </Button>
-                              ) : (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  isLoading={archiving}
-                                  onClick={() => archive(item.id)}
-                                >
-                                  <Archive size={14} />
-                                  Archive
-                                </Button>
-                              )}
-                            </div>
+                          <td className="px-3 py-4 align-top text-slate">
+                            <div>{priceLabel}</div>
+                            {item.reserve != null && item.reserve > 0 && (
+                              <div className="mt-1 text-xs">Reserve: {formatMoney(item.reserve)}</div>
+                            )}
+                          </td>
+                          <td className="px-3 py-4 align-top text-neon break-words">{item.category}</td>
+                          <td className="hidden xl:table-cell px-3 py-4 align-top text-slate">
+                            <div className="line-clamp-2">{tagLabel || "—"}</div>
+                          </td>
+                          <td className="hidden 2xl:table-cell px-3 py-4 align-top text-center text-slate">
+                            <Star size={16} className="mx-auto" />
+                          </td>
+                          <td className="px-3 py-4 align-top text-slate">
+                            <div>{publishLabel}</div>
+                            <div className="mt-1 text-xs">{formatDate(item.endTime)}</div>
+                          </td>
+                          <td className="px-3 py-4 align-top text-neon">
+                            <div className="line-clamp-2">Oluwanifemi Oso</div>
                           </td>
                         </tr>
                       );
