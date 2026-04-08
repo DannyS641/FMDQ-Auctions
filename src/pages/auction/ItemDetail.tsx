@@ -19,6 +19,23 @@ export default function ItemDetail() {
   const { canViewReserve, isAdmin } = useAuth();
   const { data: item, isLoading, isError } = useAuctionItem(id ?? null);
   const [bidHistoryPage, setBidHistoryPage] = useState(1);
+  const images = Array.isArray(item?.images) ? item.images : [];
+  const documents = Array.isArray(item?.documents) ? item.documents : [];
+  const bids = Array.isArray(item?.bids) ? item.bids : [];
+  const mainImage = images[0];
+  const extraImages = images.slice(1);
+  const sortedBids = useMemo(
+    () =>
+      [...bids].sort(
+        (a, b) => new Date(b.time ?? b.createdAt ?? 0).getTime() - new Date(a.time ?? a.createdAt ?? 0).getTime()
+      ),
+    [bids]
+  );
+  const totalBidPages = Math.max(1, Math.ceil(sortedBids.length / BID_HISTORY_PAGE_SIZE));
+  const visibleBids = useMemo(() => {
+    const start = (bidHistoryPage - 1) * BID_HISTORY_PAGE_SIZE;
+    return sortedBids.slice(start, start + BID_HISTORY_PAGE_SIZE);
+  }, [bidHistoryPage, sortedBids]);
 
   if (isLoading) {
     return (
@@ -43,23 +60,6 @@ export default function ItemDetail() {
   }
 
   const status = getAuctionStatus(item);
-  const images = Array.isArray(item.images) ? item.images : [];
-  const documents = Array.isArray(item.documents) ? item.documents : [];
-  const bids = Array.isArray(item.bids) ? item.bids : [];
-  const mainImage = images[0];
-  const extraImages = images.slice(1);
-  const sortedBids = useMemo(
-    () =>
-      [...bids].sort(
-        (a, b) => new Date(b.time ?? b.createdAt ?? 0).getTime() - new Date(a.time ?? a.createdAt ?? 0).getTime()
-      ),
-    [bids]
-  );
-  const totalBidPages = Math.max(1, Math.ceil(sortedBids.length / BID_HISTORY_PAGE_SIZE));
-  const visibleBids = useMemo(() => {
-    const start = (bidHistoryPage - 1) * BID_HISTORY_PAGE_SIZE;
-    return sortedBids.slice(start, start + BID_HISTORY_PAGE_SIZE);
-  }, [bidHistoryPage, sortedBids]);
 
   return (
     <PageShell maxWidth="6xl">
