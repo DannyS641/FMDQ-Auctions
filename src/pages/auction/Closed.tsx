@@ -10,7 +10,7 @@ import { useAuth } from "@/context/auth-context";
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export default function Closed() {
-  const { canViewReserve } = useAuth();
+  useAuth();
   const { data: items, isLoading, isError } = useAuctionItems();
 
   const closed = useMemo(

@@ -19,7 +19,7 @@ import {
   enableUser,
 } from "@/api/admin";
 import { queryKeys } from "@/lib/query-keys";
-import { formatDate, formatTimeAgo } from "@/lib/formatters";
+import { formatTimeAgo } from "@/lib/formatters";
 import { cn } from "@/lib/cn";
 import type { AdminUser } from "@/types";
 
