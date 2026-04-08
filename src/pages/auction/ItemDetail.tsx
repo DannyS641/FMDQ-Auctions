@@ -67,7 +67,7 @@ export default function ItemDetail() {
         </Link>
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
+      <div className="grid gap-8 lg:grid-cols-2 lg:items-start">
         {/* Left — item info, gallery, documents */}
         <section className="space-y-6">
           <div>
@@ -80,7 +80,7 @@ export default function ItemDetail() {
           <div className="space-y-4">
             {mainImage ? (
               <>
-                <div className="mx-auto flex min-h-[20rem] w-full max-w-2xl items-center justify-center overflow-hidden rounded-[2rem] border border-ink/10 bg-white p-3 shadow-[0_20px_50px_rgba(15,23,42,0.08)] lg:min-h-[24rem]">
+                <div className="flex aspect-[4/3] w-full max-w-[42rem] items-center justify-center overflow-hidden rounded-[2rem] border border-ink/10 bg-white p-3 shadow-[0_20px_50px_rgba(15,23,42,0.08)]">
                   <img
                     src={`${API_BASE}${mainImage.url}`}
                     alt={mainImage.name}
@@ -98,7 +98,7 @@ export default function ItemDetail() {
                 )}
               </>
             ) : (
-              <div className="mx-auto h-[20rem] w-full max-w-2xl rounded-[2rem] border border-ink/10 bg-ink/5 lg:h-[24rem]" />
+              <div className="aspect-[4/3] w-full max-w-[42rem] rounded-[2rem] border border-ink/10 bg-ink/5" />
             )}
           </div>
 

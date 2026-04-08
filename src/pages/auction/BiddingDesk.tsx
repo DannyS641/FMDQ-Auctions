@@ -54,6 +54,14 @@ export default function BiddingDesk() {
     setActiveTab("all");
   };
 
+  if (isLoading) {
+    return (
+      <PageShell>
+        <PageSpinner />
+      </PageShell>
+    );
+  }
+
   return (
     <PageShell>
       <div className="grid gap-8 lg:grid-cols-[280px_1fr]">
@@ -144,18 +152,17 @@ export default function BiddingDesk() {
           </div>
 
           {/* Grid */}
-          {isLoading && <div className="mt-10"><PageSpinner /></div>}
           {isError && (
             <div className="mt-10 rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">
               Unable to load auction items right now. Please refresh the page.
             </div>
           )}
-          {!isLoading && !isError && filtered.length === 0 && (
+          {!isError && filtered.length === 0 && (
             <div className="mt-10 rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">
               No items match the current filters.
             </div>
           )}
-          {!isLoading && !isError && filtered.length > 0 && (
+          {!isError && filtered.length > 0 && (
             <div className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
               {filtered.map((item) => (
                 <AuctionCard key={item.id} item={item} onMouseEnter={() => prefetch(item.id)} />

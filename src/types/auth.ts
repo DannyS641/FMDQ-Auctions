@@ -1,4 +1,4 @@
-export type Role = "Guest" | "Bidder" | "Observer" | "Admin" | "SuperAdmin";
+export type Role = "Guest" | "Bidder" | "ShopOwner" | "Admin" | "SuperAdmin";
 
 export type AuthSession = {
   signedIn: boolean;

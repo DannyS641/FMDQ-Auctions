@@ -281,7 +281,7 @@ type StoredUser = {
   createdAt: string;
   lastLoginAt: string | null;
 };
-type Role = "Guest" | "Bidder" | "Observer" | "Admin" | "SuperAdmin";
+type Role = "Guest" | "Bidder" | "ShopOwner" | "Admin" | "SuperAdmin";
 type AuthContext = {
   userId?: string;
   sessionId?: string;
@@ -463,10 +463,12 @@ const parseCookies = (req: express.Request) =>
 const normalizeRole = (roles: string[]): Role => {
   if (roles.includes("SuperAdmin")) return "SuperAdmin";
   if (roles.includes("Admin")) return "Admin";
-  if (roles.includes("Observer")) return "Observer";
+  if (roles.includes("ShopOwner") || roles.includes("Observer")) return "ShopOwner";
   if (roles.includes("Bidder")) return "Bidder";
   return "Guest";
 };
+
+const normalizeDisplayRoleName = (role: string) => role === "Observer" ? "ShopOwner" : role;
 
 const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "-");
 const guessContentType = (name: string, fallback = "application/octet-stream") => {
@@ -973,7 +975,7 @@ const listUsersWithRoles = async () => {
     status: user.status,
     createdAt: user.created_at,
     lastLoginAt: user.last_login_at,
-    roles: roles.filter((role) => role.user_id === user.id).map((role) => role.role_name)
+    roles: roles.filter((role) => role.user_id === user.id).map((role) => normalizeDisplayRoleName(role.role_name))
   }));
 };
 
@@ -2309,7 +2311,7 @@ const requireSuperAdminToken = asyncHandler(async (req, res, next) => {
 });
 
 const seedRoles = async () => {
-  for (const role of ["SuperAdmin", "Admin", "Bidder", "Observer"]) {
+  for (const role of ["SuperAdmin", "Admin", "Bidder", "ShopOwner"]) {
     await handleSupabase(await supabase.from("roles").upsert({ name: role }, { onConflict: "name" }));
   }
 };
@@ -2676,7 +2678,7 @@ app.get("/api/me/profile", asyncHandler(async (req, res) => {
     createdAt: user.created_at,
     lastLoginAt: user.last_login_at,
     role: auth.role,
-    roles: roles.map((row) => row.role_name)
+    roles: roles.map((row) => normalizeDisplayRoleName(row.role_name))
   });
 }));
 

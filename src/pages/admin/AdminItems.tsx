@@ -1,21 +1,28 @@
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, Star } from "lucide-react";
+import { Plus, Star, Upload } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { PageSpinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
-import { getItems, archiveItem, restoreItem } from "@/api/items";
+import { getItems, archiveItem, restoreItem, bulkImportItems } from "@/api/items";
 import { queryKeys } from "@/lib/query-keys";
 import { formatDate, formatMoney } from "@/lib/formatters";
 import { getAuctionStatus } from "@/lib/auction-utils";
+import type { BulkImportReport } from "@/types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export default function AdminItems() {
   const queryClient = useQueryClient();
+  const csvInputRef = useRef<HTMLInputElement>(null);
+  const zipInputRef = useRef<HTMLInputElement>(null);
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [zipFile, setZipFile] = useState<File | null>(null);
+  const [importReport, setImportReport] = useState<BulkImportReport | null>(null);
   const { data: items, isLoading, isError } = useQuery({
     queryKey: queryKeys.items.list(true),
     queryFn: () => getItems(true),
@@ -44,6 +51,36 @@ export default function AdminItems() {
     onError: () => toast.error("Could not restore item."),
   });
 
+  const { mutate: importItems, isPending: importing } = useMutation({
+    mutationFn: async () => {
+      if (!csvFile) throw new Error("Upload a CSV file first.");
+      const formData = new FormData();
+      formData.append("csv", csvFile);
+      if (zipFile) formData.append("bundle", zipFile);
+      return bulkImportItems(formData);
+    },
+    onSuccess: (report) => {
+      setImportReport(report);
+      toast.success(`Imported ${report.created} item(s).`);
+      setCsvFile(null);
+      setZipFile(null);
+      if (csvInputRef.current) csvInputRef.current.value = "";
+      if (zipInputRef.current) zipInputRef.current.value = "";
+      refreshItems();
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Bulk import failed.");
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <PageShell>
+        <PageSpinner label="Loading items" />
+      </PageShell>
+    );
+  }
+
   return (
     <PageShell>
       <div className="flex flex-col gap-6">
@@ -63,10 +100,70 @@ export default function AdminItems() {
           </Link>
         </div>
 
-        {isLoading && <PageSpinner />}
+        <Card>
+          <div className="flex flex-col gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-slate">Bulk upload</p>
+              <h2 className="mt-2 text-xl font-semibold text-ink">Import multiple items</h2>
+              <p className="mt-2 text-sm text-slate">
+                Upload a CSV for item rows and an optional ZIP bundle for images/documents referenced by the CSV.
+              </p>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.15em] text-slate">
+                  Items CSV
+                </label>
+                <input
+                  ref={csvInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
+                  className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-sm text-ink"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.15em] text-slate">
+                  Assets ZIP (optional)
+                </label>
+                <input
+                  ref={zipInputRef}
+                  type="file"
+                  accept=".zip,application/zip"
+                  onChange={(e) => setZipFile(e.target.files?.[0] || null)}
+                  className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-sm text-ink"
+                />
+              </div>
+              <Button variant="secondary" isLoading={importing} disabled={!csvFile} onClick={() => importItems()}>
+                <Upload size={16} />
+                Import items
+              </Button>
+            </div>
+
+            {importReport && (
+              <div className="rounded-2xl border border-ink/10 bg-ash/40 p-4">
+                <p className="text-sm font-semibold text-ink">
+                  Import result: {importReport.created} created, {importReport.skipped} skipped, {importReport.failed} failed
+                </p>
+                <div className="mt-3 space-y-2 text-xs text-slate">
+                  {importReport.items.slice(0, 8).map((entry, index) => (
+                    <div key={`${entry.row}-${index}`} className="rounded-xl bg-white px-3 py-2">
+                      Row {entry.row}: {entry.title || "Untitled"} — {entry.message}
+                    </div>
+                  ))}
+                  {importReport.items.length > 8 && (
+                    <p>Showing first 8 rows of {importReport.items.length}.</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+
         {isError && <ErrorMessage title="Could not load items" />}
 
-        {!isLoading && !isError && (
+        {!isError && (
           <Card className="overflow-hidden">
             {!items || items.length === 0 ? (
               <div className="px-6 py-10 text-sm text-slate">No auction items found yet.</div>
@@ -80,7 +177,7 @@ export default function AdminItems() {
                       </th>
                       <th className="w-[32%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Name</th>
                       <th className="w-[10%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">SKU</th>
-                      <th className="w-[8%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Stock</th>
+                      <th className="w-[8%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Availability</th>
                       <th className="w-[15%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Price</th>
                       <th className="w-[12%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Categories</th>
                       <th className="hidden xl:table-cell w-[12%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Tags</th>
@@ -101,7 +198,7 @@ export default function AdminItems() {
                           ? `Winning bid: ${formatMoney(item.currentBid)}`
                           : `Starting bid: ${formatMoney(item.startBid)}`;
                       const publishLabel = isArchived ? "Archived" : status === "Upcoming" ? "Scheduled" : "Published";
-                      const stockLabel = isArchived ? "Archived" : "In stock";
+                      const stockLabel = isArchived ? "Archived" : "Listed";
                       const tagLabel = [item.condition, item.location].filter(Boolean).join(" · ");
                       return (
                         <tr key={item.id} className="transition hover:bg-ash/40">
