@@ -23,7 +23,7 @@ import {
 import { queryKeys } from "@/lib/query-keys";
 import { formatDate, formatTimeAgo } from "@/lib/formatters";
 import { cn } from "@/lib/cn";
-import type { AdminUser, AuditEntry, NotificationEntry, OperationsPayload } from "@/types";
+import type { AdminUser, AuditEntry } from "@/types";
 
 type Tab = "overview" | "users" | "audits" | "notifications";
 const ACTIVITY_PAGE_SIZE = 10;
@@ -405,6 +405,25 @@ function UsersTab() {
     onError: () => toast.error("Could not queue password resets for all users."),
   });
 
+  const { mutate: exportUsersCsv, isPending: exportingUsers } = useMutation({
+    mutationFn: async () => {
+      const rows: Array<Array<unknown>> = [
+        ["Name", "Email", "Status", "Roles", "Created", "Last Login"],
+        ...filtered.map((user) => [
+          user.displayName,
+          user.email,
+          user.status,
+          user.roles.join(", "),
+          user.createdAt,
+          user.lastLoginAt || "Never",
+        ]),
+      ];
+      downloadCsv(`users-export-${new Date().toISOString().slice(0, 10)}.csv`, buildCsv(rows));
+    },
+    onSuccess: () => toast.success("Users CSV exported."),
+    onError: () => toast.error("Could not export users CSV."),
+  });
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-4 rounded-3xl border border-ink/10 bg-white p-4">
@@ -438,7 +457,13 @@ function UsersTab() {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button variant="secondary" size="sm" isLoading={exportingUsers} onClick={() => exportUsersCsv()}>
+            <Download size={14} />
+            Export users
+          </Button>
+
+          <div className="flex flex-wrap gap-2">
           <Button
             variant="secondary"
             size="sm"
@@ -468,6 +493,7 @@ function UsersTab() {
             <KeyRound size={14} />
             Reset all active users
           </Button>
+          </div>
         </div>
       </div>
 
@@ -565,6 +591,27 @@ function AuditsTab() {
     return filteredActivityRows.slice(start, start + ACTIVITY_PAGE_SIZE);
   }, [filteredActivityRows, page]);
 
+  const { mutate: exportActivityCsv, isPending: exportingActivity } = useMutation({
+    mutationFn: async () => {
+      const rows: Array<Array<unknown>> = [
+        ["Date", "User", "Role", "IP", "Topic", "Context", "Meta", "Action"],
+        ...filteredActivityRows.map((entry) => [
+          entry.dateValue,
+          entry.userLabel,
+          entry.roleLabel,
+          entry.ip,
+          entry.topic,
+          entry.context,
+          entry.meta,
+          entry.action,
+        ]),
+      ];
+      downloadCsv(`activity-log-${new Date().toISOString().slice(0, 10)}.csv`, buildCsv(rows));
+    },
+    onSuccess: () => toast.success("Activity log CSV exported."),
+    onError: () => toast.error("Could not export activity log CSV."),
+  });
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3 rounded-3xl border border-ink/10 bg-white p-4">
@@ -615,6 +662,10 @@ function AuditsTab() {
 
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-sm text-slate">{filteredActivityRows.length} item(s)</p>
+          <Button variant="secondary" size="sm" isLoading={exportingActivity} onClick={() => exportActivityCsv()}>
+            <Download size={14} />
+            Export activity logs
+          </Button>
           <Button
             variant="secondary"
             size="sm"
@@ -730,9 +781,33 @@ function NotificationsTab() {
     onError: () => toast.error("Processing failed."),
   });
 
+  const { mutate: exportNotificationsCsv, isPending: exportingNotifications } = useMutation({
+    mutationFn: async () => {
+      const rows: Array<Array<unknown>> = [
+        ["Recipient", "Subject", "Status", "Created", "Processed", "Attempts", "Error"],
+        ...((notifications ?? []).map((notification) => [
+          notification.recipient,
+          notification.subject,
+          notification.status,
+          notification.createdAt,
+          notification.processedAt || "—",
+          notification.attemptCount ?? 0,
+          notification.errorMessage || "—",
+        ])),
+      ];
+      downloadCsv(`notifications-${new Date().toISOString().slice(0, 10)}.csv`, buildCsv(rows));
+    },
+    onSuccess: () => toast.success("Notifications CSV exported."),
+    onError: () => toast.error("Could not export notifications CSV."),
+  });
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" size="sm" isLoading={exportingNotifications} onClick={() => exportNotificationsCsv()}>
+          <Download size={14} />
+          Export notifications
+        </Button>
         <Button variant="secondary" size="sm" isLoading={processing} onClick={() => process()}>
           <RefreshCw size={14} />
           Process queue
@@ -784,88 +859,11 @@ function NotificationsTab() {
 
 export default function Operations() {
   const [tab, setTab] = useState<Tab>("overview");
-  const queryClient = useQueryClient();
-
-  const { mutate: exportOperationsCsv, isPending: exportingCsv } = useMutation({
-    mutationFn: async () => {
-      const [operations, users, audits, notifications] = await Promise.all([
-        queryClient.fetchQuery<OperationsPayload>({
-          queryKey: queryKeys.admin.operations(),
-          queryFn: getOperations,
-        }),
-        queryClient.fetchQuery<AdminUser[]>({
-          queryKey: queryKeys.admin.users(),
-          queryFn: getAdminUsers,
-        }),
-        queryClient.fetchQuery<AuditEntry[]>({
-          queryKey: queryKeys.admin.audits(),
-          queryFn: () => getAudits(),
-        }),
-        queryClient.fetchQuery<NotificationEntry[]>({
-          queryKey: queryKeys.admin.notifications(),
-          queryFn: getNotifications,
-        }),
-      ]);
-
-      const activityRows = audits.map(buildActivityView);
-      const rows: Array<Array<unknown>> = [
-        ["Section", "Field 1", "Field 2", "Field 3", "Field 4", "Field 5", "Field 6", "Field 7"],
-        ["Overview", "Metric", "Value", "", "", "", "", ""],
-        ...Object.entries(operations.summary).map(([key, value]) => ["Overview", humanizeKey(key), value, "", "", "", "", ""]),
-        ["", "", "", "", "", "", "", ""],
-        ["Users", "Name", "Email", "Status", "Roles", "Created", "Last Login", ""],
-        ...users.map((user) => [
-          "Users",
-          user.displayName,
-          user.email,
-          user.status,
-          user.roles.join(", "),
-          user.createdAt,
-          user.lastLoginAt || "Never",
-          "",
-        ]),
-        ["", "", "", "", "", "", "", ""],
-        ["Activity Log", "Date", "User", "IP", "Topic", "Context", "Meta", "Action"],
-        ...activityRows.map((row) => [
-          "Activity Log",
-          row.dateValue,
-          row.userLabel,
-          row.ip,
-          row.topic,
-          row.context,
-          row.meta,
-          row.action,
-        ]),
-        ["", "", "", "", "", "", "", ""],
-        ["Notifications", "Recipient", "Subject", "Status", "Created", "Processed", "Attempts", "Error"],
-        ...notifications.map((notification) => [
-          "Notifications",
-          notification.recipient,
-          notification.subject,
-          notification.status,
-          notification.createdAt,
-          notification.processedAt || "—",
-          notification.attemptCount ?? 0,
-          notification.errorMessage || "—",
-        ]),
-      ];
-
-      downloadCsv(`operations-export-${new Date().toISOString().slice(0, 10)}.csv`, buildCsv(rows));
-    },
-    onSuccess: () => toast.success("Operations CSV exported."),
-    onError: () => toast.error("Could not export operations CSV."),
-  });
 
   return (
     <PageShell>
       <div className="flex flex-col gap-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <SectionHeader title="Operations" description="System overview, user management, activity log, and notification queue." />
-          <Button variant="secondary" isLoading={exportingCsv} onClick={() => exportOperationsCsv()}>
-            <Download size={16} />
-            Export operations CSV
-          </Button>
-        </div>
+        <SectionHeader title="Operations" description="System overview, user management, activity log, and notification queue." />
 
         {/* Tab bar */}
         <div className="flex gap-1 overflow-x-auto">
