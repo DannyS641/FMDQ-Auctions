@@ -122,7 +122,7 @@ export default function BiddingDesk() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <p className="text-xs uppercase tracking-[0.3em] text-slate">Auction lots</p>
-              <h1 className="mt-2 text-3xl font-semibold text-ink">Active listings</h1>
+              <h1 className="mt-2 text-[27px] font-semibold text-neon">Active listings</h1>
               <p className="mt-2 text-sm text-slate">{filtered.length} items found</p>
             </div>
             <div className="flex flex-wrap items-center gap-3">

@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
 import { Routes, Route, Outlet } from "react-router-dom";
 import { ProtectedRoute } from "@/components/routing/ProtectedRoute";
 import { AdminRoute } from "@/components/routing/AdminRoute";
@@ -6,30 +6,31 @@ import { AppHeader } from "@/components/layout/AppHeader";
 import { Footer } from "@/components/layout/Footer";
 import { PageSpinner } from "@/components/ui/Spinner";
 import { useInactivityTimeout } from "@/hooks/use-inactivity-timeout";
+import { lazyWithRetry } from "@/lib/lazy-with-retry";
 
 // Public pages
-const Landing = lazy(() => import("@/pages/Landing"));
-const SignIn = lazy(() => import("@/pages/auth/SignIn"));
-const SignUp = lazy(() => import("@/pages/auth/SignUp"));
-const Verify = lazy(() => import("@/pages/auth/Verify"));
-const ResetPassword = lazy(() => import("@/pages/auth/ResetPassword"));
-const BiddingDesk = lazy(() => import("@/pages/auction/BiddingDesk"));
-const ItemDetail = lazy(() => import("@/pages/auction/ItemDetail"));
-const Closed = lazy(() => import("@/pages/auction/Closed"));
+const Landing = lazyWithRetry(() => import("@/pages/Landing"), "Landing");
+const SignIn = lazyWithRetry(() => import("@/pages/auth/SignIn"), "SignIn");
+const SignUp = lazyWithRetry(() => import("@/pages/auth/SignUp"), "SignUp");
+const Verify = lazyWithRetry(() => import("@/pages/auth/Verify"), "Verify");
+const ResetPassword = lazyWithRetry(() => import("@/pages/auth/ResetPassword"), "ResetPassword");
+const BiddingDesk = lazyWithRetry(() => import("@/pages/auction/BiddingDesk"), "BiddingDesk");
+const ItemDetail = lazyWithRetry(() => import("@/pages/auction/ItemDetail"), "ItemDetail");
+const Closed = lazyWithRetry(() => import("@/pages/auction/Closed"), "Closed");
 
 // Authenticated pages
-const Dashboard = lazy(() => import("@/pages/user/Dashboard"));
-const MyBids = lazy(() => import("@/pages/user/MyBids"));
-const Won = lazy(() => import("@/pages/user/Won"));
-const Profile = lazy(() => import("@/pages/user/Profile"));
+const Dashboard = lazyWithRetry(() => import("@/pages/user/Dashboard"), "Dashboard");
+const MyBids = lazyWithRetry(() => import("@/pages/user/MyBids"), "MyBids");
+const Won = lazyWithRetry(() => import("@/pages/user/Won"), "Won");
+const Profile = lazyWithRetry(() => import("@/pages/user/Profile"), "Profile");
 
 // Admin pages
-const AdminItems = lazy(() => import("@/pages/admin/AdminItems"));
-const AdminItemForm = lazy(() => import("@/pages/admin/AdminItemForm"));
-const Operations = lazy(() => import("@/pages/admin/Operations"));
+const AdminItems = lazyWithRetry(() => import("@/pages/admin/AdminItems"), "AdminItems");
+const AdminItemForm = lazyWithRetry(() => import("@/pages/admin/AdminItemForm"), "AdminItemForm");
+const Operations = lazyWithRetry(() => import("@/pages/admin/Operations"), "Operations");
 
 // Fallback
-const NotFound = lazy(() => import("@/pages/NotFound"));
+const NotFound = lazyWithRetry(() => import("@/pages/NotFound"), "NotFound");
 
 // Page-level suspense fallback — only content area spins, never the shell
 function PageFallback() {

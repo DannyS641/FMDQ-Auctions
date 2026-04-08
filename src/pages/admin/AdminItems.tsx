@@ -87,7 +87,7 @@ export default function AdminItems() {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-slate">Admin</p>
-            <h1 className="mt-2 text-3xl font-semibold text-ink">Items</h1>
+            <h1 className="mt-2 text-[27px] font-semibold text-neon">Items</h1>
             <p className="mt-2 text-sm text-slate">
               Review all auction items, edit existing listings, and create new ones.
             </p>

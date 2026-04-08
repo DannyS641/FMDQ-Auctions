@@ -14,6 +14,8 @@
       body[data-app-loading="true"] {
         margin: 0;
         background: #e6e8eb;
+        color: #0f172a;
+        font-family: "Space Grotesk", system-ui, sans-serif;
       }
 
       body[data-app-loading="true"] [data-app-root] {
@@ -30,13 +32,36 @@
         min-height: 100vh;
         padding: 24px;
       }
+
+      .boot-splash-card {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .boot-splash-logo {
+        display: block;
+        width: min(420px, 72vw);
+        height: auto;
+        animation: bootBlink 1.6s ease-in-out infinite;
+      }
+
+      @keyframes bootBlink {
+        0%, 100% {
+          opacity: 0.35;
+          transform: scale(0.985);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
     </style>
   </head>
   <body data-app-loading="true">
     <div id="app-loader" data-app-loader>
       <div class="boot-splash-card">
         <img src="/slides/fmdq-logo.png" alt="FMDQ" class="boot-splash-logo" />
-        <p class="boot-splash-label">Loading auctions portal</p>
       </div>
     </div>
     <div id="root" class="min-h-screen bg-ash flex flex-col" data-app-root>

@@ -32,7 +32,7 @@ export default function ItemDetail() {
     return (
       <PageShell maxWidth="6xl">
         <div className="rounded-3xl border border-ink/10 bg-white p-5 sm:p-8">
-          <h1 className="text-xl font-semibold text-ink sm:text-2xl">Item not available</h1>
+          <h1 className="text-[17px] font-semibold text-neon sm:text-[21px]">Item not available</h1>
           <p className="mt-3 text-sm text-slate">Unable to load item details. The item may no longer exist.</p>
           <Link to="/bidding" className="mt-5 inline-flex rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200">
             Back to auction desk
@@ -43,14 +43,17 @@ export default function ItemDetail() {
   }
 
   const status = getAuctionStatus(item);
-  const mainImage = item.images[0];
-  const extraImages = item.images.slice(1);
+  const images = Array.isArray(item.images) ? item.images : [];
+  const documents = Array.isArray(item.documents) ? item.documents : [];
+  const bids = Array.isArray(item.bids) ? item.bids : [];
+  const mainImage = images[0];
+  const extraImages = images.slice(1);
   const sortedBids = useMemo(
     () =>
-      [...item.bids].sort(
+      [...bids].sort(
         (a, b) => new Date(b.time ?? b.createdAt ?? 0).getTime() - new Date(a.time ?? a.createdAt ?? 0).getTime()
       ),
-    [item.bids]
+    [bids]
   );
   const totalBidPages = Math.max(1, Math.ceil(sortedBids.length / BID_HISTORY_PAGE_SIZE));
   const visibleBids = useMemo(() => {
@@ -71,9 +74,9 @@ export default function ItemDetail() {
         {/* Left — item info, gallery, documents */}
         <section className="space-y-6">
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-slate">Lot {item.lot} · {item.category}</p>
-            <h1 className="mt-2 break-words text-2xl font-semibold text-ink sm:text-3xl">{item.title}</h1>
-            <p className="mt-3 text-sm text-slate">{item.description}</p>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate">Lot {item.lot || "—"} · {item.category || "Uncategorized"}</p>
+            <h1 className="mt-2 break-words text-[21px] font-semibold text-neon sm:text-[27px]">{item.title || "Untitled item"}</h1>
+            <p className="mt-3 text-sm text-slate">{item.description || "No description available for this item."}</p>
           </div>
 
           {/* Gallery */}
@@ -103,11 +106,11 @@ export default function ItemDetail() {
           </div>
 
           {/* Documents */}
-          {item.documents.length > 0 && (
+          {documents.length > 0 && (
             <div>
               <p className="text-xs uppercase tracking-[0.3em] text-slate">Documents</p>
               <div className="mt-4 space-y-3">
-                {item.documents
+                {documents
                   .filter((d) => !d.visibility || d.visibility === "bidder_visible")
                   .map((doc, i) => (
                     <a
@@ -189,7 +192,7 @@ export default function ItemDetail() {
           <div className="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
             <p className="text-xs uppercase tracking-[0.3em] text-slate">Bid history</p>
             <div className="mt-4 space-y-3">
-              {item.bids.length === 0 ? (
+              {bids.length === 0 ? (
                 <p className="text-sm text-slate">No bids recorded yet.</p>
               ) : (
                 visibleBids.map((bid, i) => (
