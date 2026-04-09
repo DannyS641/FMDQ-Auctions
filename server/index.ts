@@ -4,9 +4,11 @@ import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
+import AdmZip from "adm-zip";
 import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import nodemailer from "nodemailer";
+import sharp from "sharp";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import {
@@ -494,6 +496,8 @@ const normalizeEmail = (value: string) => value.trim().toLowerCase();
 const sanitizeDisplayName = (value: string) => value.trim().replace(/\s+/g, " ");
 const buildEmailVerificationUrl = (token: string) => `${appBaseUrl}/verify?token=${encodeURIComponent(token)}`;
 const buildPasswordResetUrl = (token: string) => `${appBaseUrl}/reset-password?token=${encodeURIComponent(token)}`;
+const buildSignInUrl = () => `${appBaseUrl}/signin`;
+const buildItemUrl = (itemId: string) => `${appBaseUrl}/bidding/${encodeURIComponent(itemId)}`;
 const isStrongPassword = (value: string) =>
   value.length >= 8 &&
   /[A-Z]/.test(value) &&
@@ -706,57 +710,22 @@ const uploadFileToManagedStorage = async (sourcePath: string, kind: "image" | "d
   };
 };
 
-const getImageDimensions = async (filePath: string) => {
-  const { stdout } = await execFileAsync("/usr/bin/sips", ["-g", "pixelWidth", "-g", "pixelHeight", filePath], {
-    timeout: 15_000,
-    maxBuffer: 1024 * 1024,
-  });
-  const widthMatch = stdout.match(/pixelWidth:\s*(\d+)/);
-  const heightMatch = stdout.match(/pixelHeight:\s*(\d+)/);
-  const width = Number(widthMatch?.[1] || 0);
-  const height = Number(heightMatch?.[1] || 0);
-  if (!width || !height) {
-    throw new Error("Could not read uploaded image dimensions.");
-  }
-  return { width, height };
-};
-
 const normalizeImageForUpload = async (sourcePath: string, originalName: string) => {
   const normalizedName = replaceFileExtension(originalName, ".jpg");
   const normalizedPath = path.join(tempUploadsDir, `${Date.now()}-${randomUUID()}-${normalizedName}`);
-  const { width, height } = await getImageDimensions(sourcePath);
-  const scale = Math.min(normalizedImageWidth / width, normalizedImageHeight / height, 1);
-  const targetWidth = Math.max(1, Math.round(width * scale));
-  const targetHeight = Math.max(1, Math.round(height * scale));
-
-  await execFileAsync(
-    "/usr/bin/sips",
-    [
-      "-s", "format", "jpeg",
-      "--resampleHeightWidth", String(targetHeight), String(targetWidth),
-      sourcePath,
-      "--out", normalizedPath,
-    ],
-    {
-      timeout: 30_000,
-      maxBuffer: 10 * 1024 * 1024,
-    }
-  );
-
-  if (targetWidth !== normalizedImageWidth || targetHeight !== normalizedImageHeight) {
-    await execFileAsync(
-      "/usr/bin/sips",
-      [
-        "--padToHeightWidth", String(normalizedImageHeight), String(normalizedImageWidth),
-        "--padColor", "FFFFFF",
-        normalizedPath,
-      ],
-      {
-        timeout: 30_000,
-        maxBuffer: 10 * 1024 * 1024,
-      }
-    );
+  const image = sharp(sourcePath, { failOn: "error" });
+  const metadata = await image.metadata();
+  if (!metadata.width || !metadata.height) {
+    throw new Error("Could not read uploaded image dimensions.");
   }
+  await image
+    .resize(normalizedImageWidth, normalizedImageHeight, {
+      fit: "contain",
+      withoutEnlargement: true,
+      background: { r: 255, g: 255, b: 255, alpha: 1 }
+    })
+    .jpeg({ quality: 88, mozjpeg: true })
+    .toFile(normalizedPath);
 
   return {
     path: normalizedPath,
@@ -1206,7 +1175,7 @@ const queueBidActivityNotifications = async (
         currentBid: amount,
         displayName: bidder.displayName,
         imageUrl,
-        itemUrl: `${appBaseUrl}/item.html?id=${encodeURIComponent(item.id)}`
+        itemUrl: buildItemUrl(item.id)
       },
       bidder.email
     );
@@ -1230,7 +1199,7 @@ const queueBidActivityNotifications = async (
       currentBid: amount,
       displayName: previousLeaderUser.display_name,
       imageUrl,
-      itemUrl: `${appBaseUrl}/item.html?id=${encodeURIComponent(item.id)}`
+      itemUrl: buildItemUrl(item.id)
     },
     previousLeaderUser.email
   );
@@ -1853,7 +1822,7 @@ const renderNotificationContent = async (entry: NotificationQueueItem) => {
 
   if (entry.eventType === "ACCOUNT_VERIFIED") {
     const displayName = escapeHtml(entry.payload.displayName || "there");
-    const signInUrl = `${appBaseUrl}/signin.html`;
+    const signInUrl = buildSignInUrl();
     return {
       text: `Hello ${displayName},\n\nYour FMDQ Auctions account has been verified. You can now sign in here:\n${signInUrl}`,
       html: `
@@ -1887,7 +1856,7 @@ const renderNotificationContent = async (entry: NotificationQueueItem) => {
     const title = escapeHtml(entry.payload.title || "this auction item");
     const currentBid = escapeHtml(entry.payload.currentBid || entry.payload.amount || "");
     const inlineImage = await loadEmailInlineImage(String(entry.payload.imageUrl || ""), title);
-    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding.html`);
+    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding`);
     return {
       text: `Hello ${displayName},\n\nYour bid of ${currentBid} was placed successfully for ${title}.\n\nView the item here:\n${itemUrl}`,
       html: `
@@ -1908,7 +1877,7 @@ const renderNotificationContent = async (entry: NotificationQueueItem) => {
     const previousBid = escapeHtml(entry.payload.previousBid || "");
     const currentBid = escapeHtml(entry.payload.currentBid || "");
     const inlineImage = await loadEmailInlineImage(String(entry.payload.imageUrl || ""), title);
-    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding.html`);
+    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding`);
     return {
       text: `Hello ${displayName},\n\nYou were outbid on ${title}.\nYour previous bid: ${previousBid}\nCurrent bid: ${currentBid}\n\nOpen the item to place a new bid:\n${itemUrl}`,
       html: `
@@ -2168,13 +2137,43 @@ const parseCsv = (content: string) => {
 const normalizeImportKey = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
 
 const inspectImportArchive = async (zipPath: string) => {
-  const { stdout } = await execFileAsync("/usr/bin/unzip", ["-Z1", zipPath], { maxBuffer: 10 * 1024 * 1024 });
-  const entries = stdout
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .filter((entry) => !entry.endsWith("/"));
+  const zip = new AdmZip(zipPath);
+  const entries = zip
+    .getEntries()
+    .filter((entry) => !entry.isDirectory)
+    .map((entry) => entry.entryName.trim())
+    .filter(Boolean);
   validateArchiveEntries(entries, maxImportArchiveEntries);
+};
+
+const extractImportArchive = (zipPath: string, targetDir: string) => {
+  const zip = new AdmZip(zipPath);
+  let totalBytes = 0;
+  let totalFiles = 0;
+  const map = new Map<string, string>();
+
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) continue;
+    const normalizedEntryName = entry.entryName.replace(/\\/g, "/").trim();
+    validateArchiveEntries([normalizedEntryName], maxImportArchiveEntries);
+    totalFiles += 1;
+    if (totalFiles > maxImportArchiveEntries) {
+      throw new Error(`The ZIP bundle contains too many extracted files. Maximum allowed is ${maxImportArchiveEntries}.`);
+    }
+
+    const data = entry.getData();
+    totalBytes += data.length;
+    if (totalBytes > maxImportExtractedBytes) {
+      throw new Error(`The extracted ZIP bundle exceeds the ${Math.round(maxImportExtractedBytes / (1024 * 1024))} MB safety limit.`);
+    }
+
+    const fileName = path.basename(normalizedEntryName);
+    const outputPath = path.join(targetDir, `${randomUUID()}-${fileName}`);
+    fs.writeFileSync(outputPath, data);
+    map.set(fileName.toLowerCase(), outputPath);
+  }
+
+  return map;
 };
 
 const getImportValue = (row: Record<string, string>, candidates: string[]) => {
@@ -2194,32 +2193,6 @@ const splitImportList = (value: string) =>
     .split(/[;,|]/g)
     .map((entry) => entry.trim())
     .filter(Boolean);
-
-const collectImportFiles = (rootDir: string) => {
-  const map = new Map<string, string>();
-  let totalBytes = 0;
-  let totalFiles = 0;
-  const walk = (currentDir: string) => {
-    for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
-      const fullPath = path.join(currentDir, entry.name);
-      if (entry.isDirectory()) {
-        walk(fullPath);
-      } else {
-        totalFiles += 1;
-        if (totalFiles > maxImportArchiveEntries) {
-          throw new Error(`The ZIP bundle contains too many extracted files. Maximum allowed is ${maxImportArchiveEntries}.`);
-        }
-        totalBytes += fs.statSync(fullPath).size;
-        if (totalBytes > maxImportExtractedBytes) {
-          throw new Error(`The extracted ZIP bundle exceeds the ${Math.round(maxImportExtractedBytes / (1024 * 1024))} MB safety limit.`);
-        }
-        map.set(entry.name.toLowerCase(), fullPath);
-      }
-    }
-  };
-  walk(rootDir);
-  return map;
-};
 
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const documentExtensions = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx"]);
@@ -2515,16 +2488,7 @@ const seedItemsIfEmpty = async () => {
 };
 
 app.get("/api/health", asyncHandler(async (req, res) => {
-  const items = handleSupabase(await supabase.from("items").select("id")) as Array<{ id: string }>;
-  const audits = handleSupabase(await supabase.from("audits").select("id")) as Array<{ id: string }>;
-  const queue = handleSupabase(await supabase.from("notification_queue").select("id")) as Array<{ id: string }>;
-  res.json({
-    status: "ok",
-    storage: "supabase-client",
-    items: items.length,
-    audits: audits.length,
-    notificationQueue: queue.length
-  });
+  res.json({ status: "ok" });
 }));
 
 app.get("/api/auth/me", asyncHandler(async (req, res) => {
@@ -2629,20 +2593,45 @@ app.post("/api/auth/register", express.json({ limit: "128kb" }), asyncHandler(as
 app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
   const email = normalizeEmail(String(req.body?.email || ""));
   const password = String(req.body?.password || "");
+  const auditActor = sanitizeDisplayName(email) || "unknown";
   if (!(await checkAuthRateLimit(req, getClientKey(req, `login:${email}`)))) {
     res.status(429).json({ error: "Too many sign-in attempts. Please wait and try again." });
     return;
   }
   const user = await getUserByEmail(email);
   if (!user || !verifyPassword(password, user.password_hash || "")) {
+    await appendAudit(req, {
+      eventType: "LOGIN_FAILED",
+      entityType: "auth",
+      entityId: email || "unknown",
+      actor: auditActor,
+      actorType: "user",
+      details: { email, reason: "invalid_credentials" }
+    });
     res.status(401).json({ error: "Invalid email or password." });
     return;
   }
   if (user.status === "pending_verification") {
+    await appendAudit(req, {
+      eventType: "LOGIN_BLOCKED",
+      entityType: "auth",
+      entityId: user.id,
+      actor: user.display_name,
+      actorType: "user",
+      details: { email: user.email, reason: "pending_verification" }
+    });
     res.status(403).json({ error: "Please verify your email before signing in." });
     return;
   }
   if (user.status !== "active") {
+    await appendAudit(req, {
+      eventType: "LOGIN_BLOCKED",
+      entityType: "auth",
+      entityId: user.id,
+      actor: user.display_name,
+      actorType: "user",
+      details: { email: user.email, reason: `status_${user.status}` }
+    });
     res.status(403).json({ error: "This account is not active." });
     return;
   }
@@ -2651,6 +2640,14 @@ app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async
   const sessionRecord = await createUserSession(res, user.id);
   const roles = await getUserRoles(user.id);
   const role = normalizeRole(roles.map((row) => row.role_name));
+  await appendAudit(req, {
+    eventType: "LOGIN_SUCCEEDED",
+    entityType: "auth",
+    entityId: user.id,
+    actor: user.display_name,
+    actorType: "user",
+    details: { email: user.email, role, sessionId: sessionRecord.sessionId }
+  });
   res.json({
     signedIn: true,
     user: {
@@ -2789,7 +2786,18 @@ app.post("/api/auth/reset-password", express.json({ limit: "64kb" }), asyncHandl
 }));
 
 app.post("/api/auth/logout", asyncHandler(async (req, res) => {
+  const auth = await getAuthContext(req);
   const sessionId = parseCookies(req)[sessionCookieName];
+  if (auth.signedIn && auth.userId) {
+    await appendAudit(req, {
+      eventType: "LOGOUT_SUCCEEDED",
+      entityType: "auth",
+      entityId: auth.userId,
+      actor: auth.actor,
+      actorType: auth.actorType,
+      details: { sessionId: sessionId || "unknown" }
+    });
+  }
   if (sessionId) {
     await deleteSessionRow(sessionId).catch(() => undefined);
   }
@@ -3591,8 +3599,7 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
     let extractedFiles = new Map<string, string>();
     if (zipFile) {
       await inspectImportArchive(zipFile.path);
-      await execFileAsync("/usr/bin/unzip", ["-oq", zipFile.path, "-d", tempExtractDir]);
-      extractedFiles = collectImportFiles(tempExtractDir);
+      extractedFiles = extractImportArchive(zipFile.path, tempExtractDir);
     }
 
     for (const [index, row] of csvRows.entries()) {

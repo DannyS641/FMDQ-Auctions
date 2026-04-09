@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { Button } from "@/components/ui/Button";
 import { PageSpinner } from "@/components/ui/Spinner";
@@ -19,11 +19,11 @@ export default function ItemDetail() {
   const { canViewReserve, isAdmin } = useAuth();
   const { data: item, isLoading, isError } = useAuctionItem(id ?? null);
   const [bidHistoryPage, setBidHistoryPage] = useState(1);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
   const images = Array.isArray(item?.images) ? item.images : [];
   const documents = Array.isArray(item?.documents) ? item.documents : [];
   const bids = Array.isArray(item?.bids) ? item.bids : [];
-  const mainImage = images[0];
-  const extraImages = images.slice(1);
+  const mainImage = images[activeImageIndex];
   const sortedBids = useMemo(
     () =>
       [...bids].sort(
@@ -36,6 +36,16 @@ export default function ItemDetail() {
     const start = (bidHistoryPage - 1) * BID_HISTORY_PAGE_SIZE;
     return sortedBids.slice(start, start + BID_HISTORY_PAGE_SIZE);
   }, [bidHistoryPage, sortedBids]);
+
+  useEffect(() => {
+    setActiveImageIndex(0);
+  }, [id]);
+
+  useEffect(() => {
+    if (activeImageIndex >= images.length) {
+      setActiveImageIndex(0);
+    }
+  }, [activeImageIndex, images.length]);
 
   if (isLoading) {
     return (
@@ -83,19 +93,62 @@ export default function ItemDetail() {
           <div className="space-y-4">
             {mainImage ? (
               <>
-                <div className="flex aspect-[4/3] w-full max-w-[42rem] items-center justify-center overflow-hidden rounded-[2rem] border border-ink/10 bg-white p-3 shadow-[0_20px_50px_rgba(15,23,42,0.08)]">
+                <div className="relative flex aspect-[4/3] w-full max-w-[42rem] items-center justify-center overflow-hidden rounded-[2rem] border border-ink/10 bg-white p-3 shadow-[0_20px_50px_rgba(15,23,42,0.08)]">
                   <img
                     src={`${API_BASE}${mainImage.url}`}
                     alt={mainImage.name}
                     className="h-full w-full object-contain"
                   />
-                </div>
-                {extraImages.length > 0 && (
-                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                    {extraImages.map((img, i) => (
-                      <div key={i} className="flex h-44 items-center justify-center overflow-hidden rounded-2xl border border-ink/10 bg-white p-2">
-                        <img src={`${API_BASE}${img.url}`} alt={img.name} className="h-full w-full object-contain" />
+                  {images.length > 1 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setActiveImageIndex((current) => (current === 0 ? images.length - 1 : current - 1))}
+                        className="absolute left-4 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/92 text-neon shadow-[0_10px_24px_rgba(15,23,42,0.14)] transition hover:bg-white"
+                        aria-label="Previous image"
+                      >
+                        <ChevronLeft size={18} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveImageIndex((current) => (current === images.length - 1 ? 0 : current + 1))}
+                        className="absolute right-4 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/92 text-neon shadow-[0_10px_24px_rgba(15,23,42,0.14)] transition hover:bg-white"
+                        aria-label="Next image"
+                      >
+                        <ChevronRight size={18} />
+                      </button>
+                      <div className="absolute bottom-5 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-white/85 px-3 py-2 backdrop-blur-sm">
+                        {images.map((img, index) => (
+                          <button
+                            key={`${img.url}-${index}`}
+                            type="button"
+                            onClick={() => setActiveImageIndex(index)}
+                            className={`h-2.5 w-2.5 rounded-full transition ${
+                              index === activeImageIndex ? "bg-neon" : "bg-ink/20 hover:bg-ink/35"
+                            }`}
+                            aria-label={`View image ${index + 1}`}
+                          />
+                        ))}
                       </div>
+                    </>
+                  )}
+                </div>
+                {images.length > 1 && (
+                  <div className="flex gap-3 overflow-x-auto pb-1">
+                    {images.map((img, index) => (
+                      <button
+                        key={`${img.url}-${index}`}
+                        type="button"
+                        onClick={() => setActiveImageIndex(index)}
+                        className={`flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-2xl border bg-white p-2 transition ${
+                          index === activeImageIndex
+                            ? "border-neon shadow-[0_10px_24px_rgba(29,50,108,0.12)]"
+                            : "border-ink/10 hover:border-neon/40"
+                        }`}
+                        aria-label={`Open image ${index + 1}`}
+                      >
+                        <img src={`${API_BASE}${img.url}`} alt={img.name} className="h-full w-full object-contain" />
+                      </button>
                     ))}
                   </div>
                 )}

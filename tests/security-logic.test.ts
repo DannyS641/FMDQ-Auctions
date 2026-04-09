@@ -80,7 +80,9 @@ test("document visibility policies enforce admin, bidder, and winner access corr
 
 test("super admin targets cannot be managed by plain admins", () => {
   assert.equal(ensureCanManageTargetRoles("Admin", ["SuperAdmin"]).ok, false);
+  assert.equal(ensureCanManageTargetRoles("Admin", ["Admin"]).ok, false);
   assert.deepEqual(ensureCanManageTargetRoles("SuperAdmin", ["SuperAdmin"]), { ok: true });
+  assert.deepEqual(ensureCanManageTargetRoles("SuperAdmin", ["Admin"]), { ok: true });
 });
 
 test("bid validation enforces timing, minimum, and increment rules", () => {

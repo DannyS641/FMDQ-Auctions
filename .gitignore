@@ -13,3 +13,5 @@ tools/ffmpeg/ffmpeg.zip
 *.tsbuildinfo
 server/uploads/
 server/data/notification-outbox/
+server/data/notification-dead-letter/
+server/data/quarantine/
