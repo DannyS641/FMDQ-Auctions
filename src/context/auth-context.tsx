@@ -59,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       role: session.role,
       isAdmin: session.role === "Admin" || session.role === "SuperAdmin",
       isSuperAdmin: session.role === "SuperAdmin",
-      canBid: session.role === "Bidder" || session.role === "Admin" || session.role === "SuperAdmin",
+      canBid: session.role === "Bidder" || session.role === "Admin",
       canViewReserve: session.role === "Admin" || session.role === "SuperAdmin",
       signOut,
       invalidateSession,

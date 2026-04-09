@@ -377,6 +377,13 @@ type NotificationRow = {
   claim_expires_at: string | null;
   error_message: string | null;
 };
+type PaginatedResult<T> = {
+  items: T[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
 
 const defaultCategories = ["Cars", "Furniture", "Household Appliances", "Kitchen Appliances", "Phones", "Other"];
 const smtpTransporter = notificationTransport === "smtp" && smtpHost && smtpUser && smtpPass
@@ -828,6 +835,12 @@ const toCsv = (rows: Array<Record<string, string | number | boolean>>) => {
   return [headers.join(","), ...rows.map((row) => headers.map((header) => csvEscape(row[header] ?? "")).join(","))].join("\n");
 };
 
+const parsePaginationValue = (value: unknown, fallback: number, max: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.floor(parsed), 1), max);
+};
+
 const handleSupabase = <T>(result: { data: T; error: { message: string } | null }) => {
   if (result.error) throw new Error(result.error.message);
   return result.data;
@@ -1032,18 +1045,59 @@ const getAuditActorRoleLookup = async () => {
   return roleLookup;
 };
 
-const mapAuditRowToEntry = (row: AuditRow, actorRoleLookup?: Map<string, string | null>) => ({
-  id: row.id,
-  eventType: row.event_type,
-  entityType: row.entity_type,
-  entityId: row.entity_id,
-  actor: row.actor,
-  actorType: row.actor_type,
-  actorRole: actorRoleLookup?.get(row.actor) ?? undefined,
-  requestId: row.request_id,
-  details: typeof row.details_json === "string" ? row.details_json : JSON.stringify(row.details_json || {}),
-  createdAt: row.created_at
-});
+const SENSITIVE_AUDIT_DETAIL_KEYS = new Set([
+  "sessionId",
+  "bidId",
+  "bidderUserId",
+  "auctionItemId",
+  "claimToken",
+  "resetToken",
+  "csrfToken",
+  "actorUserId"
+]);
+
+const redactSensitiveAuditDetails = (value: Record<string, unknown>) => {
+  return Object.entries(value).reduce<Record<string, unknown>>((acc, [key, entryValue]) => {
+    if (SENSITIVE_AUDIT_DETAIL_KEYS.has(key)) return acc;
+    acc[key] = entryValue;
+    return acc;
+  }, {});
+};
+
+const sanitizeNotificationPayloadForAdmin = (payload: Record<string, unknown>) => {
+  return Object.entries(payload).reduce<Record<string, unknown>>((acc, [key, value]) => {
+    if (/token/i.test(key)) return acc;
+    if (/reseturl/i.test(key)) return acc;
+    if (/verifyurl/i.test(key)) return acc;
+    if (/itemurl/i.test(key)) return acc;
+    if (key === "_meta" && typeof value === "object" && value !== null) {
+      const meta = value as Record<string, unknown>;
+      acc[key] = {
+        attempts: meta.attempts,
+        lastError: meta.lastError
+      };
+      return acc;
+    }
+    acc[key] = value;
+    return acc;
+  }, {});
+};
+
+const mapAuditRowToEntry = (row: AuditRow, actorRoleLookup?: Map<string, string | null>) => {
+  const parsedDetails = redactSensitiveAuditDetails(parseAuditDetails(row.details_json));
+  return {
+    id: row.id,
+    eventType: row.event_type,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    actor: row.actor,
+    actorType: row.actor_type,
+    actorRole: actorRoleLookup?.get(row.actor) ?? undefined,
+    requestId: row.request_id,
+    details: JSON.stringify(parsedDetails),
+    createdAt: row.created_at
+  };
+};
 
 const getUserRoles = async (userId: string) =>
   handleSupabase(
@@ -1265,11 +1319,11 @@ const serializeSession = async (req: express.Request): Promise<((StoredUser & { 
 
 const appendAudit = async (req: express.Request, entry: AuditEntry) => {
   const auth = await getAuthContext(req);
-  const details = {
+  const details = redactSensitiveAuditDetails({
     ...entry.details,
     actorRole: auth.role,
     ...(auth.userId ? { actorUserId: auth.userId } : {}),
-  };
+  });
 
   await handleSupabase(
     await supabase.from("audits").insert({
@@ -1578,29 +1632,31 @@ const resolveLegacyBidOwnerForNotification = async (
   return "";
 };
 
-const getBidAuditRowsForUser = async (userId: string) => {
-  return handleSupabase(
-    await supabase
-      .from("audits")
-      .select("entity_id,details_json,created_at")
-      .eq("event_type", "BID_PLACED")
-      .contains("details_json", { bidderUserId: userId })
-      .order("created_at", { ascending: false })
-  ) as BidAuditRow[];
-};
-
 const getUserBidRecords = async (userId: string) => {
-  const bidAudits = await getBidAuditRowsForUser(userId);
-  const uniqueItemIds = Array.from(new Set(bidAudits.map((row) => row.entity_id)));
+  const bidRows = handleSupabase(
+    await supabase
+      .from("bids")
+      .select("item_id,amount,created_at")
+      .eq("bidder_user_id", userId)
+      .order("created_at", { ascending: false })
+  ) as Array<{ item_id: string; amount: number | string; created_at: string }>;
+  const latestBidByItem = new Map<string, { amount: number; createdAt: string }>();
+  for (const row of bidRows) {
+    if (!latestBidByItem.has(row.item_id)) {
+      latestBidByItem.set(row.item_id, {
+        amount: Number(row.amount),
+        createdAt: row.created_at
+      });
+    }
+  }
+  const uniqueItemIds = Array.from(latestBidByItem.keys());
   const items = new Map((await getItems(true)).map((item) => [item.id, item]));
   return uniqueItemIds.flatMap((itemId) => {
     const item = items.get(itemId);
     if (!item) return [];
-    const auditsForItem = bidAudits.filter((row) => row.entity_id === itemId);
-    if (!auditsForItem.length) return [];
-    const latestAudit = auditsForItem[0];
-    const details = parseAuditDetails(latestAudit.details_json);
-    const latestAmount = Number(details.amount || 0);
+    const latestBid = latestBidByItem.get(itemId);
+    if (!latestBid) return [];
+    const latestAmount = latestBid.amount;
     const status = new Date(item.endTime).getTime() > Date.now()
       ? (item.currentBid === latestAmount ? "winning" : "outbid")
       : (item.currentBid === latestAmount ? "won" : "lost");
@@ -1612,7 +1668,7 @@ const getUserBidRecords = async (userId: string) => {
       currentBid: item.currentBid,
       yourLatestBid: latestAmount,
       endTime: item.endTime,
-      lastBidAt: latestAudit.created_at,
+      lastBidAt: latestBid.createdAt,
       status
     }];
   });
@@ -1650,6 +1706,15 @@ const mapNotificationRow = (row: NotificationRow): NotificationQueueItem => ({
   errorMessage: row.error_message
 });
 
+const mapNotificationRowForAdmin = (row: NotificationRow): NotificationQueueItem => ({
+  ...mapNotificationRow(row),
+  payload: sanitizeNotificationPayloadForAdmin(
+    typeof row.payload_json === "string" ? JSON.parse(row.payload_json || "{}") : row.payload_json || {}
+  ),
+  claimToken: null,
+  claimExpiresAt: null
+});
+
 const getNotificationQueue = async (limit = 20) => {
   const rows = handleSupabase(
     await supabase
@@ -1658,7 +1723,7 @@ const getNotificationQueue = async (limit = 20) => {
       .order("created_at", { ascending: false })
       .limit(limit)
   ) as NotificationRow[];
-  return rows.map(mapNotificationRow);
+  return rows.map(mapNotificationRowForAdmin);
 };
 
 const getPendingNotificationQueue = async () => {
@@ -2320,6 +2385,23 @@ const createItemRecord = async (
   return itemId;
 };
 
+const cleanupManagedFiles = async (files: Array<{ url: string }>) => {
+  for (const file of files) {
+    await removeManagedStoredFile(file.url).catch(() => undefined);
+  }
+};
+
+const rollbackCreatedItem = async (itemId: string) => {
+  const files = handleSupabase(
+    await supabase.from("item_files").select("url").eq("item_id", itemId)
+  ) as Array<{ url: string }>;
+  await cleanupManagedFiles(files);
+  await handleSupabase(await supabase.from("item_files").delete().eq("item_id", itemId));
+  await handleSupabase(await supabase.from("audits").delete().eq("entity_type", "item").eq("entity_id", itemId));
+  await supabase.from("notification_queue").delete().contains("payload_json", { itemId });
+  await handleSupabase(await supabase.from("items").delete().eq("id", itemId));
+};
+
 const findExistingItemByLotOrSku = async (lot: string, sku: string) => {
   const rows = handleSupabase(
     await supabase
@@ -2646,7 +2728,7 @@ app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async
     entityId: user.id,
     actor: user.display_name,
     actorType: "user",
-    details: { email: user.email, role, sessionId: sessionRecord.sessionId }
+    details: { email: user.email, role }
   });
   res.json({
     signedIn: true,
@@ -2795,7 +2877,7 @@ app.post("/api/auth/logout", asyncHandler(async (req, res) => {
       entityId: auth.userId,
       actor: auth.actor,
       actorType: auth.actorType,
-      details: { sessionId: sessionId || "unknown" }
+      details: { currentSession: Boolean(sessionId) }
     });
   }
   if (sessionId) {
@@ -2867,7 +2949,7 @@ app.delete("/api/me/sessions/:id", asyncHandler(async (req, res) => {
     entityId: auth.userId,
     actor: auth.actor,
     actorType: auth.actorType,
-    details: { sessionId: session.id }
+    details: { revoked: 1 }
   });
   res.json({ revoked: true, message: "Session revoked." });
 }));
@@ -3149,7 +3231,7 @@ app.get("/api/exports/audits.csv", requireAdminToken, asyncHandler(async (req, r
     actor: row.actor,
     actorType: row.actor_type,
     requestId: row.request_id,
-    details: typeof row.details_json === "string" ? row.details_json : JSON.stringify(row.details_json || {}),
+    details: JSON.stringify(redactSensitiveAuditDetails(parseAuditDetails(row.details_json))),
     createdAt: row.created_at
   }));
   const auth = await getAuthContext(req);
@@ -3172,16 +3254,17 @@ app.get("/api/me/wins", asyncHandler(async (req, res) => {
     res.status(401).json({ error: "Sign in required." });
     return;
   }
-  const itemsById = new Map((await getItems(true)).map((item) => [item.id, item]));
-  const bidAudits = await getBidAuditRowsForUser(auth.userId!);
-  const wins = bidAudits.flatMap((row) => {
-    const item = itemsById.get(row.entity_id);
-    if (!item) return [];
-    const details = parseAuditDetails(row.details_json);
-    const won = new Date(item.endTime).getTime() < Date.now() && item.currentBid > 0 && Number(details.amount || 0) === item.currentBid;
-    return won ? [{ id: item.id, title: item.title, category: item.category, currentBid: item.currentBid, endTime: item.endTime }] : [];
-  });
-  res.json(Array.from(new Map(wins.map((row) => [row.id, row])).values()));
+  const bidRecords = await getUserBidRecords(auth.userId!);
+  const wins = bidRecords
+    .filter((row) => row.status === "won")
+    .map((row) => ({
+      id: row.itemId,
+      title: row.title,
+      category: row.category,
+      currentBid: row.currentBid,
+      endTime: row.endTime
+    }));
+  res.json(wins);
 }));
 
 app.get("/api/admin/operations", requireAdminToken, asyncHandler(async (req, res) => {
@@ -3244,6 +3327,7 @@ app.get("/api/admin/audits", requireAdminToken, asyncHandler(async (req, res) =>
   const actorRoleLookup = await getAuditActorRoleLookup();
   res.json(filteredRows.map((row) => ({
     ...row,
+    details_json: redactSensitiveAuditDetails(parseAuditDetails(row.details_json)),
     actor_role:
       (typeof row.details_json === "object" &&
       row.details_json !== null &&
@@ -3577,6 +3661,13 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
   const auth = await getAuthContext(req);
   const tempExtractDir = fs.mkdtempSync(path.join(importsDir, "bulk-"));
   const createdIds: string[] = [];
+  const pendingRows: Array<{
+    row: number;
+    title: string;
+    value: Extract<ReturnType<typeof validateNewItem>, { ok: true }>["value"];
+    imageNames: string[];
+    documentEntries: Array<{ name: string; visibility: DocumentVisibility }>;
+  }> = [];
   const report: {
     created: number;
     skipped: number;
@@ -3601,6 +3692,8 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
       await inspectImportArchive(zipFile.path);
       extractedFiles = extractImportArchive(zipFile.path, tempExtractDir);
     }
+    const seenLots = new Set<string>();
+    const seenSkus = new Set<string>();
 
     for (const [index, row] of csvRows.entries()) {
       const title = getImportValue(row, ["title", "item_title"]);
@@ -3625,6 +3718,18 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
           report.items.push({ row: index + 2, status: "failed", title: title || `Row ${index + 2}`, message: validation.error });
           continue;
         }
+        if (seenLots.has(validation.value.lot) || seenSkus.has(validation.value.sku)) {
+          report.failed += 1;
+          report.items.push({
+            row: index + 2,
+            status: "failed",
+            title: validation.value.title,
+            message: "Duplicate lot or SKU detected within the uploaded CSV."
+          });
+          continue;
+        }
+        seenLots.add(validation.value.lot);
+        seenSkus.add(validation.value.sku);
 
         const duplicate = await findExistingItemByLotOrSku(validation.value.lot, validation.value.sku);
         if (duplicate) {
@@ -3649,22 +3754,23 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
               normalizedRow[`${key}_visibility`] || normalizedRow.document_visibility || normalizedRow.doc_visibility
             )
           })));
-
-        const imageFiles = await Promise.all(imageNames.map(async (name) => {
-          const sourcePath = extractedFiles.get(name.toLowerCase());
-          if (!sourcePath) throw new Error(`Image file "${name}" was not found in the ZIP.`);
-          return copyImportedFile(sourcePath, "image");
-        }));
-        const documentFiles = await Promise.all(documentEntries.map(async (entry) => {
-          const sourcePath = extractedFiles.get(entry.name.toLowerCase());
-          if (!sourcePath) throw new Error(`Document file "${entry.name}" was not found in the ZIP.`);
-          return copyImportedFile(sourcePath, "document", entry.visibility);
-        }));
-
-        const itemId = await createItemRecord(req, validation.value, auth, { images: imageFiles, documents: documentFiles });
-        createdIds.push(itemId);
-        report.created += 1;
-        report.items.push({ row: index + 2, status: "created", title: validation.value.title, itemId, message: "Imported successfully." });
+        for (const name of imageNames) {
+          if (!extractedFiles.get(name.toLowerCase())) {
+            throw new Error(`Image file "${name}" was not found in the ZIP.`);
+          }
+        }
+        for (const entry of documentEntries) {
+          if (!extractedFiles.get(entry.name.toLowerCase())) {
+            throw new Error(`Document file "${entry.name}" was not found in the ZIP.`);
+          }
+        }
+        pendingRows.push({
+          row: index + 2,
+          title: validation.value.title,
+          value: validation.value,
+          imageNames,
+          documentEntries: documentEntries.map((entry) => ({ name: entry.name, visibility: entry.visibility }))
+        });
       } catch (error) {
         report.failed += 1;
         report.items.push({
@@ -3674,6 +3780,49 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
           message: error instanceof Error ? error.message : "Import failed."
         });
       }
+    }
+
+    if (report.failed > 0) {
+      res.status(400).json({
+        ...report,
+        message: "Bulk import validation failed. No items were created."
+      });
+      return;
+    }
+
+    try {
+      for (const row of pendingRows) {
+        const imageFiles = await Promise.all(row.imageNames.map(async (name) => {
+          const sourcePath = extractedFiles.get(name.toLowerCase());
+          if (!sourcePath) throw new Error(`Image file "${name}" was not found in the ZIP.`);
+          return copyImportedFile(sourcePath, "image");
+        }));
+        const documentFiles = await Promise.all(row.documentEntries.map(async (entry) => {
+          const sourcePath = extractedFiles.get(entry.name.toLowerCase());
+          if (!sourcePath) throw new Error(`Document file "${entry.name}" was not found in the ZIP.`);
+          return copyImportedFile(sourcePath, "document", entry.visibility);
+        }));
+
+        try {
+          const itemId = await createItemRecord(req, row.value, auth, { images: imageFiles, documents: documentFiles });
+          createdIds.push(itemId);
+          report.created += 1;
+          report.items.push({ row: row.row, status: "created", title: row.title, itemId, message: "Imported successfully." });
+        } catch (error) {
+          await cleanupManagedFiles([...imageFiles, ...documentFiles]);
+          throw error;
+        }
+      }
+    } catch (error) {
+      for (const itemId of createdIds.reverse()) {
+        await rollbackCreatedItem(itemId).catch(() => undefined);
+      }
+      res.status(500).json({
+        ...report,
+        error: error instanceof Error ? error.message : "Bulk import failed.",
+        message: "Bulk import failed during commit. Created items were rolled back."
+      });
+      return;
     }
 
     await appendAudit(req, {
@@ -3880,10 +4029,7 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
     actorType: auth.actorType,
     details: {
       amount,
-      bidSequence: bidResult.bidSequence,
-      auctionItemId: item.id,
-      bidId: bidResult.bidId,
-      bidderUserId: persistedBidderUserId
+      bidSequence: bidResult.bidSequence
     }
   });
   await queueBidActivityNotifications(
@@ -3936,7 +4082,15 @@ const start = async () => {
     if (!smtpTransporter) {
       throw new Error("SMTP transport is enabled but SMTP_HOST, SMTP_USER, or SMTP_PASS is missing.");
     }
-    await smtpTransporter.verify();
+    try {
+      await smtpTransporter.verify();
+    } catch (error) {
+      if (runtimeEnvironment === "production") {
+        throw error;
+      }
+      console.warn("SMTP verification failed. Continuing startup because NODE_ENV is not production.");
+      console.warn(error);
+    }
   }
   await startNotificationWorkerLoop();
   if (!shouldRunApiServer) {
