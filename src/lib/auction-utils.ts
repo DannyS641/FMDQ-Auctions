@@ -16,7 +16,8 @@ export const getTimeUntilStartMs = (startTime: string): number =>
   Math.max(0, new Date(startTime).getTime() - Date.now());
 
 export const getReserveOutcome = (item: AuctionItem): string => {
-  if (!item.reserve || item.reserve <= 0) return "No reserve";
+  if (item.reserve == null) return "Reserve confidential";
+  if (item.reserve <= 0) return "No reserve";
   const status = getAuctionStatus(item);
   if (status !== "Closed") {
     return item.currentBid >= item.reserve ? "Reserve met" : "Reserve pending";

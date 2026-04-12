@@ -38,6 +38,13 @@ export type NotificationEntry = {
   errorMessage?: string | null;
 };
 
+export type PaginatedResult<T> = {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
 export type OperationsSummary = {
   totalItems: number;
   liveCount: number;

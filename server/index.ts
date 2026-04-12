@@ -23,14 +23,22 @@ import {
   validateBidAmount,
   validateMalwareScanConfiguration
 } from "./security-logic.js";
+import { createItemReadModel } from "./item-read-model.js";
+import { createAuthService } from "./auth-service.js";
+import { createAdminService } from "./admin-service.js";
+import type { AuditEntry, AuditRow, AuthContext, NotificationQueueItem, Role, UserRow } from "./server-types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const loadEnvFile = () => {
+const loadEnvFile = async () => {
   const envPath = path.join(path.dirname(__dirname), ".env");
-  if (!fs.existsSync(envPath)) return;
-  const contents = fs.readFileSync(envPath, "utf8");
+  try {
+    await fs.promises.access(envPath, fs.constants.F_OK);
+  } catch {
+    return;
+  }
+  const contents = await fs.promises.readFile(envPath, "utf8");
   for (const rawLine of contents.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
@@ -42,7 +50,7 @@ const loadEnvFile = () => {
   }
 };
 
-loadEnvFile();
+await loadEnvFile();
 
 const app = express();
 const runtimeEnvironment = process.env.NODE_ENV || "development";
@@ -153,12 +161,14 @@ const quarantineDir = path.join(uploadsDir, "quarantine");
 const imagesDir = path.join(uploadsDir, "images");
 const docsDir = path.join(uploadsDir, "documents");
 const execFileAsync = promisify(execFile);
-
-[dataDir, outboxDir, deadLetterDir, importsDir, uploadsDir, tempUploadsDir, quarantineDir, imagesDir, docsDir].forEach((dir) => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-});
+const ensureRuntimeDirectories = async () => {
+  await Promise.all(
+    [dataDir, outboxDir, deadLetterDir, importsDir, uploadsDir, tempUploadsDir, quarantineDir, imagesDir, docsDir].map((dir) =>
+      fs.promises.mkdir(dir, { recursive: true })
+    )
+  );
+};
+await ensureRuntimeDirectories();
 
 app.disable("x-powered-by");
 app.use(cors({
@@ -261,7 +271,7 @@ type StoredItem = {
   condition: string;
   location: string;
   startBid: number;
-  reserve: number;
+  reserve?: number;
   increment: number;
   currentBid: number;
   startTime: string;
@@ -272,49 +282,6 @@ type StoredItem = {
   bids: StoredBid[];
   createdAt: string;
   archivedAt?: string | null;
-};
-type AuditEntry = {
-  eventType: string;
-  entityType: "item" | "bid" | "user" | "system" | "export" | "auth";
-  entityId: string;
-  actor: string;
-  actorType: "system" | "user" | "integration";
-  details: Record<string, string | number | boolean>;
-};
-type StoredUser = {
-  id: string;
-  email: string;
-  displayName: string;
-  status: "pending_verification" | "active" | "disabled";
-  createdAt: string;
-  lastLoginAt: string | null;
-};
-type Role = "Guest" | "Bidder" | "ShopOwner" | "Admin" | "SuperAdmin";
-type AuthContext = {
-  userId?: string;
-  sessionId?: string;
-  actor: string;
-  actorType: "system" | "user" | "integration";
-  role: Role;
-  trusted: boolean;
-  adminAuthorized: boolean;
-  signedIn: boolean;
-};
-type NotificationQueueItem = {
-  id: string;
-  channel: "email";
-  eventType: string;
-  recipient: string;
-  subject: string;
-  status: "pending" | "sent" | "failed";
-  payload: Record<string, unknown>;
-  createdAt: string;
-  processedAt?: string | null;
-  nextAttemptAt?: string | null;
-  attemptCount?: number;
-  claimToken?: string | null;
-  claimExpiresAt?: string | null;
-  errorMessage?: string | null;
 };
 type BidAuditRow = {
   entity_id: string;
@@ -341,29 +308,6 @@ type ItemRow = {
 };
 type ItemFileRow = { item_id: string; kind: string; name: string; url: string };
 type BidRow = { item_id: string; bidder_alias: string; bidder_user_id?: string | null; amount: number | string; bid_time: string; created_at: string };
-type AuditRow = {
-  id: string;
-  event_type: string;
-  entity_type: string;
-  entity_id: string;
-  actor: string;
-  actor_type: string;
-  request_id: string;
-  details_json: Record<string, unknown> | string;
-  created_at: string;
-  actor_role?: string | null;
-};
-type SessionRow = { id: string; user_id: string; created_at: string; expires_at: string };
-type UserRow = {
-  id: string;
-  email: string;
-  password_hash?: string;
-  display_name: string;
-  status: StoredUser["status"];
-  created_at: string;
-  last_login_at: string | null;
-};
-type RoleRow = { role_name: string };
 type EmailVerificationRow = { id: string; user_id: string; token: string; created_at: string; expires_at: string };
 type NotificationRow = {
   id: string;
@@ -555,11 +499,11 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => cb(null, `${Date.now()}-${safeFileName(file.originalname)}`)
 });
 
-const detectFileSignatureMimeType = (filePath: string) => {
-  const descriptor = fs.openSync(filePath, "r");
+const detectFileSignatureMimeType = async (filePath: string) => {
+  const descriptor = await fs.promises.open(filePath, "r");
   try {
     const header = Buffer.alloc(16);
-    fs.readSync(descriptor, header, 0, header.length, 0);
+    await descriptor.read(header, 0, header.length, 0);
     if (header.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return "image/jpeg";
     if (header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
     if (header.subarray(0, 4).toString("ascii") === "RIFF" && header.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
@@ -572,12 +516,12 @@ const detectFileSignatureMimeType = (filePath: string) => {
     }
     return null;
   } finally {
-    fs.closeSync(descriptor);
+    await descriptor.close();
   }
 };
 
-const validateManagedFileContent = (filePath: string, originalName: string, kind: "image" | "document") => {
-  const detectedMimeType = detectFileSignatureMimeType(filePath);
+const validateManagedFileContent = async (filePath: string, originalName: string, kind: "image" | "document") => {
+  const detectedMimeType = await detectFileSignatureMimeType(filePath);
   const isOfficeZipDocument =
     kind === "document"
     && detectedMimeType === "application/zip"
@@ -591,11 +535,11 @@ const validateManagedFileContent = (filePath: string, originalName: string, kind
           && !isOfficeZipDocument
         )));
   if (!allowed) {
-    removeFileIfExists(filePath);
+    await removeFileIfExists(filePath);
     throw new Error(`Uploaded ${kind} content does not match an allowed file signature.`);
   }
   if (isOfficeZipDocument) {
-    removeFileIfExists(filePath);
+    await removeFileIfExists(filePath);
     throw new Error("ZIP archives are not accepted as standalone documents. Upload Office files or PDFs only.");
   }
 };
@@ -619,6 +563,15 @@ const bulkImportUpload = multer({
   storage: bulkImportStorage,
   limits: { files: 2, fileSize: 25 * 1024 * 1024 }
 });
+
+const fileExists = async (filePath: string) => {
+  try {
+    await fs.promises.access(filePath, fs.constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const hashPassword = (password: string) => {
   const salt = randomBytes(16).toString("hex");
@@ -655,7 +608,7 @@ const removeStoredFile = (url: string) => {
   if (!url.startsWith("/uploads/")) return;
   const filePath = path.normalize(path.join(__dirname, url.replace(/^\/+/, "")));
   if (!filePath.startsWith(uploadsDir)) return;
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  void removeFileIfExists(filePath);
 };
 
 const buildStoragePath = (kind: "image" | "document", originalName: string) =>
@@ -674,7 +627,7 @@ const decodeStoredFilePath = (encodedPath: string) => {
 
 const runMalwareScan = async (filePath: string) => {
   const quarantinePath = path.join(quarantineDir, `${Date.now()}-${safeFileName(path.basename(filePath))}`);
-  fs.copyFileSync(filePath, quarantinePath);
+  await fs.promises.copyFile(filePath, quarantinePath);
   try {
     if (malwareScanMode === "command" && malwareScanCommand) {
       const parts = malwareScanCommand.split(/\s+/).filter(Boolean);
@@ -698,20 +651,20 @@ const runMalwareScan = async (filePath: string) => {
 const verifyMalwareScannerHealth = async () => {
   if (malwareScanMode !== "command") return;
   const probePath = path.join(tempUploadsDir, `scanner-probe-${randomUUID()}.txt`);
-  fs.writeFileSync(probePath, `scanner-health-check:${new Date().toISOString()}\n`, "utf8");
+  await fs.promises.writeFile(probePath, `scanner-health-check:${new Date().toISOString()}\n`, "utf8");
   let scannedPath = "";
   try {
     scannedPath = await runMalwareScan(probePath);
   } finally {
-    removeFileIfExists(probePath);
-    if (scannedPath) removeFileIfExists(scannedPath);
+    await removeFileIfExists(probePath);
+    if (scannedPath) await removeFileIfExists(scannedPath);
   }
 };
 
 const uploadFileToManagedStorage = async (sourcePath: string, kind: "image" | "document", originalName: string) => {
   const storagePath = buildStoragePath(kind, originalName);
   const bucket = kind === "image" ? imageBucket : documentBucket;
-  const fileBuffer = fs.readFileSync(sourcePath);
+  const fileBuffer = await fs.promises.readFile(sourcePath);
   const uploadResult = await supabase.storage.from(bucket).upload(storagePath, fileBuffer, {
     contentType: guessContentType(originalName),
     upsert: false
@@ -823,8 +776,14 @@ const pruneExpiredDatabaseRows = async () => {
   await handleSupabase(await supabase.from("security_events").delete().lte("created_at", securityEventsCutoff));
 };
 
-const removeFileIfExists = (filePath: string) => {
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+const removeFileIfExists = async (filePath: string) => {
+  try {
+    await fs.promises.unlink(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
+  }
 };
 
 const formatBidTime = (createdAt: string) =>
@@ -951,24 +910,32 @@ const sendOpsAlert = async (title: string, details: Record<string, unknown>) => 
   }
 };
 
-const pruneFilesOlderThan = (directory: string, maxAgeMs: number) => {
-  if (!fs.existsSync(directory)) return;
+const pruneFilesOlderThan = async (directory: string, maxAgeMs: number) => {
   const cutoff = Date.now() - maxAgeMs;
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return;
+    throw error;
+  }
+  for (const entry of entries) {
     if (!entry.isFile()) continue;
     const fullPath = path.join(directory, entry.name);
-    const stats = fs.statSync(fullPath);
+    const stats = await fs.promises.stat(fullPath);
     if (stats.mtimeMs <= cutoff) {
-      fs.unlinkSync(fullPath);
+      await removeFileIfExists(fullPath);
     }
   }
 };
 
-const pruneOperationalFiles = () => {
-  pruneFilesOlderThan(tempUploadsDir, tempUploadRetentionHours * 60 * 60 * 1000);
-  pruneFilesOlderThan(outboxDir, outboxRetentionDays * 24 * 60 * 60 * 1000);
-  pruneFilesOlderThan(deadLetterDir, deadLetterRetentionDays * 24 * 60 * 60 * 1000);
-  pruneFilesOlderThan(quarantineDir, quarantineRetentionDays * 24 * 60 * 60 * 1000);
+const pruneOperationalFiles = async () => {
+  await Promise.all([
+    pruneFilesOlderThan(tempUploadsDir, tempUploadRetentionHours * 60 * 60 * 1000),
+    pruneFilesOlderThan(outboxDir, outboxRetentionDays * 24 * 60 * 60 * 1000),
+    pruneFilesOlderThan(deadLetterDir, deadLetterRetentionDays * 24 * 60 * 60 * 1000),
+    pruneFilesOlderThan(quarantineDir, quarantineRetentionDays * 24 * 60 * 60 * 1000)
+  ]);
 };
 
 const getUserByEmail = async (email: string) =>
@@ -1012,104 +979,29 @@ const getUserByIdWithPassword = async (id: string) =>
     true
   );
 
-const listUsersWithRoles = async () => {
-  const users = handleSupabase(
-    await supabase
-      .from("users")
-      .select("id,email,display_name,status,created_at,last_login_at")
-      .order("created_at", { ascending: false })
-  ) as Array<Omit<UserRow, "password_hash">>;
-  const roles = handleSupabase(
-    await supabase.from("user_roles").select("user_id,role_name")
-  ) as Array<{ user_id: string; role_name: string }>;
-  return users.map((user) => ({
-    id: user.id,
-    email: user.email,
-    displayName: user.display_name,
-    status: user.status,
-    createdAt: user.created_at,
-    lastLoginAt: user.last_login_at,
-    roles: roles.filter((role) => role.user_id === user.id).map((role) => normalizeDisplayRoleName(role.role_name))
-  }));
-};
+const {
+  getUserRoles,
+  getSessionRow,
+  getUserSessions,
+  deleteSessionRow,
+  createUserSession,
+  getAuthContext: getAuthContextBase,
+  serializeSession: serializeSessionBase,
+} = createAuthService({
+  supabase,
+  handleSupabase,
+  handleSupabaseMaybe,
+  parseCookies,
+  sessionCookieName,
+  sessionTtlMs,
+  setSessionCookie,
+  buildCsrfToken,
+  normalizeRole,
+  getUserById,
+});
 
-const getAuditActorRoleLookup = async () => {
-  const users = await listUsersWithRoles();
-  const roleLookup = new Map<string, string | null>();
-
-  for (const user of users) {
-    const normalizedRole = normalizeRole(user.roles);
-    const existing = roleLookup.get(user.displayName);
-    if (existing === undefined) {
-      roleLookup.set(user.displayName, normalizedRole);
-      continue;
-    }
-    if (existing !== normalizedRole) {
-      roleLookup.set(user.displayName, null);
-    }
-  }
-
-  return roleLookup;
-};
-
-const SENSITIVE_AUDIT_DETAIL_KEYS = new Set([
-  "sessionId",
-  "bidId",
-  "bidderUserId",
-  "auctionItemId",
-  "claimToken",
-  "resetToken",
-  "csrfToken",
-  "actorUserId"
-]);
-
-const redactSensitiveAuditDetails = (value: Record<string, unknown>) => {
-  return Object.entries(value).reduce<Record<string, unknown>>((acc, [key, entryValue]) => {
-    if (SENSITIVE_AUDIT_DETAIL_KEYS.has(key)) return acc;
-    acc[key] = entryValue;
-    return acc;
-  }, {});
-};
-
-const sanitizeNotificationPayloadForAdmin = (payload: Record<string, unknown>) => {
-  return Object.entries(payload).reduce<Record<string, unknown>>((acc, [key, value]) => {
-    if (/token/i.test(key)) return acc;
-    if (/reseturl/i.test(key)) return acc;
-    if (/verifyurl/i.test(key)) return acc;
-    if (/itemurl/i.test(key)) return acc;
-    if (key === "_meta" && typeof value === "object" && value !== null) {
-      const meta = value as Record<string, unknown>;
-      acc[key] = {
-        attempts: meta.attempts,
-        lastError: meta.lastError
-      };
-      return acc;
-    }
-    acc[key] = value;
-    return acc;
-  }, {});
-};
-
-const mapAuditRowToEntry = (row: AuditRow, actorRoleLookup?: Map<string, string | null>) => {
-  const parsedDetails = redactSensitiveAuditDetails(parseAuditDetails(row.details_json));
-  return {
-    id: row.id,
-    eventType: row.event_type,
-    entityType: row.entity_type,
-    entityId: row.entity_id,
-    actor: row.actor,
-    actorType: row.actor_type,
-    actorRole: actorRoleLookup?.get(row.actor) ?? undefined,
-    requestId: row.request_id,
-    details: JSON.stringify(parsedDetails),
-    createdAt: row.created_at
-  };
-};
-
-const getUserRoles = async (userId: string) =>
-  handleSupabase(
-    await supabase.from("user_roles").select("role_name").eq("user_id", userId)
-  ) as RoleRow[];
+const getAuthContext = (req: express.Request) => getAuthContextBase(req, adminApiToken);
+const serializeSession = (req: express.Request) => serializeSessionBase(req, adminApiToken);
 
 const ensureCanManageTargetUser = (actor: AuthContext, targetRoles: string[]) => {
   return ensureCanManageTargetRoles(actor.role, targetRoles);
@@ -1136,6 +1028,7 @@ const canAccessItemDocument = (auth: AuthContext, item: StoredItem, visibility: 
 
 const sanitizeItemForAuth = (item: StoredItem, auth: AuthContext): StoredItem => ({
   ...item,
+  reserve: auth.role === "Admin" || auth.role === "SuperAdmin" ? item.reserve : undefined,
   bids: item.bids.map((bid) => ({
     ...bid,
     bidder: auth.role === "ShopOwner" || auth.adminAuthorized ? bid.bidder : "Anonymous bidder",
@@ -1143,21 +1036,6 @@ const sanitizeItemForAuth = (item: StoredItem, auth: AuthContext): StoredItem =>
   })),
   documents: item.documents.filter((document) => canAccessItemDocument(auth, item, document.visibility || "bidder_visible"))
 });
-
-const getSessionRow = async (sessionId: string) =>
-  handleSupabaseMaybe<SessionRow>(
-    await supabase.from("sessions").select("id,user_id,created_at,expires_at").eq("id", sessionId).maybeSingle(),
-    true
-  );
-
-const getUserSessions = async (userId: string) =>
-  handleSupabase(
-    await supabase.from("sessions").select("id,user_id,created_at,expires_at").eq("user_id", userId).order("created_at", { ascending: false })
-  ) as SessionRow[];
-
-const deleteSessionRow = async (sessionId: string) => {
-  await handleSupabase(await supabase.from("sessions").delete().eq("id", sessionId));
-};
 
 const getEmailVerificationRow = async (token: string) =>
   handleSupabaseMaybe<EmailVerificationRow>(
@@ -1168,17 +1046,6 @@ const getEmailVerificationRow = async (token: string) =>
       .maybeSingle(),
     true
   );
-
-const createUserSession = async (res: express.Response, userId: string) => {
-  const sessionId = randomUUID();
-  const createdAt = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + sessionTtlMs).toISOString();
-  await handleSupabase(
-    await supabase.from("sessions").insert({ id: sessionId, user_id: userId, created_at: createdAt, expires_at: expiresAt })
-  );
-  setSessionCookie(res, sessionId, expiresAt);
-  return { sessionId, createdAt, expiresAt };
-};
 
 const createEmailVerificationToken = async (userId: string) => {
   const token = randomBytes(32).toString("hex");
@@ -1271,63 +1138,6 @@ const queueBidActivityNotifications = async (
   );
 };
 
-const getAuthContext = async (req: express.Request): Promise<AuthContext> => {
-  if (adminApiToken && req.header("x-admin-token") === adminApiToken) {
-    return {
-      userId: "admin-token",
-      sessionId: undefined,
-      actor: "Admin API token",
-      actorType: "integration",
-      role: "Admin",
-      trusted: true,
-      adminAuthorized: true,
-      signedIn: true
-    };
-  }
-  const sessionId = parseCookies(req)[sessionCookieName];
-  if (!sessionId) {
-    return { actor: "anonymous-client", actorType: "system", role: "Guest", trusted: false, adminAuthorized: false, signedIn: false };
-  }
-  const sessionRow = await getSessionRow(sessionId);
-  if (!sessionRow || new Date(sessionRow.expires_at).getTime() <= Date.now()) {
-    await deleteSessionRow(sessionId).catch(() => undefined);
-    return { actor: "anonymous-client", actorType: "system", role: "Guest", trusted: false, adminAuthorized: false, signedIn: false };
-  }
-  const user = await getUserById(sessionRow.user_id);
-  if (!user || user.status !== "active") {
-    await deleteSessionRow(sessionId).catch(() => undefined);
-    return { actor: "anonymous-client", actorType: "system", role: "Guest", trusted: false, adminAuthorized: false, signedIn: false };
-  }
-  const roleRows = await getUserRoles(user.id);
-  const role = normalizeRole(roleRows.map((row) => row.role_name));
-  return {
-    userId: user.id,
-    sessionId,
-    actor: user.display_name,
-    actorType: "user",
-    role,
-    trusted: true,
-    adminAuthorized: role === "Admin" || role === "SuperAdmin",
-    signedIn: true
-  };
-};
-
-const serializeSession = async (req: express.Request): Promise<((StoredUser & { role: Role }) & { csrfToken?: string }) | null> => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) return null;
-  const user = await getUserById(auth.userId);
-  if (!user) return null;
-  return {
-    id: user.id,
-    email: user.email,
-    displayName: user.display_name,
-    status: user.status,
-    createdAt: user.created_at,
-    lastLoginAt: user.last_login_at,
-    role: auth.role,
-    csrfToken: auth.sessionId ? buildCsrfToken(auth.sessionId) : undefined
-  };
-};
 
 const appendAudit = async (req: express.Request, entry: AuditEntry) => {
   const auth = await getAuthContext(req);
@@ -1443,103 +1253,8 @@ const getLandingStats = async () => {
   };
 };
 
-const mapItem = (
-  row: ItemRow,
-  files: ItemFileRow[],
-  bids: BidRow[],
-  bidAuditLookup: Map<string, Map<string, string>>
-): StoredItem => ({
-  id: row.id,
-  title: row.title,
-  category: row.category,
-  lot: row.lot,
-  sku: row.sku,
-  condition: row.condition,
-  location: row.location,
-  startBid: Number(row.start_bid),
-  reserve: Number(row.reserve),
-  increment: Number(row.increment_amount),
-  currentBid: Number(row.current_bid),
-  startTime: new Date(row.start_time).toISOString(),
-  endTime: new Date(row.end_time).toISOString(),
-  description: row.description || "",
-  images: files.filter((file) => file.item_id === row.id && file.kind === "image").map((file) => ({ name: file.name, url: file.url })),
-  documents: files
-    .filter((file) => file.item_id === row.id && file.kind === "document")
-    .map((file) => {
-      const parsed = parseDocumentNameWithVisibility(file.name);
-      return { name: parsed.displayName, url: file.url, visibility: parsed.visibility };
-    }),
-  bids: bids.filter((bid) => bid.item_id === row.id).map((bid) => ({
-    bidder: bid.bidder_alias,
-    amount: Number(bid.amount),
-    time: bid.bid_time,
-    createdAt: bid.created_at,
-    bidderUserId: bid.bidder_user_id || bidAuditLookup.get(row.id)?.get(bid.created_at)
-  })),
-  createdAt: row.created_at,
-  archivedAt: row.archived_at
-});
-
-const hydrateItems = async (rows: ItemRow[]) => {
-  if (!rows.length) return [] as StoredItem[];
-  const ids = rows.map((row) => row.id);
-  const files = handleSupabase(
-    await supabase.from("item_files").select("item_id,kind,name,url").in("item_id", ids)
-  ) as ItemFileRow[];
-  const bids = handleSupabase(
-    await supabase
-      .from("bids")
-      .select("item_id,bidder_alias,bidder_user_id,amount,bid_time,created_at")
-      .in("item_id", ids)
-      .order("created_at", { ascending: false })
-  ) as BidRow[];
-  const bidAudits = handleSupabase(
-    await supabase
-      .from("audits")
-      .select("entity_id,details_json,created_at")
-      .eq("event_type", "BID_PLACED")
-      .in("entity_id", ids)
-  ) as BidAuditRow[];
-  const bidAuditLookup = new Map<string, Map<string, string>>();
-  for (const audit of bidAudits) {
-    const bidderUserId = String(parseAuditDetails(audit.details_json).bidderUserId || "");
-    if (!bidderUserId) continue;
-    if (!bidAuditLookup.has(audit.entity_id)) {
-      bidAuditLookup.set(audit.entity_id, new Map());
-    }
-    bidAuditLookup.get(audit.entity_id)!.set(audit.created_at, bidderUserId);
-  }
-  return rows.map((row) => mapItem(row, files, bids, bidAuditLookup));
-};
-
-const getItems = async (includeArchived = false) => {
-  let request = supabase
-    .from("items")
-    .select("id,title,category,lot,sku,condition,location,start_bid,reserve,increment_amount,current_bid,start_time,end_time,description,created_at,archived_at")
-    .order("archived_at", { ascending: true, nullsFirst: true })
-    .order("created_at", { ascending: false });
-  if (!includeArchived) request = request.is("archived_at", null);
-  const rows = handleSupabase(await request) as ItemRow[];
-  return hydrateItems(rows);
-};
-
-const getItemById = async (id: string, includeArchived = false) => {
-  const row = handleSupabaseMaybe(
-    await supabase
-      .from("items")
-      .select("id,title,category,lot,sku,condition,location,start_bid,reserve,increment_amount,current_bid,start_time,end_time,description,created_at,archived_at")
-      .eq("id", id)
-      .maybeSingle(),
-    true
-  ) as ItemRow | null;
-  if (!row) return null;
-  if (!includeArchived && row.archived_at) return null;
-  return (await hydrateItems([row]))[0] || null;
-};
-
 const getReserveState = (item: StoredItem) => {
-  if (item.reserve <= 0) return "no_reserve";
+  if (item.reserve == null || item.reserve <= 0) return "no_reserve";
   if (new Date(item.endTime).getTime() > Date.now()) {
     return item.currentBid >= item.reserve ? "reserve_met" : "reserve_pending";
   }
@@ -1557,6 +1272,32 @@ const parseAuditDetails = (value: Record<string, unknown> | string | null | unde
   }
   return value;
 };
+
+const {
+  listUsersWithRoles,
+  getAuditActorRoleLookup,
+  redactSensitiveAuditDetails,
+  sanitizeNotificationPayloadForAdmin,
+  mapAuditRowToEntry,
+  mapNotificationRow,
+  mapNotificationRowForAdmin,
+  getRecentAudits,
+  getNotificationQueue,
+} = createAdminService({
+  supabase,
+  handleSupabase,
+  parseAuditDetails,
+  normalizeDisplayRoleName,
+  normalizeRole,
+  securityTelemetryEvents,
+});
+
+const { getItems, getItemById } = createItemReadModel({
+  supabase,
+  handleSupabase,
+  handleSupabaseMaybe,
+  parseAuditDetails,
+});
 
 const backfillLegacyBidAuditAttribution = async () => {
   const users = handleSupabase(
@@ -1684,58 +1425,6 @@ const getUserBidRecords = async (userId: string) => {
       status
     }];
   });
-};
-
-const getRecentAudits = async (limit = 20) => {
-  const actorRoleLookup = await getAuditActorRoleLookup();
-  const rows = handleSupabase(
-    await supabase
-      .from("audits")
-      .select("id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at")
-      .order("created_at", { ascending: false })
-      .limit(limit + 100)
-  ) as AuditRow[];
-  return rows
-    .filter((row) => !securityTelemetryEvents.has(row.event_type))
-    .slice(0, limit)
-    .map((row) => mapAuditRowToEntry(row, actorRoleLookup));
-};
-
-const mapNotificationRow = (row: NotificationRow): NotificationQueueItem => ({
-  id: row.id,
-  channel: row.channel,
-  eventType: row.event_type,
-  recipient: row.recipient,
-  subject: row.subject,
-  status: row.status,
-  payload: typeof row.payload_json === "string" ? JSON.parse(row.payload_json || "{}") : row.payload_json || {},
-  createdAt: row.created_at,
-  processedAt: row.processed_at,
-  nextAttemptAt: row.next_attempt_at,
-  attemptCount: Number(row.attempt_count || 0),
-  claimToken: row.claim_token,
-  claimExpiresAt: row.claim_expires_at,
-  errorMessage: row.error_message
-});
-
-const mapNotificationRowForAdmin = (row: NotificationRow): NotificationQueueItem => ({
-  ...mapNotificationRow(row),
-  payload: sanitizeNotificationPayloadForAdmin(
-    typeof row.payload_json === "string" ? JSON.parse(row.payload_json || "{}") : row.payload_json || {}
-  ),
-  claimToken: null,
-  claimExpiresAt: null
-});
-
-const getNotificationQueue = async (limit = 20) => {
-  const rows = handleSupabase(
-    await supabase
-      .from("notification_queue")
-      .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,next_attempt_at,attempt_count,claim_token,claim_expires_at,error_message")
-      .order("created_at", { ascending: false })
-      .limit(limit)
-  ) as NotificationRow[];
-  return rows.map(mapNotificationRowForAdmin);
 };
 
 const getPendingNotificationQueue = async () => {
@@ -2010,16 +1699,16 @@ const deliverNotification = async (entry: NotificationQueueItem, claimToken: str
       return;
     }
     const filePath = path.join(outboxDir, `${processedAt.replace(/[:.]/g, "-")}-${entry.id}.json`);
-    fs.writeFileSync(filePath, JSON.stringify({
+    await fs.promises.writeFile(filePath, JSON.stringify({
       id: entry.id,
       channel: entry.channel,
       eventType: entry.eventType,
       recipient: entry.recipient,
       subject: entry.subject,
-      payload: entry.payload,
+      payload: sanitizeNotificationPayloadForAdmin(entry.payload),
       createdAt: entry.createdAt,
       processedAt
-    }, null, 2));
+    }, null, 2), "utf8");
     await stopLeaseRenewal();
     await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
   } catch (error) {
@@ -2053,14 +1742,14 @@ const processNotificationQueue = async () => {
         const retry = buildNotificationMeta(currentMeta, errorMessage, now, notificationMaxAttempts);
         if (retry.nextStatus === "failed") {
           const deadLetterPath = path.join(deadLetterDir, `${now.toISOString().replace(/[:.]/g, "-")}-${entry.id}.json`);
-          fs.writeFileSync(deadLetterPath, JSON.stringify({
+          await fs.promises.writeFile(deadLetterPath, JSON.stringify({
             id: entry.id,
             eventType: entry.eventType,
             recipient: entry.recipient,
             subject: entry.subject,
-            payload: entry.payload,
+            payload: sanitizeNotificationPayloadForAdmin(entry.payload),
             errorMessage
-          }, null, 2));
+          }, null, 2), "utf8");
           await sendOpsAlert("Notification moved to dead letter", {
             entryId: entry.id,
             eventType: entry.eventType,
@@ -2091,7 +1780,7 @@ const runMaintenanceTasks = async () => {
   maintenanceInFlight = true;
   try {
     await pruneExpiredDatabaseRows();
-    pruneOperationalFiles();
+    await pruneOperationalFiles();
   } catch (error) {
     await sendOpsAlert("Maintenance cleanup failed", {
       errorMessage: error instanceof Error ? error.message : "Unknown maintenance error."
@@ -2223,7 +1912,7 @@ const inspectImportArchive = async (zipPath: string) => {
   validateArchiveEntries(entries, maxImportArchiveEntries);
 };
 
-const extractImportArchive = (zipPath: string, targetDir: string) => {
+const extractImportArchive = async (zipPath: string, targetDir: string) => {
   const zip = new AdmZip(zipPath);
   let totalBytes = 0;
   let totalFiles = 0;
@@ -2246,7 +1935,7 @@ const extractImportArchive = (zipPath: string, targetDir: string) => {
 
     const fileName = path.basename(normalizedEntryName);
     const outputPath = path.join(targetDir, `${randomUUID()}-${fileName}`);
-    fs.writeFileSync(outputPath, data);
+    await fs.promises.writeFile(outputPath, data);
     map.set(fileName.toLowerCase(), outputPath);
   }
 
@@ -2292,7 +1981,7 @@ const prepareManagedFile = async (
   if (kind === "document" && !documentExtensions.has(extension)) {
     throw new Error(`Unsupported document file type for ${path.basename(sourcePath)}.`);
   }
-  validateManagedFileContent(sourcePath, originalName, kind);
+  await validateManagedFileContent(sourcePath, originalName, kind);
   let workingPath = sourcePath;
   let workingName = originalName;
   let normalizedPath = "";
@@ -2314,8 +2003,8 @@ const prepareManagedFile = async (
       url: stored.url
     };
   } finally {
-    removeFileIfExists(scannedPath);
-    if (normalizedPath) removeFileIfExists(normalizedPath);
+    await removeFileIfExists(scannedPath);
+    if (normalizedPath) await removeFileIfExists(normalizedPath);
   }
 };
 
@@ -2331,7 +2020,7 @@ const prepareUploadedMulterFile = async (
   try {
     return await prepareManagedFile(file.path, kind, file.originalname, visibility);
   } finally {
-    removeFileIfExists(file.path);
+    await removeFileIfExists(file.path);
   }
 };
 
@@ -3055,7 +2744,7 @@ app.get("/uploads/images/:file", asyncHandler(async (req, res) => {
   }
   const localFileName = safeFileName(rawFile);
   const localPath = path.join(imagesDir, localFileName);
-  if (localFileName && fs.existsSync(localPath)) {
+  if (localFileName && await fileExists(localPath)) {
     res.sendFile(localPath);
     return;
   }
@@ -3103,7 +2792,7 @@ app.get("/uploads/documents/:file", asyncHandler(async (req, res) => {
   }
   const localFileName = safeFileName(rawFile);
   const localPath = path.join(docsDir, localFileName);
-  if (localFileName && fs.existsSync(localPath)) {
+  if (localFileName && await fileExists(localPath)) {
     res.sendFile(localPath);
     return;
   }
@@ -3209,8 +2898,15 @@ app.delete("/api/categories/:name", requireAdminToken, asyncHandler(async (req, 
 
 app.get("/api/exports/items.csv", requireItemOperationsViewerToken, asyncHandler(async (req, res) => {
   const auth = await getAuthContext(req);
-  const items = await getItems(auth.adminAuthorized);
+  const items = (await getItems(auth.adminAuthorized)).map((item) => sanitizeItemForAuth(item, auth));
   const rows = items.map((item) => ({
+    winner: (() => {
+      if (new Date(item.endTime).getTime() > Date.now() || item.currentBid <= 0) return "";
+      const winningBid = [...item.bids]
+        .sort((a, b) => new Date(b.time ?? b.createdAt ?? 0).getTime() - new Date(a.time ?? a.createdAt ?? 0).getTime())
+        .find((bid) => bid.amount === item.currentBid);
+      return winningBid?.bidder || "";
+    })(),
     id: item.id,
     title: item.title,
     category: item.category,
@@ -3219,9 +2915,10 @@ app.get("/api/exports/items.csv", requireItemOperationsViewerToken, asyncHandler
     condition: item.condition,
     location: item.location,
     startBid: item.startBid,
-    reserve: item.reserve,
+    reserve: auth.role === "Admin" || auth.role === "SuperAdmin" ? item.reserve : "",
     increment: item.increment,
     currentBid: item.currentBid,
+    reserveOutcome: getReserveState(item),
     startTime: item.startTime,
     endTime: item.endTime,
     bidCount: item.bids.length
@@ -3334,37 +3031,60 @@ app.get("/api/admin/audits", requireAdminToken, asyncHandler(async (req, res) =>
   const actor = String(req.query.actor || "").trim();
   const entityType = String(req.query.entityType || "").trim();
   const includeSecurity = String(req.query.includeSecurity || "") === "1";
+  const page = Math.max(1, Number(req.query.page || 1) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
+  const offset = (page - 1) * pageSize;
   let request = supabase
     .from("audits")
-    .select("id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at")
+    .select("id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at", { count: "exact" })
     .order("created_at", { ascending: false })
-    .limit(200);
+    .range(offset, offset + pageSize - 1);
   if (itemId) request = request.eq("entity_id", itemId);
   if (from) request = request.gte("created_at", from);
   if (to) request = request.lte("created_at", to);
   if (eventType) request = request.eq("event_type", eventType);
   if (actor) request = request.ilike("actor", `%${actor}%`);
   if (entityType) request = request.eq("entity_type", entityType);
-  const rows = handleSupabase(await request) as AuditRow[];
+  const result = await request;
+  const rows = handleSupabase(result) as AuditRow[];
   const filteredRows = includeSecurity ? rows : rows.filter((row) => !securityTelemetryEvents.has(row.event_type));
   const actorRoleLookup = await getAuditActorRoleLookup();
-  res.json(filteredRows.map((row) => ({
-    ...row,
-    details_json: redactSensitiveAuditDetails(parseAuditDetails(row.details_json)),
-    actor_role:
-      (typeof row.details_json === "object" &&
-      row.details_json !== null &&
-      "actorRole" in row.details_json &&
-      typeof row.details_json.actorRole === "string"
-        ? row.details_json.actorRole
-        : null) ??
-      actorRoleLookup.get(row.actor) ??
-      null,
-  })));
+  res.json({
+    items: filteredRows.map((row) => ({
+      ...row,
+      details_json: redactSensitiveAuditDetails(parseAuditDetails(row.details_json)),
+      actor_role:
+        (typeof row.details_json === "object" &&
+        row.details_json !== null &&
+        "actorRole" in row.details_json &&
+        typeof row.details_json.actorRole === "string"
+          ? row.details_json.actorRole
+          : null) ??
+        actorRoleLookup.get(row.actor) ??
+        null,
+    })),
+    total: result.count ?? filteredRows.length,
+    page,
+    pageSize,
+  });
 }));
 
 app.get("/api/admin/notifications", requireAdminToken, asyncHandler(async (req, res) => {
-  res.json(await getNotificationQueue(200));
+  const page = Math.max(1, Number(req.query.page || 1) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
+  const offset = (page - 1) * pageSize;
+  const rowsResult = await supabase
+    .from("notification_queue")
+    .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,next_attempt_at,attempt_count,claim_token,claim_expires_at,error_message", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range(offset, offset + pageSize - 1);
+  const rows = handleSupabase(rowsResult) as NotificationRow[];
+  res.json({
+    items: rows.map(mapNotificationRowForAdmin),
+    total: rowsResult.count ?? rows.length,
+    page,
+    pageSize,
+  });
 }));
 
 app.post("/api/admin/notifications/process", requireAdminToken, asyncHandler(async (req, res) => {
@@ -3601,7 +3321,7 @@ app.post("/api/admin/users/bulk-import", requireSuperAdminToken, bulkImportUploa
   } = { created: 0, skipped: 0, failed: 0, items: [] };
 
   try {
-    const rows = parseCsv(fs.readFileSync(csvFile.path, "utf8"));
+    const rows = parseCsv(await fs.promises.readFile(csvFile.path, "utf8"));
     if (!rows.length) {
       res.status(400).json({ error: "The uploaded CSV is empty." });
       return;
@@ -3668,7 +3388,7 @@ app.post("/api/admin/users/bulk-import", requireSuperAdminToken, bulkImportUploa
     });
     res.json(report);
   } finally {
-    removeFileIfExists(csvFile.path);
+    await removeFileIfExists(csvFile.path);
   }
 }));
 
@@ -3682,7 +3402,7 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
   }
 
   const auth = await getAuthContext(req);
-  const tempExtractDir = fs.mkdtempSync(path.join(importsDir, "bulk-"));
+  const tempExtractDir = await fs.promises.mkdtemp(path.join(importsDir, "bulk-"));
   const createdIds: string[] = [];
   const pendingRows: Array<{
     row: number;
@@ -3704,7 +3424,7 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
   };
 
   try {
-    const csvRows = parseCsv(fs.readFileSync(csvFile.path, "utf8"));
+    const csvRows = parseCsv(await fs.promises.readFile(csvFile.path, "utf8"));
     if (!csvRows.length) {
       res.status(400).json({ error: "The uploaded CSV is empty." });
       return;
@@ -3713,7 +3433,7 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
     let extractedFiles = new Map<string, string>();
     if (zipFile) {
       await inspectImportArchive(zipFile.path);
-      extractedFiles = extractImportArchive(zipFile.path, tempExtractDir);
+      extractedFiles = await extractImportArchive(zipFile.path, tempExtractDir);
     }
     const seenLots = new Set<string>();
     const seenSkus = new Set<string>();
@@ -3858,9 +3578,9 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
     });
     res.json(report);
   } finally {
-    removeFileIfExists(csvFile.path);
-    if (zipFile) removeFileIfExists(zipFile.path);
-    fs.rmSync(tempExtractDir, { recursive: true, force: true });
+    await removeFileIfExists(csvFile.path);
+    if (zipFile) await removeFileIfExists(zipFile.path);
+    await fs.promises.rm(tempExtractDir, { recursive: true, force: true });
   }
 }));
 
@@ -4089,6 +3809,9 @@ app.use((error: unknown, req: express.Request, res: express.Response, next: expr
 });
 
 const start = async () => {
+  if (runtimeEnvironment === "production" && notificationTransport === "file") {
+    throw new Error("NOTIFY_TRANSPORT=file is not allowed in production. Use smtp or noop.");
+  }
   await handleSupabase(await supabase.from("roles").select("name").limit(1));
   await verifyRequiredSchemaMigrations();
   await detectSecurityEventsTable();

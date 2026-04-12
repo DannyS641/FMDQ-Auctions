@@ -74,7 +74,7 @@ export const canAccessDocumentVisibility = (context: DocumentAccessContext, visi
   if (context.itemArchived) return false;
   if (visibility === "admin_only") return false;
   if (visibility === "bidder_visible") {
-    return context.role === "Bidder" && !context.itemEnded;
+    return (context.role === "Bidder" && !context.itemEnded) || context.role === "ShopOwner";
   }
   if (visibility === "winner_only") {
     return context.role === "Bidder" && context.itemEnded && context.isWinner && context.reserveState !== "reserve_not_met";

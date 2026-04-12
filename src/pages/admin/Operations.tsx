@@ -575,13 +575,13 @@ function AuditsTab() {
   const [selectedUser, setSelectedUser] = useState("all");
   const [selectedTopic, setSelectedTopic] = useState("all");
   const [selectedAction, setSelectedAction] = useState("all");
-  const { data: audits, isLoading, isError } = useQuery({
-    queryKey: queryKeys.admin.audits(),
-    queryFn: () => getAudits(),
+  const { data: auditPage, isLoading, isError } = useQuery({
+    queryKey: queryKeys.admin.audits({ page, pageSize: ACTIVITY_PAGE_SIZE }),
+    queryFn: () => getAudits({ page, pageSize: ACTIVITY_PAGE_SIZE }),
     staleTime: 30_000,
   });
 
-  const activityRows = useMemo(() => (audits ?? []).map(buildActivityView), [audits]);
+  const activityRows = useMemo(() => (auditPage?.items ?? []).map(buildActivityView), [auditPage]);
   const userOptions = useMemo(
     () => Array.from(new Set(activityRows.map((entry) => entry.userLabel))).sort(),
     [activityRows]
@@ -606,17 +606,13 @@ function AuditsTab() {
     [activityRows, selectedAction, selectedTopic, selectedUser]
   );
 
-  const totalPages = Math.max(1, Math.ceil(filteredActivityRows.length / ACTIVITY_PAGE_SIZE));
-  const pagedAudits = useMemo(() => {
-    const start = (page - 1) * ACTIVITY_PAGE_SIZE;
-    return filteredActivityRows.slice(start, start + ACTIVITY_PAGE_SIZE);
-  }, [filteredActivityRows, page]);
+  const totalPages = Math.max(1, auditPage?.pageSize ? Math.ceil((auditPage.total ?? 0) / auditPage.pageSize) : 1);
 
   const { mutate: exportActivityCsv, isPending: exportingActivity } = useMutation({
-    mutationFn: async () => {
-      const rows: Array<Array<unknown>> = [
-        ["Date", "User", "Role", "IP", "Topic", "Context", "Meta", "Action"],
-        ...filteredActivityRows.map((entry) => [
+        mutationFn: async () => {
+          const rows: Array<Array<unknown>> = [
+            ["Date", "User", "Role", "IP", "Topic", "Context", "Meta", "Action"],
+        ...activityRows.map((entry) => [
           entry.dateValue,
           entry.userLabel,
           entry.roleLabel,
@@ -692,7 +688,7 @@ function AuditsTab() {
             size="sm"
             onClick={() => {
               setPage(1);
-              void queryClient.invalidateQueries({ queryKey: queryKeys.admin.audits() });
+              void queryClient.invalidateQueries({ queryKey: queryKeys.admin.audits({}) });
             }}
           >
             <RefreshCw size={14} />
@@ -724,7 +720,7 @@ function AuditsTab() {
                   <td colSpan={7} className="px-5 py-8 text-center text-sm text-slate">No activity entries.</td>
                 </tr>
               ) : (
-                pagedAudits.map((entry) => (
+                filteredActivityRows.map((entry) => (
                   <tr key={entry.id} className="hover:bg-ash/50">
                     <td className="px-5 py-3">
                       <p className="text-sm font-semibold text-ink">{entry.dateLabel}</p>
@@ -751,7 +747,7 @@ function AuditsTab() {
         </div>
       )}
 
-      {!isLoading && !isError && (audits?.length ?? 0) > ACTIVITY_PAGE_SIZE && (
+      {!isLoading && !isError && (auditPage?.total ?? 0) > ACTIVITY_PAGE_SIZE && (
         <div className="flex items-center justify-between rounded-3xl border border-ink/10 bg-white px-4 py-3">
           <p className="text-sm text-slate">
             Page {page} of {totalPages}
@@ -786,17 +782,14 @@ function NotificationsTab() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
 
-  const { data: notifications, isLoading, isError } = useQuery({
-    queryKey: queryKeys.admin.notifications(),
-    queryFn: getNotifications,
+  const { data: notificationPage, isLoading, isError } = useQuery({
+    queryKey: queryKeys.admin.notifications({ page, pageSize: NOTIFICATION_PAGE_SIZE }),
+    queryFn: () => getNotifications({ page, pageSize: NOTIFICATION_PAGE_SIZE }),
     staleTime: 30_000,
   });
 
-  const totalPages = Math.max(1, Math.ceil((notifications?.length ?? 0) / NOTIFICATION_PAGE_SIZE));
-  const pagedNotifications = useMemo(() => {
-    const start = (page - 1) * NOTIFICATION_PAGE_SIZE;
-    return (notifications ?? []).slice(start, start + NOTIFICATION_PAGE_SIZE);
-  }, [notifications, page]);
+  const notifications = notificationPage?.items ?? [];
+  const totalPages = Math.max(1, notificationPage?.pageSize ? Math.ceil((notificationPage.total ?? 0) / notificationPage.pageSize) : 1);
 
   const { mutate: process, isPending: processing } = useMutation({
     mutationFn: processNotifications,
@@ -811,10 +804,10 @@ function NotificationsTab() {
   });
 
   const { mutate: exportNotificationsCsv, isPending: exportingNotifications } = useMutation({
-    mutationFn: async () => {
-      const rows: Array<Array<unknown>> = [
-        ["Recipient", "Subject", "Status", "Created", "Processed", "Attempts", "Error"],
-        ...((notifications ?? []).map((notification) => [
+        mutationFn: async () => {
+          const rows: Array<Array<unknown>> = [
+            ["Recipient", "Subject", "Status", "Created", "Processed", "Attempts", "Error"],
+        ...(notifications.map((notification) => [
           notification.recipient,
           notification.subject,
           notification.status,
@@ -858,12 +851,12 @@ function NotificationsTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-ink/5">
-              {(!notifications || notifications.length === 0) ? (
+              {notifications.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-5 py-8 text-center text-sm text-slate">No notifications in queue.</td>
                 </tr>
               ) : (
-                pagedNotifications.map((n) => (
+                notifications.map((n) => (
                   <tr key={n.id} className="hover:bg-ash/50">
                     <td className="px-5 py-3 text-sm text-ink">{n.recipient}</td>
                     <td className="hidden px-5 py-3 text-slate sm:table-cell">{n.subject}</td>
@@ -881,7 +874,7 @@ function NotificationsTab() {
         </div>
       )}
 
-      {!isLoading && !isError && (notifications?.length ?? 0) > NOTIFICATION_PAGE_SIZE && (
+      {!isLoading && !isError && (notificationPage?.total ?? 0) > NOTIFICATION_PAGE_SIZE && (
         <div className="flex items-center justify-between rounded-3xl border border-ink/10 bg-white px-4 py-3">
           <p className="text-sm text-slate">
             Page {page} of {totalPages}
