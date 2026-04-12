@@ -16,7 +16,7 @@ const actionClass =
   "inline-flex min-h-[3rem] w-full max-w-full shrink-0 items-center justify-center gap-2 rounded-[0.9rem] bg-white px-6 text-sm font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-neon sm:w-auto sm:whitespace-nowrap";
 
 export function AppHeader() {
-  const { isSignedIn, isAdmin, role, session, signOut } = useAuth();
+  const { isSignedIn, isAdmin, canViewItemOperations, role, session, signOut } = useAuth();
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
@@ -31,7 +31,7 @@ export function AppHeader() {
       <NavLink to="/bidding" className={navLinkClass}>Auction desk</NavLink>
       <NavLink to="/dashboard" className={navLinkClass}>Dashboard</NavLink>
       <NavLink to="/my-bids" className={navLinkClass}>My bids</NavLink>
-      {isAdmin && <NavLink to="/admin/items" className={navLinkClass}>Items</NavLink>}
+      {canViewItemOperations && <NavLink to="/admin/items" className={navLinkClass}>Items</NavLink>}
       {isAdmin && <NavLink to="/operations" className={navLinkClass}>Operations</NavLink>}
     </>
   );

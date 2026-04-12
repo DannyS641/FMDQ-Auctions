@@ -8,15 +8,17 @@ import { BidForm } from "@/components/auction/BidForm";
 import { CountdownDisplay } from "@/components/auction/CountdownDisplay";
 import { useAuctionItem } from "@/hooks/use-auction-items";
 import { useAuth } from "@/context/auth-context";
+import { exportItemsCsv } from "@/api/items";
 import { formatMoney, formatDate } from "@/lib/formatters";
 import { getAuctionStatus, getReserveOutcome } from "@/lib/auction-utils";
+import { toast } from "sonner";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 const BID_HISTORY_PAGE_SIZE = 5;
 
 export default function ItemDetail() {
   const { id } = useParams<{ id: string }>();
-  const { canViewReserve, isAdmin } = useAuth();
+  const { canViewReserve, isAdmin, isShopOwner } = useAuth();
   const { data: item, isLoading, isError } = useAuctionItem(id ?? null);
   const [bidHistoryPage, setBidHistoryPage] = useState(1);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
@@ -36,6 +38,23 @@ export default function ItemDetail() {
     const start = (bidHistoryPage - 1) * BID_HISTORY_PAGE_SIZE;
     return sortedBids.slice(start, start + BID_HISTORY_PAGE_SIZE);
   }, [bidHistoryPage, sortedBids]);
+
+  const handleExportAuctionDetails = async () => {
+    try {
+      const blob = await exportItemsCsv();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `auction-details-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Auction details exported.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not export auction details.");
+    }
+  };
 
   useEffect(() => {
     setActiveImageIndex(0);
@@ -231,27 +250,40 @@ export default function ItemDetail() {
                 Edit item
               </Link>
             )}
+            {isShopOwner && (
+              <button
+                type="button"
+                onClick={() => void handleExportAuctionDetails()}
+                className="mt-5 inline-flex rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200"
+              >
+                Export auction details
+              </button>
+            )}
           </div>
 
-          {/* Bid form */}
-          <div className="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
-            <p className="text-xs uppercase tracking-[0.3em] text-slate">Place bid</p>
-            <div className="mt-4">
-              <BidForm item={item} />
+          {!isShopOwner && (
+            <div className="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
+              <p className="text-xs uppercase tracking-[0.3em] text-slate">Place bid</p>
+              <div className="mt-4">
+                <BidForm item={item} />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Bid history */}
           <div className="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
-            <p className="text-xs uppercase tracking-[0.3em] text-slate">Bid history</p>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate">{isShopOwner ? "User bid history" : "Bid history"}</p>
             <div className="mt-4 space-y-3">
               {bids.length === 0 ? (
                 <p className="text-sm text-slate">No bids recorded yet.</p>
               ) : (
                 visibleBids.map((bid, i) => (
                     <div key={i} className="flex items-center justify-between rounded-2xl border border-ink/10 bg-ink/5 px-4 py-2 text-sm">
-                      <span>Anonymous bidder</span>
-                      <span className="font-semibold">{formatMoney(bid.amount)}</span>
+                      <div className="min-w-0">
+                        <div className="font-medium text-ink">{isShopOwner || isAdmin ? bid.bidder : "Anonymous bidder"}</div>
+                        <div className="text-xs text-slate">{formatDate(bid.time || bid.createdAt || "")}</div>
+                      </div>
+                      <span className="pl-4 font-semibold">{formatMoney(bid.amount)}</span>
                     </div>
                   ))
               )}

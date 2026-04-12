@@ -18,9 +18,11 @@ type AuthContextValue = {
   isSignedIn: boolean;
   role: Role;
   isAdmin: boolean;
+  isShopOwner: boolean;
   isSuperAdmin: boolean;
   canBid: boolean;
   canViewReserve: boolean;
+  canViewItemOperations: boolean;
   signOut: () => Promise<void>;
   invalidateSession: () => Promise<void>;
 };
@@ -58,9 +60,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isSignedIn: session.signedIn,
       role: session.role,
       isAdmin: session.role === "Admin" || session.role === "SuperAdmin",
+      isShopOwner: session.role === "ShopOwner",
       isSuperAdmin: session.role === "SuperAdmin",
       canBid: session.role === "Bidder" || session.role === "Admin",
       canViewReserve: session.role === "Admin" || session.role === "SuperAdmin",
+      canViewItemOperations: session.role === "ShopOwner" || session.role === "Admin" || session.role === "SuperAdmin",
       signOut,
       invalidateSession,
     }),

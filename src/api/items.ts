@@ -1,6 +1,8 @@
 import { apiClient } from "@/lib/api-client";
 import type { AuctionItem, DashboardPayload, UserBidRecord, WonItem, BulkImportReport, LandingStats } from "@/types";
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+
 export const getItems = async (includeArchived = false): Promise<AuctionItem[]> =>
   apiClient<AuctionItem[]>(`/api/items${includeArchived ? "?includeArchived=1" : ""}`);
 
@@ -62,3 +64,17 @@ export const createCategory = async (name: string): Promise<{ created: boolean }
 
 export const deleteCategory = async (name: string): Promise<{ ok: boolean }> =>
   apiClient(`/api/categories/${encodeURIComponent(name)}`, { method: "DELETE" });
+
+export const exportItemsCsv = async (): Promise<Blob> => {
+  const response = await fetch(`${API_BASE}/api/exports/items.csv`, {
+    method: "GET",
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error ?? "Could not export auction details.");
+  }
+
+  return response.blob();
+};

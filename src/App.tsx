@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { Routes, Route, Outlet } from "react-router-dom";
 import { ProtectedRoute } from "@/components/routing/ProtectedRoute";
 import { AdminRoute } from "@/components/routing/AdminRoute";
+import { ItemOperationsRoute } from "@/components/routing/ItemOperationsRoute";
 import { AppHeader } from "@/components/layout/AppHeader";
 import { Footer } from "@/components/layout/Footer";
 import { PageSpinner } from "@/components/ui/Spinner";
@@ -92,9 +93,13 @@ export function App() {
           <Route path="/profile" element={<Profile />} />
         </Route>
 
+        {/* Item operations viewers */}
+        <Route element={<ItemOperationsRoute />}>
+          <Route path="/admin/items" element={<AdminItems />} />
+        </Route>
+
         {/* Admin only */}
         <Route element={<AdminRoute />}>
-          <Route path="/admin/items" element={<AdminItems />} />
           <Route path="/admin/items/new" element={<AdminItemForm />} />
           <Route path="/admin/items/:id" element={<AdminItemForm />} />
           <Route path="/operations" element={<Operations />} />

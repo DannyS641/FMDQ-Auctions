@@ -275,7 +275,7 @@ type StoredItem = {
 };
 type AuditEntry = {
   eventType: string;
-  entityType: "item" | "bid" | "user" | "system" | "export";
+  entityType: "item" | "bid" | "user" | "system" | "export" | "auth";
   entityId: string;
   actor: string;
   actorType: "system" | "user" | "integration";
@@ -1136,6 +1136,11 @@ const canAccessItemDocument = (auth: AuthContext, item: StoredItem, visibility: 
 
 const sanitizeItemForAuth = (item: StoredItem, auth: AuthContext): StoredItem => ({
   ...item,
+  bids: item.bids.map((bid) => ({
+    ...bid,
+    bidder: auth.role === "ShopOwner" || auth.adminAuthorized ? bid.bidder : "Anonymous bidder",
+    bidderUserId: auth.role === "ShopOwner" || auth.adminAuthorized ? bid.bidderUserId : undefined
+  })),
   documents: item.documents.filter((document) => canAccessItemDocument(auth, item, document.visibility || "bidder_visible"))
 });
 
@@ -2502,6 +2507,17 @@ const requireAdminToken = asyncHandler(async (req, res, next) => {
   next();
 });
 
+const requireItemOperationsViewerToken = asyncHandler(async (req, res, next) => {
+  const auth = await getAuthContext(req);
+  if (!(auth.adminAuthorized || auth.role === "ShopOwner")) {
+    res.status(403).json({
+      error: "Item operations access requires an authenticated ShopOwner or Admin account."
+    });
+    return;
+  }
+  next();
+});
+
 const requireSuperAdminToken = asyncHandler(async (req, res, next) => {
   const auth = await getAuthContext(req);
   if (!auth.signedIn || auth.role !== "SuperAdmin") {
@@ -3031,7 +3047,7 @@ app.get("/uploads/images/:file", asyncHandler(async (req, res) => {
       );
       const item = row ? await getItemById(row.item_id, true) : null;
       const itemVisible = item && !item.archivedAt;
-      if (!auth.adminAuthorized && (!itemVisible || auth.role !== "Bidder")) {
+      if (!auth.adminAuthorized && (!itemVisible || !(auth.role === "Bidder" || auth.role === "ShopOwner"))) {
         res.status(403).json({ error: "You do not have access to this image." });
         return;
       }
@@ -3191,8 +3207,9 @@ app.delete("/api/categories/:name", requireAdminToken, asyncHandler(async (req, 
   res.json({ ok: true });
 }));
 
-app.get("/api/exports/items.csv", requireAdminToken, asyncHandler(async (req, res) => {
-  const items = await getItems();
+app.get("/api/exports/items.csv", requireItemOperationsViewerToken, asyncHandler(async (req, res) => {
+  const auth = await getAuthContext(req);
+  const items = await getItems(auth.adminAuthorized);
   const rows = items.map((item) => ({
     id: item.id,
     title: item.title,
@@ -3209,7 +3226,6 @@ app.get("/api/exports/items.csv", requireAdminToken, asyncHandler(async (req, re
     endTime: item.endTime,
     bidCount: item.bids.length
   }));
-  const auth = await getAuthContext(req);
   await appendAudit(req, {
     eventType: "EXPORT_ITEMS",
     entityType: "export",
@@ -4050,7 +4066,7 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
     item.currentBid > 0
       ? {
           bidder: "",
-          bidderUserId: bidResult.previousBidderUserId || null,
+          bidderUserId: bidResult.previousBidderUserId || undefined,
           amount: item.currentBid,
           time: "",
           createdAt: ""
