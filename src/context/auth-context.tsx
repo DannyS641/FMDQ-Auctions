@@ -7,7 +7,7 @@ import {
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getSession, logout as apiLogout } from "@/api/auth";
-import { clearAuthSession, readAuthSession } from "@/lib/auth-session";
+import { clearAuthSession } from "@/lib/auth-session";
 import { queryKeys } from "@/lib/query-keys";
 import type { AuthSession, Role } from "@/types";
 import { DEFAULT_SESSION } from "@/types";
@@ -35,8 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const { data: session = DEFAULT_SESSION, isLoading } = useQuery({
     queryKey: queryKeys.auth.session(),
     queryFn: getSession,
-    initialData: readAuthSession(), // render immediately from sessionStorage
-    staleTime: 60_000,             // 1 min — refetches quickly after sign-in/out
+    staleTime: 60_000,
     retry: false,
   });
 

@@ -20,8 +20,9 @@ export const queryKeys = {
     users: () => ["admin", "users"] as const,
     roles: () => ["admin", "roles"] as const,
     operations: () => ["admin", "operations"] as const,
-    audits: (filters?: Record<string, string>) =>
-      ["admin", "audits", filters ?? {}] as const,
-    notifications: () => ["admin", "notifications"] as const,
+    audits: (params?: Record<string, string | number>) =>
+      ["admin", "audits", params ?? {}] as const,
+    notifications: (params?: Record<string, string | number>) =>
+      ["admin", "notifications", params ?? {}] as const,
   },
 } as const;

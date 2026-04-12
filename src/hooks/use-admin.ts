@@ -54,7 +54,7 @@ export function useAudits(filters: Record<string, string> = {}) {
 export function useNotifications() {
   return useQuery({
     queryKey: queryKeys.admin.notifications(),
-    queryFn: getNotifications,
+    queryFn: () => getNotifications(),
     staleTime: 15_000,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
