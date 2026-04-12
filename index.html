@@ -13,7 +13,9 @@
     <style>
       body[data-app-loading="true"] {
         margin: 0;
-        background: #e6e8eb;
+        background: #fff;
+        color: #0f172a;
+        font-family: "Space Grotesk", system-ui, sans-serif;
       }
 
       body[data-app-loading="true"] [data-app-root] {
@@ -30,13 +32,67 @@
         min-height: 100vh;
         padding: 24px;
       }
+
+      .boot-splash-card {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: min(520px, 84vw);
+        min-height: 260px;
+        border-radius: 28px;
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 10px 24px rgba(148, 163, 184, 0.08);
+      }
+
+      .boot-splash-card::before {
+        content: "";
+        position: absolute;
+        inset: 34px;
+        border-radius: 999px;
+        background: radial-gradient(circle, rgba(29, 50, 108, 0.14), transparent 68%);
+        filter: blur(20px);
+        animation: bootGlow 2.2s ease-in-out infinite;
+      }
+
+      .boot-splash-logo {
+        position: relative;
+        z-index: 1;
+        display: block;
+        width: min(360px, 64vw);
+        height: auto;
+        filter: drop-shadow(0 12px 24px rgba(29, 50, 108, 0.12));
+        mix-blend-mode: multiply;
+        animation: bootBlink 1.8s ease-in-out infinite;
+      }
+
+      @keyframes bootBlink {
+        0%, 100% {
+          opacity: 0.45;
+          transform: scale(0.985) translateY(0);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1.015) translateY(-2px);
+        }
+      }
+
+      @keyframes bootGlow {
+        0%, 100% {
+          opacity: 0.45;
+          transform: scale(0.96);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1.02);
+        }
+      }
     </style>
   </head>
   <body data-app-loading="true">
     <div id="app-loader" data-app-loader>
       <div class="boot-splash-card">
         <img src="/slides/fmdq-logo.png" alt="FMDQ" class="boot-splash-logo" />
-        <p class="boot-splash-label">Loading auctions portal</p>
       </div>
     </div>
     <div id="root" class="min-h-screen bg-ash flex flex-col" data-app-root>

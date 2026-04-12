@@ -4,6 +4,7 @@ import { formatMoney } from "@/lib/formatters";
 import { getMinBid, canBid as canBidCheck } from "@/lib/auction-utils";
 import { usePlaceBid } from "@/hooks/use-place-bid";
 import { useAuth } from "@/context/auth-context";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { AuctionItem } from "@/types";
 
 type Props = {
@@ -15,7 +16,7 @@ export function BidForm({ item }: Props) {
   const { mutate, isPending } = usePlaceBid();
   const [bidAmount, setBidAmount] = useState<number>(() => getMinBid(item));
   const [hint, setHint] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   const minBid = getMinBid(item);
   const { allowed, message } = canBidCheck(item, role, isSignedIn);
@@ -35,22 +36,22 @@ export function BidForm({ item }: Props) {
       setHint(`Bids must increase by ${formatMoney(item.increment)}.`);
       return;
     }
-    if (!confirmed) {
-      setConfirmed(true);
-      setHint(`Confirm bid of ${formatMoney(bidAmount)}? Click Place bid to confirm.`);
-      return;
-    }
+    setReviewOpen(true);
+    setHint("");
+  };
+
+  const handleConfirmBid = () => {
     setHint("Submitting bid…");
     mutate(
       { itemId: item.id, amount: bidAmount, expectedCurrentBid: item.currentBid },
       {
         onSuccess: () => {
           setBidAmount(getMinBid(item));
-          setConfirmed(false);
+          setReviewOpen(false);
           setHint("");
         },
         onError: (err) => {
-          setConfirmed(false);
+          setReviewOpen(false);
           setHint(err instanceof Error ? err.message : "Bid failed. Please try again.");
         },
       }
@@ -65,7 +66,7 @@ export function BidForm({ item }: Props) {
           value={bidAmount || ""}
           min={minBid}
           step={item.increment}
-          onChange={(e) => { setBidAmount(Number(e.target.value)); setConfirmed(false); setHint(""); }}
+          onChange={(e) => { setBidAmount(Number(e.target.value)); setReviewOpen(false); setHint(""); }}
           placeholder={formatMoney(item.currentBid || item.startBid)}
           className="no-spin w-full rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm text-ink placeholder:text-slate/60 focus:outline-none focus:ring-2 focus:ring-neon disabled:opacity-50"
           disabled={!allowed}
@@ -85,7 +86,7 @@ export function BidForm({ item }: Props) {
         disabled={!allowed || isPending}
         className="w-full rounded-[0.9rem] bg-neon px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200 hover:bg-neon/90 disabled:opacity-60"
       >
-        {isPending ? "Submitting…" : confirmed ? "Place bid" : "Review bid"}
+        {isPending ? "Submitting…" : "Review bid"}
       </button>
       {!isSignedIn && (
         <Link
@@ -102,6 +103,16 @@ export function BidForm({ item }: Props) {
           {" · "}Increment: <span className="font-semibold text-ink">{formatMoney(item.increment)}</span>
         </p>
       )}
+
+      <ConfirmDialog
+        open={reviewOpen}
+        onOpenChange={setReviewOpen}
+        title="Review bid"
+        description={`You are about to place a bid of ${formatMoney(bidAmount)} for ${item.title}. This action cannot be undone.`}
+        confirmLabel="Place bid"
+        isLoading={isPending}
+        onConfirm={handleConfirmBid}
+      />
     </form>
   );
 }

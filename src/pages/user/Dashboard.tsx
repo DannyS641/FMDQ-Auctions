@@ -41,7 +41,7 @@ export default function Dashboard() {
     <PageShell>
       <section>
         <p className="text-xs uppercase tracking-[0.3em] text-slate">Bidder workspace</p>
-        <h1 className="mt-2 break-words text-2xl font-semibold text-ink sm:text-3xl">
+        <h1 className="mt-2 break-words text-[21px] font-semibold text-neon sm:text-[27px]">
           Welcome, {session.displayName}
         </h1>
         <p className="mt-3 text-sm text-slate">

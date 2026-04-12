@@ -35,7 +35,7 @@ export const canBid = (
   if (!signedIn) {
     return { allowed: false, message: "Sign in to place a bid." };
   }
-  if (role !== "Bidder" && role !== "Admin" && role !== "SuperAdmin") {
+  if (role !== "Bidder" && role !== "Admin") {
     return { allowed: false, message: "Your account role does not allow bidding." };
   }
   return { allowed: true, message: "" };

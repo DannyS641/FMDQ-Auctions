@@ -21,7 +21,7 @@ export default function MyBids() {
     <PageShell>
       <section>
         <p className="text-xs uppercase tracking-[0.3em] text-slate">Bidder workspace</p>
-        <h1 className="mt-2 text-2xl font-semibold text-ink sm:text-3xl">My bids</h1>
+        <h1 className="mt-2 text-[21px] font-semibold text-neon sm:text-[27px]">My bids</h1>
         <p className="mt-3 text-sm text-slate">
           {isError
             ? "Unable to load bid history right now."

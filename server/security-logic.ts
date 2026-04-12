@@ -86,8 +86,14 @@ export const ensureCanManageTargetRoles = (
   actorRole: "Guest" | "Bidder" | "ShopOwner" | "Admin" | "SuperAdmin",
   targetRoles: string[]
 ) => {
+  if (actorRole !== "Admin" && actorRole !== "SuperAdmin") {
+    return { ok: false as const, error: "Only admin accounts can manage other users." };
+  }
   if (targetRoles.includes("SuperAdmin") && actorRole !== "SuperAdmin") {
     return { ok: false as const, error: "Only a SuperAdmin can manage another SuperAdmin account." };
+  }
+  if (targetRoles.includes("Admin") && actorRole !== "SuperAdmin") {
+    return { ok: false as const, error: "Only a SuperAdmin can manage another Admin account." };
   }
   return { ok: true as const };
 };

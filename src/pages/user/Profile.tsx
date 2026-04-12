@@ -65,7 +65,7 @@ export default function Profile() {
         {/* Profile card */}
         <div className="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
           <p className="text-xs uppercase tracking-[0.3em] text-slate">My profile</p>
-          <h1 className="mt-2 break-words text-2xl font-semibold text-ink sm:text-3xl">{profile.displayName}</h1>
+          <h1 className="mt-2 break-words text-[21px] font-semibold text-neon sm:text-[27px]">{profile.displayName}</h1>
           <div className="mt-6 space-y-3 text-sm text-ink">
             <div><span className="text-slate">Email: </span><span className="font-semibold">{profile.email}</span></div>
             <div><span className="text-slate">Primary role: </span><span className="font-semibold">{profile.role}</span></div>

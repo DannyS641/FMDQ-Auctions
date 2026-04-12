@@ -4,9 +4,11 @@ import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
+import AdmZip from "adm-zip";
 import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import nodemailer from "nodemailer";
+import sharp from "sharp";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import {
@@ -66,6 +68,10 @@ const smtpUser = process.env.SMTP_USER || "";
 const smtpPass = process.env.SMTP_PASS || "";
 const smtpFrom = process.env.SMTP_FROM || smtpUser || "no-reply@fmdq.example";
 const smtpSecure = String(process.env.SMTP_SECURE || "").toLowerCase() === "true" || smtpPort === 465;
+const smtpConnectionTimeoutMs = Math.max(Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10_000), 1_000);
+const smtpGreetingTimeoutMs = Math.max(Number(process.env.SMTP_GREETING_TIMEOUT_MS || 10_000), 1_000);
+const smtpSocketTimeoutMs = Math.max(Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 15_000), 1_000);
+const smtpVerifyTimeoutMs = Math.max(Number(process.env.SMTP_VERIFY_TIMEOUT_MS || 12_000), 1_000);
 const appBaseUrl = (process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/+$/, "");
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
@@ -269,7 +275,7 @@ type StoredItem = {
 };
 type AuditEntry = {
   eventType: string;
-  entityType: "item" | "bid" | "user" | "system" | "export";
+  entityType: "item" | "bid" | "user" | "system" | "export" | "auth";
   entityId: string;
   actor: string;
   actorType: "system" | "user" | "integration";
@@ -375,6 +381,13 @@ type NotificationRow = {
   claim_expires_at: string | null;
   error_message: string | null;
 };
+type PaginatedResult<T> = {
+  items: T[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
 
 const defaultCategories = ["Cars", "Furniture", "Household Appliances", "Kitchen Appliances", "Phones", "Other"];
 const smtpTransporter = notificationTransport === "smtp" && smtpHost && smtpUser && smtpPass
@@ -382,6 +395,9 @@ const smtpTransporter = notificationTransport === "smtp" && smtpHost && smtpUser
       host: smtpHost,
       port: smtpPort,
       secure: smtpSecure,
+      connectionTimeout: smtpConnectionTimeoutMs,
+      greetingTimeout: smtpGreetingTimeoutMs,
+      socketTimeout: smtpSocketTimeoutMs,
       auth: {
         user: smtpUser,
         pass: smtpPass
@@ -494,6 +510,8 @@ const normalizeEmail = (value: string) => value.trim().toLowerCase();
 const sanitizeDisplayName = (value: string) => value.trim().replace(/\s+/g, " ");
 const buildEmailVerificationUrl = (token: string) => `${appBaseUrl}/verify?token=${encodeURIComponent(token)}`;
 const buildPasswordResetUrl = (token: string) => `${appBaseUrl}/reset-password?token=${encodeURIComponent(token)}`;
+const buildSignInUrl = () => `${appBaseUrl}/signin`;
+const buildItemUrl = (itemId: string) => `${appBaseUrl}/bidding/${encodeURIComponent(itemId)}`;
 const isStrongPassword = (value: string) =>
   value.length >= 8 &&
   /[A-Z]/.test(value) &&
@@ -706,57 +724,22 @@ const uploadFileToManagedStorage = async (sourcePath: string, kind: "image" | "d
   };
 };
 
-const getImageDimensions = async (filePath: string) => {
-  const { stdout } = await execFileAsync("/usr/bin/sips", ["-g", "pixelWidth", "-g", "pixelHeight", filePath], {
-    timeout: 15_000,
-    maxBuffer: 1024 * 1024,
-  });
-  const widthMatch = stdout.match(/pixelWidth:\s*(\d+)/);
-  const heightMatch = stdout.match(/pixelHeight:\s*(\d+)/);
-  const width = Number(widthMatch?.[1] || 0);
-  const height = Number(heightMatch?.[1] || 0);
-  if (!width || !height) {
-    throw new Error("Could not read uploaded image dimensions.");
-  }
-  return { width, height };
-};
-
 const normalizeImageForUpload = async (sourcePath: string, originalName: string) => {
   const normalizedName = replaceFileExtension(originalName, ".jpg");
   const normalizedPath = path.join(tempUploadsDir, `${Date.now()}-${randomUUID()}-${normalizedName}`);
-  const { width, height } = await getImageDimensions(sourcePath);
-  const scale = Math.min(normalizedImageWidth / width, normalizedImageHeight / height, 1);
-  const targetWidth = Math.max(1, Math.round(width * scale));
-  const targetHeight = Math.max(1, Math.round(height * scale));
-
-  await execFileAsync(
-    "/usr/bin/sips",
-    [
-      "-s", "format", "jpeg",
-      "--resampleHeightWidth", String(targetHeight), String(targetWidth),
-      sourcePath,
-      "--out", normalizedPath,
-    ],
-    {
-      timeout: 30_000,
-      maxBuffer: 10 * 1024 * 1024,
-    }
-  );
-
-  if (targetWidth !== normalizedImageWidth || targetHeight !== normalizedImageHeight) {
-    await execFileAsync(
-      "/usr/bin/sips",
-      [
-        "--padToHeightWidth", String(normalizedImageHeight), String(normalizedImageWidth),
-        "--padColor", "FFFFFF",
-        normalizedPath,
-      ],
-      {
-        timeout: 30_000,
-        maxBuffer: 10 * 1024 * 1024,
-      }
-    );
+  const image = sharp(sourcePath, { failOn: "error" });
+  const metadata = await image.metadata();
+  if (!metadata.width || !metadata.height) {
+    throw new Error("Could not read uploaded image dimensions.");
   }
+  await image
+    .resize(normalizedImageWidth, normalizedImageHeight, {
+      fit: "contain",
+      withoutEnlargement: true,
+      background: { r: 255, g: 255, b: 255, alpha: 1 }
+    })
+    .jpeg({ quality: 88, mozjpeg: true })
+    .toFile(normalizedPath);
 
   return {
     path: normalizedPath,
@@ -857,6 +840,12 @@ const toCsv = (rows: Array<Record<string, string | number | boolean>>) => {
   if (!rows.length) return "";
   const headers = Object.keys(rows[0]);
   return [headers.join(","), ...rows.map((row) => headers.map((header) => csvEscape(row[header] ?? "")).join(","))].join("\n");
+};
+
+const parsePaginationValue = (value: unknown, fallback: number, max: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.floor(parsed), 1), max);
 };
 
 const handleSupabase = <T>(result: { data: T; error: { message: string } | null }) => {
@@ -1063,18 +1052,59 @@ const getAuditActorRoleLookup = async () => {
   return roleLookup;
 };
 
-const mapAuditRowToEntry = (row: AuditRow, actorRoleLookup?: Map<string, string | null>) => ({
-  id: row.id,
-  eventType: row.event_type,
-  entityType: row.entity_type,
-  entityId: row.entity_id,
-  actor: row.actor,
-  actorType: row.actor_type,
-  actorRole: actorRoleLookup?.get(row.actor) ?? undefined,
-  requestId: row.request_id,
-  details: typeof row.details_json === "string" ? row.details_json : JSON.stringify(row.details_json || {}),
-  createdAt: row.created_at
-});
+const SENSITIVE_AUDIT_DETAIL_KEYS = new Set([
+  "sessionId",
+  "bidId",
+  "bidderUserId",
+  "auctionItemId",
+  "claimToken",
+  "resetToken",
+  "csrfToken",
+  "actorUserId"
+]);
+
+const redactSensitiveAuditDetails = (value: Record<string, unknown>) => {
+  return Object.entries(value).reduce<Record<string, unknown>>((acc, [key, entryValue]) => {
+    if (SENSITIVE_AUDIT_DETAIL_KEYS.has(key)) return acc;
+    acc[key] = entryValue;
+    return acc;
+  }, {});
+};
+
+const sanitizeNotificationPayloadForAdmin = (payload: Record<string, unknown>) => {
+  return Object.entries(payload).reduce<Record<string, unknown>>((acc, [key, value]) => {
+    if (/token/i.test(key)) return acc;
+    if (/reseturl/i.test(key)) return acc;
+    if (/verifyurl/i.test(key)) return acc;
+    if (/itemurl/i.test(key)) return acc;
+    if (key === "_meta" && typeof value === "object" && value !== null) {
+      const meta = value as Record<string, unknown>;
+      acc[key] = {
+        attempts: meta.attempts,
+        lastError: meta.lastError
+      };
+      return acc;
+    }
+    acc[key] = value;
+    return acc;
+  }, {});
+};
+
+const mapAuditRowToEntry = (row: AuditRow, actorRoleLookup?: Map<string, string | null>) => {
+  const parsedDetails = redactSensitiveAuditDetails(parseAuditDetails(row.details_json));
+  return {
+    id: row.id,
+    eventType: row.event_type,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    actor: row.actor,
+    actorType: row.actor_type,
+    actorRole: actorRoleLookup?.get(row.actor) ?? undefined,
+    requestId: row.request_id,
+    details: JSON.stringify(parsedDetails),
+    createdAt: row.created_at
+  };
+};
 
 const getUserRoles = async (userId: string) =>
   handleSupabase(
@@ -1106,6 +1136,11 @@ const canAccessItemDocument = (auth: AuthContext, item: StoredItem, visibility: 
 
 const sanitizeItemForAuth = (item: StoredItem, auth: AuthContext): StoredItem => ({
   ...item,
+  bids: item.bids.map((bid) => ({
+    ...bid,
+    bidder: auth.role === "ShopOwner" || auth.adminAuthorized ? bid.bidder : "Anonymous bidder",
+    bidderUserId: auth.role === "ShopOwner" || auth.adminAuthorized ? bid.bidderUserId : undefined
+  })),
   documents: item.documents.filter((document) => canAccessItemDocument(auth, item, document.visibility || "bidder_visible"))
 });
 
@@ -1206,7 +1241,7 @@ const queueBidActivityNotifications = async (
         currentBid: amount,
         displayName: bidder.displayName,
         imageUrl,
-        itemUrl: `${appBaseUrl}/item.html?id=${encodeURIComponent(item.id)}`
+        itemUrl: buildItemUrl(item.id)
       },
       bidder.email
     );
@@ -1230,7 +1265,7 @@ const queueBidActivityNotifications = async (
       currentBid: amount,
       displayName: previousLeaderUser.display_name,
       imageUrl,
-      itemUrl: `${appBaseUrl}/item.html?id=${encodeURIComponent(item.id)}`
+      itemUrl: buildItemUrl(item.id)
     },
     previousLeaderUser.email
   );
@@ -1296,11 +1331,11 @@ const serializeSession = async (req: express.Request): Promise<((StoredUser & { 
 
 const appendAudit = async (req: express.Request, entry: AuditEntry) => {
   const auth = await getAuthContext(req);
-  const details = {
+  const details = redactSensitiveAuditDetails({
     ...entry.details,
     actorRole: auth.role,
     ...(auth.userId ? { actorUserId: auth.userId } : {}),
-  };
+  });
 
   await handleSupabase(
     await supabase.from("audits").insert({
@@ -1609,29 +1644,31 @@ const resolveLegacyBidOwnerForNotification = async (
   return "";
 };
 
-const getBidAuditRowsForUser = async (userId: string) => {
-  return handleSupabase(
-    await supabase
-      .from("audits")
-      .select("entity_id,details_json,created_at")
-      .eq("event_type", "BID_PLACED")
-      .contains("details_json", { bidderUserId: userId })
-      .order("created_at", { ascending: false })
-  ) as BidAuditRow[];
-};
-
 const getUserBidRecords = async (userId: string) => {
-  const bidAudits = await getBidAuditRowsForUser(userId);
-  const uniqueItemIds = Array.from(new Set(bidAudits.map((row) => row.entity_id)));
+  const bidRows = handleSupabase(
+    await supabase
+      .from("bids")
+      .select("item_id,amount,created_at")
+      .eq("bidder_user_id", userId)
+      .order("created_at", { ascending: false })
+  ) as Array<{ item_id: string; amount: number | string; created_at: string }>;
+  const latestBidByItem = new Map<string, { amount: number; createdAt: string }>();
+  for (const row of bidRows) {
+    if (!latestBidByItem.has(row.item_id)) {
+      latestBidByItem.set(row.item_id, {
+        amount: Number(row.amount),
+        createdAt: row.created_at
+      });
+    }
+  }
+  const uniqueItemIds = Array.from(latestBidByItem.keys());
   const items = new Map((await getItems(true)).map((item) => [item.id, item]));
   return uniqueItemIds.flatMap((itemId) => {
     const item = items.get(itemId);
     if (!item) return [];
-    const auditsForItem = bidAudits.filter((row) => row.entity_id === itemId);
-    if (!auditsForItem.length) return [];
-    const latestAudit = auditsForItem[0];
-    const details = parseAuditDetails(latestAudit.details_json);
-    const latestAmount = Number(details.amount || 0);
+    const latestBid = latestBidByItem.get(itemId);
+    if (!latestBid) return [];
+    const latestAmount = latestBid.amount;
     const status = new Date(item.endTime).getTime() > Date.now()
       ? (item.currentBid === latestAmount ? "winning" : "outbid")
       : (item.currentBid === latestAmount ? "won" : "lost");
@@ -1643,7 +1680,7 @@ const getUserBidRecords = async (userId: string) => {
       currentBid: item.currentBid,
       yourLatestBid: latestAmount,
       endTime: item.endTime,
-      lastBidAt: latestAudit.created_at,
+      lastBidAt: latestBid.createdAt,
       status
     }];
   });
@@ -1681,6 +1718,15 @@ const mapNotificationRow = (row: NotificationRow): NotificationQueueItem => ({
   errorMessage: row.error_message
 });
 
+const mapNotificationRowForAdmin = (row: NotificationRow): NotificationQueueItem => ({
+  ...mapNotificationRow(row),
+  payload: sanitizeNotificationPayloadForAdmin(
+    typeof row.payload_json === "string" ? JSON.parse(row.payload_json || "{}") : row.payload_json || {}
+  ),
+  claimToken: null,
+  claimExpiresAt: null
+});
+
 const getNotificationQueue = async (limit = 20) => {
   const rows = handleSupabase(
     await supabase
@@ -1689,7 +1735,7 @@ const getNotificationQueue = async (limit = 20) => {
       .order("created_at", { ascending: false })
       .limit(limit)
   ) as NotificationRow[];
-  return rows.map(mapNotificationRow);
+  return rows.map(mapNotificationRowForAdmin);
 };
 
 const getPendingNotificationQueue = async () => {
@@ -1853,7 +1899,7 @@ const renderNotificationContent = async (entry: NotificationQueueItem) => {
 
   if (entry.eventType === "ACCOUNT_VERIFIED") {
     const displayName = escapeHtml(entry.payload.displayName || "there");
-    const signInUrl = `${appBaseUrl}/signin.html`;
+    const signInUrl = buildSignInUrl();
     return {
       text: `Hello ${displayName},\n\nYour FMDQ Auctions account has been verified. You can now sign in here:\n${signInUrl}`,
       html: `
@@ -1887,7 +1933,7 @@ const renderNotificationContent = async (entry: NotificationQueueItem) => {
     const title = escapeHtml(entry.payload.title || "this auction item");
     const currentBid = escapeHtml(entry.payload.currentBid || entry.payload.amount || "");
     const inlineImage = await loadEmailInlineImage(String(entry.payload.imageUrl || ""), title);
-    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding.html`);
+    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding`);
     return {
       text: `Hello ${displayName},\n\nYour bid of ${currentBid} was placed successfully for ${title}.\n\nView the item here:\n${itemUrl}`,
       html: `
@@ -1908,7 +1954,7 @@ const renderNotificationContent = async (entry: NotificationQueueItem) => {
     const previousBid = escapeHtml(entry.payload.previousBid || "");
     const currentBid = escapeHtml(entry.payload.currentBid || "");
     const inlineImage = await loadEmailInlineImage(String(entry.payload.imageUrl || ""), title);
-    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding.html`);
+    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding`);
     return {
       text: `Hello ${displayName},\n\nYou were outbid on ${title}.\nYour previous bid: ${previousBid}\nCurrent bid: ${currentBid}\n\nOpen the item to place a new bid:\n${itemUrl}`,
       html: `
@@ -2168,13 +2214,43 @@ const parseCsv = (content: string) => {
 const normalizeImportKey = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
 
 const inspectImportArchive = async (zipPath: string) => {
-  const { stdout } = await execFileAsync("/usr/bin/unzip", ["-Z1", zipPath], { maxBuffer: 10 * 1024 * 1024 });
-  const entries = stdout
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .filter((entry) => !entry.endsWith("/"));
+  const zip = new AdmZip(zipPath);
+  const entries = zip
+    .getEntries()
+    .filter((entry) => !entry.isDirectory)
+    .map((entry) => entry.entryName.trim())
+    .filter(Boolean);
   validateArchiveEntries(entries, maxImportArchiveEntries);
+};
+
+const extractImportArchive = (zipPath: string, targetDir: string) => {
+  const zip = new AdmZip(zipPath);
+  let totalBytes = 0;
+  let totalFiles = 0;
+  const map = new Map<string, string>();
+
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory) continue;
+    const normalizedEntryName = entry.entryName.replace(/\\/g, "/").trim();
+    validateArchiveEntries([normalizedEntryName], maxImportArchiveEntries);
+    totalFiles += 1;
+    if (totalFiles > maxImportArchiveEntries) {
+      throw new Error(`The ZIP bundle contains too many extracted files. Maximum allowed is ${maxImportArchiveEntries}.`);
+    }
+
+    const data = entry.getData();
+    totalBytes += data.length;
+    if (totalBytes > maxImportExtractedBytes) {
+      throw new Error(`The extracted ZIP bundle exceeds the ${Math.round(maxImportExtractedBytes / (1024 * 1024))} MB safety limit.`);
+    }
+
+    const fileName = path.basename(normalizedEntryName);
+    const outputPath = path.join(targetDir, `${randomUUID()}-${fileName}`);
+    fs.writeFileSync(outputPath, data);
+    map.set(fileName.toLowerCase(), outputPath);
+  }
+
+  return map;
 };
 
 const getImportValue = (row: Record<string, string>, candidates: string[]) => {
@@ -2194,32 +2270,6 @@ const splitImportList = (value: string) =>
     .split(/[;,|]/g)
     .map((entry) => entry.trim())
     .filter(Boolean);
-
-const collectImportFiles = (rootDir: string) => {
-  const map = new Map<string, string>();
-  let totalBytes = 0;
-  let totalFiles = 0;
-  const walk = (currentDir: string) => {
-    for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
-      const fullPath = path.join(currentDir, entry.name);
-      if (entry.isDirectory()) {
-        walk(fullPath);
-      } else {
-        totalFiles += 1;
-        if (totalFiles > maxImportArchiveEntries) {
-          throw new Error(`The ZIP bundle contains too many extracted files. Maximum allowed is ${maxImportArchiveEntries}.`);
-        }
-        totalBytes += fs.statSync(fullPath).size;
-        if (totalBytes > maxImportExtractedBytes) {
-          throw new Error(`The extracted ZIP bundle exceeds the ${Math.round(maxImportExtractedBytes / (1024 * 1024))} MB safety limit.`);
-        }
-        map.set(entry.name.toLowerCase(), fullPath);
-      }
-    }
-  };
-  walk(rootDir);
-  return map;
-};
 
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const documentExtensions = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx"]);
@@ -2347,6 +2397,23 @@ const createItemRecord = async (
   return itemId;
 };
 
+const cleanupManagedFiles = async (files: Array<{ url: string }>) => {
+  for (const file of files) {
+    await removeManagedStoredFile(file.url).catch(() => undefined);
+  }
+};
+
+const rollbackCreatedItem = async (itemId: string) => {
+  const files = handleSupabase(
+    await supabase.from("item_files").select("url").eq("item_id", itemId)
+  ) as Array<{ url: string }>;
+  await cleanupManagedFiles(files);
+  await handleSupabase(await supabase.from("item_files").delete().eq("item_id", itemId));
+  await handleSupabase(await supabase.from("audits").delete().eq("entity_type", "item").eq("entity_id", itemId));
+  await supabase.from("notification_queue").delete().contains("payload_json", { itemId });
+  await handleSupabase(await supabase.from("items").delete().eq("id", itemId));
+};
+
 const findExistingItemByLotOrSku = async (lot: string, sku: string) => {
   const rows = handleSupabase(
     await supabase
@@ -2440,6 +2507,17 @@ const requireAdminToken = asyncHandler(async (req, res, next) => {
   next();
 });
 
+const requireItemOperationsViewerToken = asyncHandler(async (req, res, next) => {
+  const auth = await getAuthContext(req);
+  if (!(auth.adminAuthorized || auth.role === "ShopOwner")) {
+    res.status(403).json({
+      error: "Item operations access requires an authenticated ShopOwner or Admin account."
+    });
+    return;
+  }
+  next();
+});
+
 const requireSuperAdminToken = asyncHandler(async (req, res, next) => {
   const auth = await getAuthContext(req);
   if (!auth.signedIn || auth.role !== "SuperAdmin") {
@@ -2515,16 +2593,7 @@ const seedItemsIfEmpty = async () => {
 };
 
 app.get("/api/health", asyncHandler(async (req, res) => {
-  const items = handleSupabase(await supabase.from("items").select("id")) as Array<{ id: string }>;
-  const audits = handleSupabase(await supabase.from("audits").select("id")) as Array<{ id: string }>;
-  const queue = handleSupabase(await supabase.from("notification_queue").select("id")) as Array<{ id: string }>;
-  res.json({
-    status: "ok",
-    storage: "supabase-client",
-    items: items.length,
-    audits: audits.length,
-    notificationQueue: queue.length
-  });
+  res.json({ status: "ok" });
 }));
 
 app.get("/api/auth/me", asyncHandler(async (req, res) => {
@@ -2629,20 +2698,45 @@ app.post("/api/auth/register", express.json({ limit: "128kb" }), asyncHandler(as
 app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
   const email = normalizeEmail(String(req.body?.email || ""));
   const password = String(req.body?.password || "");
+  const auditActor = sanitizeDisplayName(email) || "unknown";
   if (!(await checkAuthRateLimit(req, getClientKey(req, `login:${email}`)))) {
     res.status(429).json({ error: "Too many sign-in attempts. Please wait and try again." });
     return;
   }
   const user = await getUserByEmail(email);
   if (!user || !verifyPassword(password, user.password_hash || "")) {
+    await appendAudit(req, {
+      eventType: "LOGIN_FAILED",
+      entityType: "auth",
+      entityId: email || "unknown",
+      actor: auditActor,
+      actorType: "user",
+      details: { email, reason: "invalid_credentials" }
+    });
     res.status(401).json({ error: "Invalid email or password." });
     return;
   }
   if (user.status === "pending_verification") {
+    await appendAudit(req, {
+      eventType: "LOGIN_BLOCKED",
+      entityType: "auth",
+      entityId: user.id,
+      actor: user.display_name,
+      actorType: "user",
+      details: { email: user.email, reason: "pending_verification" }
+    });
     res.status(403).json({ error: "Please verify your email before signing in." });
     return;
   }
   if (user.status !== "active") {
+    await appendAudit(req, {
+      eventType: "LOGIN_BLOCKED",
+      entityType: "auth",
+      entityId: user.id,
+      actor: user.display_name,
+      actorType: "user",
+      details: { email: user.email, reason: `status_${user.status}` }
+    });
     res.status(403).json({ error: "This account is not active." });
     return;
   }
@@ -2651,6 +2745,14 @@ app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async
   const sessionRecord = await createUserSession(res, user.id);
   const roles = await getUserRoles(user.id);
   const role = normalizeRole(roles.map((row) => row.role_name));
+  await appendAudit(req, {
+    eventType: "LOGIN_SUCCEEDED",
+    entityType: "auth",
+    entityId: user.id,
+    actor: user.display_name,
+    actorType: "user",
+    details: { email: user.email, role }
+  });
   res.json({
     signedIn: true,
     user: {
@@ -2789,7 +2891,18 @@ app.post("/api/auth/reset-password", express.json({ limit: "64kb" }), asyncHandl
 }));
 
 app.post("/api/auth/logout", asyncHandler(async (req, res) => {
+  const auth = await getAuthContext(req);
   const sessionId = parseCookies(req)[sessionCookieName];
+  if (auth.signedIn && auth.userId) {
+    await appendAudit(req, {
+      eventType: "LOGOUT_SUCCEEDED",
+      entityType: "auth",
+      entityId: auth.userId,
+      actor: auth.actor,
+      actorType: auth.actorType,
+      details: { currentSession: Boolean(sessionId) }
+    });
+  }
   if (sessionId) {
     await deleteSessionRow(sessionId).catch(() => undefined);
   }
@@ -2859,7 +2972,7 @@ app.delete("/api/me/sessions/:id", asyncHandler(async (req, res) => {
     entityId: auth.userId,
     actor: auth.actor,
     actorType: auth.actorType,
-    details: { sessionId: session.id }
+    details: { revoked: 1 }
   });
   res.json({ revoked: true, message: "Session revoked." });
 }));
@@ -2934,7 +3047,7 @@ app.get("/uploads/images/:file", asyncHandler(async (req, res) => {
       );
       const item = row ? await getItemById(row.item_id, true) : null;
       const itemVisible = item && !item.archivedAt;
-      if (!auth.adminAuthorized && (!itemVisible || auth.role !== "Bidder")) {
+      if (!auth.adminAuthorized && (!itemVisible || !(auth.role === "Bidder" || auth.role === "ShopOwner"))) {
         res.status(403).json({ error: "You do not have access to this image." });
         return;
       }
@@ -3094,8 +3207,9 @@ app.delete("/api/categories/:name", requireAdminToken, asyncHandler(async (req, 
   res.json({ ok: true });
 }));
 
-app.get("/api/exports/items.csv", requireAdminToken, asyncHandler(async (req, res) => {
-  const items = await getItems();
+app.get("/api/exports/items.csv", requireItemOperationsViewerToken, asyncHandler(async (req, res) => {
+  const auth = await getAuthContext(req);
+  const items = await getItems(auth.adminAuthorized);
   const rows = items.map((item) => ({
     id: item.id,
     title: item.title,
@@ -3112,7 +3226,6 @@ app.get("/api/exports/items.csv", requireAdminToken, asyncHandler(async (req, re
     endTime: item.endTime,
     bidCount: item.bids.length
   }));
-  const auth = await getAuthContext(req);
   await appendAudit(req, {
     eventType: "EXPORT_ITEMS",
     entityType: "export",
@@ -3141,7 +3254,7 @@ app.get("/api/exports/audits.csv", requireAdminToken, asyncHandler(async (req, r
     actor: row.actor,
     actorType: row.actor_type,
     requestId: row.request_id,
-    details: typeof row.details_json === "string" ? row.details_json : JSON.stringify(row.details_json || {}),
+    details: JSON.stringify(redactSensitiveAuditDetails(parseAuditDetails(row.details_json))),
     createdAt: row.created_at
   }));
   const auth = await getAuthContext(req);
@@ -3164,16 +3277,17 @@ app.get("/api/me/wins", asyncHandler(async (req, res) => {
     res.status(401).json({ error: "Sign in required." });
     return;
   }
-  const itemsById = new Map((await getItems(true)).map((item) => [item.id, item]));
-  const bidAudits = await getBidAuditRowsForUser(auth.userId!);
-  const wins = bidAudits.flatMap((row) => {
-    const item = itemsById.get(row.entity_id);
-    if (!item) return [];
-    const details = parseAuditDetails(row.details_json);
-    const won = new Date(item.endTime).getTime() < Date.now() && item.currentBid > 0 && Number(details.amount || 0) === item.currentBid;
-    return won ? [{ id: item.id, title: item.title, category: item.category, currentBid: item.currentBid, endTime: item.endTime }] : [];
-  });
-  res.json(Array.from(new Map(wins.map((row) => [row.id, row])).values()));
+  const bidRecords = await getUserBidRecords(auth.userId!);
+  const wins = bidRecords
+    .filter((row) => row.status === "won")
+    .map((row) => ({
+      id: row.itemId,
+      title: row.title,
+      category: row.category,
+      currentBid: row.currentBid,
+      endTime: row.endTime
+    }));
+  res.json(wins);
 }));
 
 app.get("/api/admin/operations", requireAdminToken, asyncHandler(async (req, res) => {
@@ -3236,6 +3350,7 @@ app.get("/api/admin/audits", requireAdminToken, asyncHandler(async (req, res) =>
   const actorRoleLookup = await getAuditActorRoleLookup();
   res.json(filteredRows.map((row) => ({
     ...row,
+    details_json: redactSensitiveAuditDetails(parseAuditDetails(row.details_json)),
     actor_role:
       (typeof row.details_json === "object" &&
       row.details_json !== null &&
@@ -3569,6 +3684,13 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
   const auth = await getAuthContext(req);
   const tempExtractDir = fs.mkdtempSync(path.join(importsDir, "bulk-"));
   const createdIds: string[] = [];
+  const pendingRows: Array<{
+    row: number;
+    title: string;
+    value: Extract<ReturnType<typeof validateNewItem>, { ok: true }>["value"];
+    imageNames: string[];
+    documentEntries: Array<{ name: string; visibility: DocumentVisibility }>;
+  }> = [];
   const report: {
     created: number;
     skipped: number;
@@ -3591,9 +3713,10 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
     let extractedFiles = new Map<string, string>();
     if (zipFile) {
       await inspectImportArchive(zipFile.path);
-      await execFileAsync("/usr/bin/unzip", ["-oq", zipFile.path, "-d", tempExtractDir]);
-      extractedFiles = collectImportFiles(tempExtractDir);
+      extractedFiles = extractImportArchive(zipFile.path, tempExtractDir);
     }
+    const seenLots = new Set<string>();
+    const seenSkus = new Set<string>();
 
     for (const [index, row] of csvRows.entries()) {
       const title = getImportValue(row, ["title", "item_title"]);
@@ -3618,6 +3741,18 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
           report.items.push({ row: index + 2, status: "failed", title: title || `Row ${index + 2}`, message: validation.error });
           continue;
         }
+        if (seenLots.has(validation.value.lot) || seenSkus.has(validation.value.sku)) {
+          report.failed += 1;
+          report.items.push({
+            row: index + 2,
+            status: "failed",
+            title: validation.value.title,
+            message: "Duplicate lot or SKU detected within the uploaded CSV."
+          });
+          continue;
+        }
+        seenLots.add(validation.value.lot);
+        seenSkus.add(validation.value.sku);
 
         const duplicate = await findExistingItemByLotOrSku(validation.value.lot, validation.value.sku);
         if (duplicate) {
@@ -3642,22 +3777,23 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
               normalizedRow[`${key}_visibility`] || normalizedRow.document_visibility || normalizedRow.doc_visibility
             )
           })));
-
-        const imageFiles = await Promise.all(imageNames.map(async (name) => {
-          const sourcePath = extractedFiles.get(name.toLowerCase());
-          if (!sourcePath) throw new Error(`Image file "${name}" was not found in the ZIP.`);
-          return copyImportedFile(sourcePath, "image");
-        }));
-        const documentFiles = await Promise.all(documentEntries.map(async (entry) => {
-          const sourcePath = extractedFiles.get(entry.name.toLowerCase());
-          if (!sourcePath) throw new Error(`Document file "${entry.name}" was not found in the ZIP.`);
-          return copyImportedFile(sourcePath, "document", entry.visibility);
-        }));
-
-        const itemId = await createItemRecord(req, validation.value, auth, { images: imageFiles, documents: documentFiles });
-        createdIds.push(itemId);
-        report.created += 1;
-        report.items.push({ row: index + 2, status: "created", title: validation.value.title, itemId, message: "Imported successfully." });
+        for (const name of imageNames) {
+          if (!extractedFiles.get(name.toLowerCase())) {
+            throw new Error(`Image file "${name}" was not found in the ZIP.`);
+          }
+        }
+        for (const entry of documentEntries) {
+          if (!extractedFiles.get(entry.name.toLowerCase())) {
+            throw new Error(`Document file "${entry.name}" was not found in the ZIP.`);
+          }
+        }
+        pendingRows.push({
+          row: index + 2,
+          title: validation.value.title,
+          value: validation.value,
+          imageNames,
+          documentEntries: documentEntries.map((entry) => ({ name: entry.name, visibility: entry.visibility }))
+        });
       } catch (error) {
         report.failed += 1;
         report.items.push({
@@ -3667,6 +3803,49 @@ app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{
           message: error instanceof Error ? error.message : "Import failed."
         });
       }
+    }
+
+    if (report.failed > 0) {
+      res.status(400).json({
+        ...report,
+        message: "Bulk import validation failed. No items were created."
+      });
+      return;
+    }
+
+    try {
+      for (const row of pendingRows) {
+        const imageFiles = await Promise.all(row.imageNames.map(async (name) => {
+          const sourcePath = extractedFiles.get(name.toLowerCase());
+          if (!sourcePath) throw new Error(`Image file "${name}" was not found in the ZIP.`);
+          return copyImportedFile(sourcePath, "image");
+        }));
+        const documentFiles = await Promise.all(row.documentEntries.map(async (entry) => {
+          const sourcePath = extractedFiles.get(entry.name.toLowerCase());
+          if (!sourcePath) throw new Error(`Document file "${entry.name}" was not found in the ZIP.`);
+          return copyImportedFile(sourcePath, "document", entry.visibility);
+        }));
+
+        try {
+          const itemId = await createItemRecord(req, row.value, auth, { images: imageFiles, documents: documentFiles });
+          createdIds.push(itemId);
+          report.created += 1;
+          report.items.push({ row: row.row, status: "created", title: row.title, itemId, message: "Imported successfully." });
+        } catch (error) {
+          await cleanupManagedFiles([...imageFiles, ...documentFiles]);
+          throw error;
+        }
+      }
+    } catch (error) {
+      for (const itemId of createdIds.reverse()) {
+        await rollbackCreatedItem(itemId).catch(() => undefined);
+      }
+      res.status(500).json({
+        ...report,
+        error: error instanceof Error ? error.message : "Bulk import failed.",
+        message: "Bulk import failed during commit. Created items were rolled back."
+      });
+      return;
     }
 
     await appendAudit(req, {
@@ -3873,10 +4052,7 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
     actorType: auth.actorType,
     details: {
       amount,
-      bidSequence: bidResult.bidSequence,
-      auctionItemId: item.id,
-      bidId: bidResult.bidId,
-      bidderUserId: persistedBidderUserId
+      bidSequence: bidResult.bidSequence
     }
   });
   await queueBidActivityNotifications(
@@ -3890,7 +4066,7 @@ app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
     item.currentBid > 0
       ? {
           bidder: "",
-          bidderUserId: bidResult.previousBidderUserId || null,
+          bidderUserId: bidResult.previousBidderUserId || undefined,
           amount: item.currentBid,
           time: "",
           createdAt: ""
@@ -3929,7 +4105,20 @@ const start = async () => {
     if (!smtpTransporter) {
       throw new Error("SMTP transport is enabled but SMTP_HOST, SMTP_USER, or SMTP_PASS is missing.");
     }
-    await smtpTransporter.verify();
+    try {
+      await Promise.race([
+        smtpTransporter.verify(),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error(`SMTP verification timed out after ${smtpVerifyTimeoutMs}ms.`)), smtpVerifyTimeoutMs);
+        })
+      ]);
+    } catch (error) {
+      if (runtimeEnvironment === "production") {
+        throw error;
+      }
+      console.warn("SMTP verification failed. Continuing startup because NODE_ENV is not production.");
+      console.warn(error);
+    }
   }
   await startNotificationWorkerLoop();
   if (!shouldRunApiServer) {
@@ -3937,11 +4126,25 @@ const start = async () => {
     console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
     return;
   }
-  app.listen(port, () => {
-    console.log(`Auction API running at http://localhost:${port}`);
-    console.log("Storage backend: supabase-js");
-    console.log(`Notification worker mode: ${notificationWorkerMode}`);
-    console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
+  await new Promise<void>((resolve, reject) => {
+    const server = app.listen(port, () => {
+      console.log(`Auction API running at http://localhost:${port}`);
+      console.log("Storage backend: supabase-js");
+      console.log(`Notification worker mode: ${notificationWorkerMode}`);
+      console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
+      resolve();
+    });
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        reject(
+          new Error(
+            `Port ${port} is already in use. Stop the existing backend process or change PORT in .env before starting another server instance.`
+          )
+        );
+        return;
+      }
+      reject(error);
+    });
   });
 };
 

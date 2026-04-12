@@ -26,7 +26,7 @@ export default function Closed() {
     <PageShell>
       <section>
         <p className="text-xs uppercase tracking-[0.3em] text-slate">Auction archive</p>
-        <h1 className="mt-2 text-2xl font-semibold text-ink sm:text-3xl">Closed auctions</h1>
+        <h1 className="mt-2 text-[21px] font-semibold text-neon sm:text-[27px]">Closed auctions</h1>
         <p className="mt-3 text-sm text-slate">
           {isError
             ? "Unable to load closed auctions right now."

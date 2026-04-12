@@ -63,7 +63,7 @@ export function AuthLayout({ eyebrow = "FMDQ Auctions Portal", title, descriptio
             {eyebrow && (
               <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate">{eyebrow}</p>
             )}
-            <h1 className="mt-2 text-2xl font-semibold text-ink">{title}</h1>
+            <h1 className="mt-2 text-[21px] font-semibold text-neon">{title}</h1>
             {description && <p className="mt-2 text-sm text-slate">{description}</p>}
 
             {/* Form */}

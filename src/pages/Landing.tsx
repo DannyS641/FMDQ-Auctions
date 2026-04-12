@@ -9,7 +9,7 @@ export default function Landing() {
   return (
     <section className="relative mx-auto grid w-full max-w-7xl flex-1 items-center gap-10 px-6 py-12 md:grid-cols-[1.2fr_0.8fr]">
       <div className="relative z-10">
-        <h1 className="mt-6 text-4xl font-semibold leading-tight text-ink md:text-5xl">
+        <h1 className="mt-6 text-[33px] font-semibold leading-tight text-neon md:text-[45px]">
           <span className="text-neon">DISCOVER</span> .{" "}
           <span className="text-slate">BID</span> .{" "}
           <span className="text-gold">OWN</span>

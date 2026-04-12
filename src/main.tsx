@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { Toaster } from "sonner";
 import { AuthProvider } from "@/context/auth-context";
+import { AppErrorBoundary } from "@/components/routing/AppErrorBoundary";
 import { App } from "./App";
 import "./index.css";
 
@@ -43,20 +44,22 @@ if (!root) throw new Error("#root element not found in index.html");
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AuthProvider>
-          <App />
-          <Toaster
-            position="top-right"
-            richColors
-            closeButton
-            toastOptions={{
-              duration: 4000,
-              style: { fontFamily: '"Space Grotesk", system-ui, sans-serif' },
-            }}
-          />
-        </AuthProvider>
-      </BrowserRouter>
+      <AppErrorBoundary>
+        <BrowserRouter>
+          <AuthProvider>
+            <App />
+            <Toaster
+              position="top-right"
+              richColors
+              closeButton
+              toastOptions={{
+                duration: 4000,
+                style: { fontFamily: '"Space Grotesk", system-ui, sans-serif' },
+              }}
+            />
+          </AuthProvider>
+        </BrowserRouter>
+      </AppErrorBoundary>
       {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
     </QueryClientProvider>
   </StrictMode>

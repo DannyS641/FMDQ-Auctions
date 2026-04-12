@@ -12,6 +12,7 @@ export type FileRef = {
 
 export type Bid = {
   bidder: string;
+  bidderUserId?: string;
   amount: number;
   time: string;
   createdAt?: string;
