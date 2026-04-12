@@ -68,6 +68,10 @@ const smtpUser = process.env.SMTP_USER || "";
 const smtpPass = process.env.SMTP_PASS || "";
 const smtpFrom = process.env.SMTP_FROM || smtpUser || "no-reply@fmdq.example";
 const smtpSecure = String(process.env.SMTP_SECURE || "").toLowerCase() === "true" || smtpPort === 465;
+const smtpConnectionTimeoutMs = Math.max(Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10_000), 1_000);
+const smtpGreetingTimeoutMs = Math.max(Number(process.env.SMTP_GREETING_TIMEOUT_MS || 10_000), 1_000);
+const smtpSocketTimeoutMs = Math.max(Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 15_000), 1_000);
+const smtpVerifyTimeoutMs = Math.max(Number(process.env.SMTP_VERIFY_TIMEOUT_MS || 12_000), 1_000);
 const appBaseUrl = (process.env.APP_BASE_URL || "http://localhost:5173").replace(/\/+$/, "");
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
@@ -391,6 +395,9 @@ const smtpTransporter = notificationTransport === "smtp" && smtpHost && smtpUser
       host: smtpHost,
       port: smtpPort,
       secure: smtpSecure,
+      connectionTimeout: smtpConnectionTimeoutMs,
+      greetingTimeout: smtpGreetingTimeoutMs,
+      socketTimeout: smtpSocketTimeoutMs,
       auth: {
         user: smtpUser,
         pass: smtpPass
@@ -4083,7 +4090,12 @@ const start = async () => {
       throw new Error("SMTP transport is enabled but SMTP_HOST, SMTP_USER, or SMTP_PASS is missing.");
     }
     try {
-      await smtpTransporter.verify();
+      await Promise.race([
+        smtpTransporter.verify(),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error(`SMTP verification timed out after ${smtpVerifyTimeoutMs}ms.`)), smtpVerifyTimeoutMs);
+        })
+      ]);
     } catch (error) {
       if (runtimeEnvironment === "production") {
         throw error;
@@ -4098,11 +4110,25 @@ const start = async () => {
     console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
     return;
   }
-  app.listen(port, () => {
-    console.log(`Auction API running at http://localhost:${port}`);
-    console.log("Storage backend: supabase-js");
-    console.log(`Notification worker mode: ${notificationWorkerMode}`);
-    console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
+  await new Promise<void>((resolve, reject) => {
+    const server = app.listen(port, () => {
+      console.log(`Auction API running at http://localhost:${port}`);
+      console.log("Storage backend: supabase-js");
+      console.log(`Notification worker mode: ${notificationWorkerMode}`);
+      console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
+      resolve();
+    });
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        reject(
+          new Error(
+            `Port ${port} is already in use. Stop the existing backend process or change PORT in .env before starting another server instance.`
+          )
+        );
+        return;
+      }
+      reject(error);
+    });
   });
 };
 

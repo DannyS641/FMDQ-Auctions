@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -11,10 +11,12 @@ import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { getItems, archiveItem, restoreItem, bulkImportItems } from "@/api/items";
 import { queryKeys } from "@/lib/query-keys";
 import { formatDate, formatMoney } from "@/lib/formatters";
-import { getAuctionStatus } from "@/lib/auction-utils";
+import { getAuctionStatus, getReserveOutcome } from "@/lib/auction-utils";
 import type { BulkImportReport } from "@/types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+type ListingFilter = "all" | "live" | "upcoming" | "closed" | "archived";
+type OutcomeFilter = "all" | "no-bids" | "has-bids" | "wins" | "reserve-met" | "reserve-pending" | "reserve-not-met";
 
 export default function AdminItems() {
   const queryClient = useQueryClient();
@@ -23,11 +25,46 @@ export default function AdminItems() {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [importReport, setImportReport] = useState<BulkImportReport | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [selectedListingState, setSelectedListingState] = useState<ListingFilter>("all");
+  const [selectedOutcome, setSelectedOutcome] = useState<OutcomeFilter>("all");
   const { data: items, isLoading, isError } = useQuery({
     queryKey: queryKeys.items.list(true),
     queryFn: () => getItems(true),
     staleTime: 10_000,
   });
+
+  const categoryOptions = useMemo(
+    () => Array.from(new Set((items ?? []).map((item) => item.category).filter(Boolean))).sort(),
+    [items]
+  );
+
+  const filteredItems = useMemo(() => {
+    return (items ?? []).filter((item) => {
+      const status = getAuctionStatus(item);
+      const isArchived = Boolean(item.archivedAt);
+      const reserveOutcome = getReserveOutcome(item).toLowerCase();
+      const hasBids = item.currentBid > 0;
+      const isWin = status === "Closed" && hasBids && reserveOutcome !== "reserve not met";
+
+      if (selectedCategory !== "all" && item.category !== selectedCategory) return false;
+
+      if (selectedListingState === "archived" && !isArchived) return false;
+      if (selectedListingState !== "all" && selectedListingState !== "archived") {
+        if (isArchived) return false;
+        if (status.toLowerCase() !== selectedListingState) return false;
+      }
+
+      if (selectedOutcome === "no-bids" && hasBids) return false;
+      if (selectedOutcome === "has-bids" && !hasBids) return false;
+      if (selectedOutcome === "wins" && !isWin) return false;
+      if (selectedOutcome === "reserve-met" && reserveOutcome !== "reserve met") return false;
+      if (selectedOutcome === "reserve-pending" && reserveOutcome !== "reserve pending") return false;
+      if (selectedOutcome === "reserve-not-met" && reserveOutcome !== "reserve not met") return false;
+
+      return true;
+    });
+  }, [items, selectedCategory, selectedListingState, selectedOutcome]);
 
   const refreshItems = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.items.all() });
@@ -165,7 +202,67 @@ export default function AdminItems() {
 
         {!isError && (
           <Card className="overflow-hidden">
-            {!items || items.length === 0 ? (
+            <div className="border-b border-ink/10 bg-white px-4 py-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div className="flex flex-wrap gap-3">
+                  <div className="min-w-[11rem]">
+                    <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.15em] text-slate">
+                      Category
+                    </label>
+                    <select
+                      value={selectedCategory}
+                      onChange={(event) => setSelectedCategory(event.target.value)}
+                      className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-sm text-ink"
+                    >
+                      <option value="all">All categories</option>
+                      {categoryOptions.map((category) => (
+                        <option key={category} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="min-w-[11rem]">
+                    <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.15em] text-slate">
+                      Listing state
+                    </label>
+                    <select
+                      value={selectedListingState}
+                      onChange={(event) => setSelectedListingState(event.target.value as ListingFilter)}
+                      className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-sm text-ink"
+                    >
+                      <option value="all">All states</option>
+                      <option value="live">Live</option>
+                      <option value="upcoming">Upcoming</option>
+                      <option value="closed">Closed</option>
+                      <option value="archived">Archived</option>
+                    </select>
+                  </div>
+                  <div className="min-w-[11rem]">
+                    <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.15em] text-slate">
+                      Outcome
+                    </label>
+                    <select
+                      value={selectedOutcome}
+                      onChange={(event) => setSelectedOutcome(event.target.value as OutcomeFilter)}
+                      className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-sm text-ink"
+                    >
+                      <option value="all">All outcomes</option>
+                      <option value="no-bids">No bids</option>
+                      <option value="has-bids">Has bids</option>
+                      <option value="wins">Wins</option>
+                      <option value="reserve-met">Reserve met</option>
+                      <option value="reserve-pending">Reserve pending</option>
+                      <option value="reserve-not-met">Reserve not met</option>
+                    </select>
+                  </div>
+                </div>
+                <p className="text-sm text-slate">
+                  Showing {filteredItems.length} of {items?.length ?? 0} item(s)
+                </p>
+              </div>
+            </div>
+            {!filteredItems || filteredItems.length === 0 ? (
               <div className="px-6 py-10 text-sm text-slate">No auction items found yet.</div>
             ) : (
               <div className="w-full">
@@ -175,21 +272,21 @@ export default function AdminItems() {
                       <th className="w-10 px-3 py-3">
                         <input type="checkbox" aria-label="Select all items" className="h-4 w-4 rounded border-ink/20 accent-neon" />
                       </th>
-                      <th className="w-[32%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Name</th>
-                      <th className="w-[10%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">SKU</th>
-                      <th className="w-[8%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Availability</th>
-                      <th className="w-[15%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Price</th>
-                      <th className="w-[12%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Categories</th>
-                      <th className="hidden xl:table-cell w-[12%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Tags</th>
+                      <th className="w-[29%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Name</th>
+                      <th className="w-[9%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">SKU</th>
+                      <th className="w-[7%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate">Availability</th>
+                      <th className="w-[14%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate">Price</th>
+                      <th className="w-[10%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Categories</th>
+                      <th className="hidden xl:table-cell w-[11%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Tags</th>
                       <th className="hidden 2xl:table-cell w-[4%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate text-center">
                         <Star size={14} className="mx-auto text-slate" />
                       </th>
-                      <th className="w-[11%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Date</th>
-                      <th className="w-[10%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Author</th>
+                      <th className="w-[10%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Date</th>
+                      <th className="w-[12%] px-3 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Author</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-ink/5">
-                    {items.map((item) => {
+                    {filteredItems.map((item) => {
                       const status = getAuctionStatus(item);
                       const isArchived = Boolean(item.archivedAt);
                       const imageUrl = item.images[0]?.url ? `${API_BASE}${item.images[0].url}` : "";
@@ -277,7 +374,7 @@ export default function AdminItems() {
                             <div className="mt-1 text-xs">{formatDate(item.endTime)}</div>
                           </td>
                           <td className="px-3 py-4 align-top text-neon">
-                            <div className="line-clamp-2">Oluwanifemi Oso</div>
+                            <div className="whitespace-normal break-words">Oluwanifemi Oso</div>
                           </td>
                         </tr>
                       );
