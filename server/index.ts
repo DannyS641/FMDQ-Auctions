@@ -15,7 +15,7 @@ import {
   ensureCanManageTargetRoles,
   validateMalwareScanConfiguration
 } from "./security-logic.js";
-import { createItemReadModel, type StoredItem } from "./item-read-model.js";
+import { createItemReadModel, type StoredFileRef, type StoredItem } from "./item-read-model.js";
 import { createAuthService } from "./auth-service.js";
 import { createAdminService } from "./admin-service.js";
 import { createNotificationService } from "./notification-service.js";

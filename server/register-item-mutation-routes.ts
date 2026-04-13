@@ -146,7 +146,7 @@ export const registerItemMutationRoutes = ({
             description: getImportValue(row, ["description", "item_description"]),
           };
           const validation = validateNewItem(payload);
-          if (!validation.ok) {
+          if (validation.ok === false) {
             report.failed += 1;
             report.items.push({ row: index + 2, status: "failed", title: title || `Row ${index + 2}`, message: validation.error });
             continue;
@@ -276,7 +276,7 @@ export const registerItemMutationRoutes = ({
 
   app.post("/api/items", requireAdminToken, upload.fields([{ name: "images", maxCount: 8 }, { name: "documents", maxCount: 8 }]), asyncHandler(async (req, res) => {
     const validation = validateNewItem(req.body as Record<string, string>);
-    if (!validation.ok) {
+    if (validation.ok === false) {
       res.status(400).json({ error: validation.error });
       return;
     }
@@ -301,7 +301,7 @@ export const registerItemMutationRoutes = ({
       return;
     }
     const validation = validateNewItem(req.body as Record<string, string>);
-    if (!validation.ok) {
+    if (validation.ok === false) {
       res.status(400).json({ error: validation.error });
       return;
     }

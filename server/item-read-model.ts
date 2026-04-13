@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseDocumentNameWithVisibility, type DocumentVisibility } from "./security-logic.js";
 
-type StoredFileRef = { name: string; url: string; visibility?: DocumentVisibility };
+export type StoredFileRef = { name: string; url: string; visibility?: DocumentVisibility };
 type StoredBid = { bidder: string; amount: number; time: string; createdAt: string; bidderUserId?: string };
 export type StoredItem = {
   id: string;

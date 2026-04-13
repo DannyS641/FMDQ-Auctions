@@ -252,7 +252,7 @@ export const registerCatalogRoutes = ({
 
   app.post("/api/categories", express.json({ limit: "128kb" }), requireAdminToken, asyncHandler(async (req, res) => {
     const validation = validateCategoryName(String(req.body?.name || ""));
-    if (!validation.ok) {
+    if (validation.ok === false) {
       res.status(400).json({ error: validation.error });
       return;
     }
@@ -273,7 +273,7 @@ export const registerCatalogRoutes = ({
 
   app.delete("/api/categories/:name", requireAdminToken, asyncHandler(async (req, res) => {
     const validation = validateCategoryName(req.params.name);
-    if (!validation.ok) {
+    if (validation.ok === false) {
       res.status(400).json({ error: validation.error });
       return;
     }
@@ -387,7 +387,7 @@ export const registerCatalogRoutes = ({
       return;
     }
     const validation = validateBid(item, amount);
-    if (!validation.ok) {
+    if (validation.ok === false) {
       res.status(400).json({ error: validation.error });
       return;
     }
@@ -401,7 +401,7 @@ export const registerCatalogRoutes = ({
       persistedBidderUserId,
       idempotencyKey
     );
-    if (!bidResult.ok) {
+    if (bidResult.ok === false) {
       res.status(bidResult.status).json({ error: bidResult.error });
       return;
     }
