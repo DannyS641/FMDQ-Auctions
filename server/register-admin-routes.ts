@@ -54,6 +54,18 @@ type RegisterAdminRoutesOptions = {
     roles: string[];
   }>>;
   getAuditActorRoleLookup: () => Promise<Map<string, string | null>>;
+  getItems: (includeArchived?: boolean) => Promise<Array<{
+    id: string;
+    title: string;
+    category: string;
+    lot: string;
+    currentBid: number;
+    startTime: string;
+    endTime: string;
+    archivedAt?: string | null;
+    bids: Array<{ bidder: string; amount: number; time: string; createdAt: string }>;
+  }>>;
+  getReserveState: (item: { reserve?: number; endTime: string; currentBid: number }) => string;
   getRoles: () => Promise<string[]>;
   getUserById: (id: string) => Promise<UserRow | null>;
   getUserByIdWithPassword: (id: string) => Promise<(UserRow & { password_hash?: string }) | null>;
@@ -91,6 +103,8 @@ export const registerAdminRoutes = ({
   processNotificationQueue,
   listUsersWithRoles,
   getAuditActorRoleLookup,
+  getItems,
+  getReserveState,
   getRoles,
   getUserById,
   getUserByIdWithPassword,
@@ -202,6 +216,101 @@ export const registerAdminRoutes = ({
     });
   }));
 
+  app.get("/api/admin/reports", requireAdminToken, asyncHandler(async (_req, res) => {
+    const now = Date.now();
+    const items = await getItems(true);
+
+    const getItemStatus = (item: { startTime: string; endTime: string; archivedAt?: string | null }) => {
+      if (item.archivedAt) return "Archived";
+      if (new Date(item.startTime).getTime() > now) return "Upcoming";
+      if (new Date(item.endTime).getTime() < now) return "Closed";
+      return "Live";
+    };
+
+    const closedItems = items.filter((item) => getItemStatus(item) === "Closed");
+    const wonItems = closedItems
+      .map((item) => {
+        const winningBid = [...item.bids]
+          .sort((a, b) => new Date(b.time ?? b.createdAt ?? 0).getTime() - new Date(a.time ?? a.createdAt ?? 0).getTime())
+          .find((bid) => bid.amount === item.currentBid);
+        if (!winningBid || item.currentBid <= 0) return null;
+        const reserveOutcome = getReserveState(item);
+        if (reserveOutcome === "reserve_not_met") return null;
+        return {
+          itemId: item.id,
+          title: item.title,
+          lot: item.lot,
+          category: item.category,
+          winner: winningBid.bidder,
+          winningBid: item.currentBid,
+          endTime: item.endTime,
+          reserveOutcome,
+        };
+      })
+      .filter(Boolean) as Array<{
+        itemId: string;
+        title: string;
+        lot: string;
+        category: string;
+        winner: string;
+        winningBid: number;
+        endTime: string;
+        reserveOutcome: string;
+      }>;
+
+    const winners = Array.from(
+      wonItems.reduce<Map<string, { bidder: string; itemsWon: number; totalWonAmount: number; itemTitles: string[] }>>((acc, item) => {
+        const current = acc.get(item.winner) ?? {
+          bidder: item.winner,
+          itemsWon: 0,
+          totalWonAmount: 0,
+          itemTitles: [],
+        };
+        current.itemsWon += 1;
+        current.totalWonAmount += item.winningBid;
+        current.itemTitles.push(item.title);
+        acc.set(item.winner, current);
+        return acc;
+      }, new Map()).values()
+    ).sort((a, b) => b.totalWonAmount - a.totalWonAmount);
+
+    const noBidItems = items
+      .filter((item) => item.bids.length === 0 && item.currentBid <= 0)
+      .map((item) => ({
+        itemId: item.id,
+        title: item.title,
+        lot: item.lot,
+        category: item.category,
+        status: getItemStatus(item),
+        endTime: item.endTime,
+        archived: Boolean(item.archivedAt),
+      }));
+
+    const reserveNotMetItems = closedItems
+      .filter((item) => item.currentBid > 0 && getReserveState(item) === "reserve_not_met")
+      .map((item) => ({
+        itemId: item.id,
+        title: item.title,
+        lot: item.lot,
+        category: item.category,
+        currentBid: item.currentBid,
+        endTime: item.endTime,
+      }));
+
+    res.json({
+      summary: {
+        winners: winners.length,
+        wonItems: wonItems.length,
+        noBidItems: noBidItems.length,
+        reserveNotMetItems: reserveNotMetItems.length,
+      },
+      winners,
+      wonItems,
+      noBidItems,
+      reserveNotMetItems,
+    });
+  }));
+
   app.get("/api/admin/audits", requireAdminToken, asyncHandler(async (req, res) => {
     const itemId = String(req.query.itemId || "").trim();
     const from = String(req.query.from || "").trim();
@@ -216,20 +325,22 @@ export const registerAdminRoutes = ({
     let request = supabase
       .from("audits")
       .select("id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at", { count: "exact" })
-      .order("created_at", { ascending: false })
-      .range(offset, offset + pageSize - 1);
+      .order("created_at", { ascending: false });
     if (itemId) request = request.eq("entity_id", itemId);
     if (from) request = request.gte("created_at", from);
     if (to) request = request.lte("created_at", to);
     if (eventType) request = request.eq("event_type", eventType);
     if (actor) request = request.ilike("actor", `%${actor}%`);
     if (entityType) request = request.eq("entity_type", entityType);
+    if (!includeSecurity) {
+      request = request.not("event_type", "in", `(${Array.from(securityTelemetryEvents).map((value) => `"${value}"`).join(",")})`);
+    }
+    request = request.range(offset, offset + pageSize - 1);
     const result = await request;
     const rows = handleSupabase(result) as AuditRow[];
-    const filteredRows = includeSecurity ? rows : rows.filter((row) => !securityTelemetryEvents.has(row.event_type));
     const actorRoleLookup = await getAuditActorRoleLookup();
     res.json({
-      items: filteredRows.map((row) => ({
+      items: rows.map((row) => ({
         ...row,
         details_json: redactSensitiveAuditDetails(parseAuditDetails(row.details_json)),
         actor_role:
@@ -242,13 +353,13 @@ export const registerAdminRoutes = ({
           actorRoleLookup.get(row.actor) ??
           null,
       })),
-      total: result.count ?? filteredRows.length,
+      total: result.count ?? rows.length,
       page,
       pageSize,
     });
   }));
 
-  app.get("/api/admin/notifications", requireAdminToken, asyncHandler(async (req, res) => {
+  app.get("/api/admin/notifications", requireSuperAdminToken, asyncHandler(async (req, res) => {
     const page = Math.max(1, Number(req.query.page || 1) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
     const offset = (page - 1) * pageSize;
@@ -266,7 +377,7 @@ export const registerAdminRoutes = ({
     });
   }));
 
-  app.post("/api/admin/notifications/process", requireAdminToken, asyncHandler(async (_req, res) => {
+  app.post("/api/admin/notifications/process", requireSuperAdminToken, asyncHandler(async (_req, res) => {
     const processed = await processNotificationQueue();
     res.json({ processed });
   }));

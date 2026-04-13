@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { RefreshCw, KeyRound, Download } from "lucide-react";
+import { RefreshCw, KeyRound, Download, Trophy, Gavel, PackageSearch, AlertTriangle, BarChart3 } from "lucide-react";
+import type { Workbook, Worksheet, Cell, Row } from "exceljs";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
 import { SectionHeader } from "@/components/ui/SectionHeader";
@@ -11,6 +12,7 @@ import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { PageSpinner } from "@/components/ui/Spinner";
 import {
   getOperations,
+  getReports,
   getAdminUsers,
   getAudits,
   getNotifications,
@@ -21,11 +23,12 @@ import {
   bulkPasswordReset,
 } from "@/api/admin";
 import { queryKeys } from "@/lib/query-keys";
-import { formatDate, formatTimeAgo } from "@/lib/formatters";
+import { formatDate, formatMoney, formatTimeAgo } from "@/lib/formatters";
 import { cn } from "@/lib/cn";
 import type { AdminUser, AuditEntry } from "@/types";
+import { useAuth } from "@/context/auth-context";
 
-type Tab = "overview" | "users" | "audits" | "notifications";
+type Tab = "overview" | "users" | "audits" | "reports" | "notifications";
 const ACTIVITY_PAGE_SIZE = 10;
 const NOTIFICATION_PAGE_SIZE = 10;
 
@@ -33,6 +36,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "users", label: "Users" },
   { id: "audits", label: "Activity log" },
+  { id: "reports", label: "Reports" },
   { id: "notifications", label: "Notifications" },
 ];
 
@@ -99,9 +103,15 @@ const resolveActivityRoleLabel = (entry: AuditEntry, details: Record<string, unk
 const buildActivityView = (entry: AuditEntry): ActivityView => {
   const details = parseActivityDetails(entry.details);
   const requestIp = String(details.requestIp || details.ip || details.clientIp || "—");
+  const isAuthEvent =
+    entry.eventType.includes("LOGIN") ||
+    entry.eventType.includes("LOGOUT") ||
+    entry.eventType.includes("SESSION") ||
+    entry.eventType.includes("PASSWORD") ||
+    entry.eventType.startsWith("ACCOUNT_");
 
   const topic =
-    entry.entityType === "user" || entry.eventType.includes("SESSION") || entry.eventType.includes("PASSWORD")
+    entry.entityType === "user" || isAuthEvent
       ? "Users"
       : entry.entityType === "item" || entry.eventType.includes("BID")
         ? "Items"
@@ -112,7 +122,7 @@ const buildActivityView = (entry: AuditEntry): ActivityView => {
             : "System";
 
   const context =
-    entry.eventType.includes("SESSION")
+    entry.eventType.includes("LOGIN") || entry.eventType.includes("LOGOUT") || entry.eventType.includes("SESSION")
       ? "Session"
       : entry.eventType.includes("PASSWORD")
         ? "Password"
@@ -130,6 +140,10 @@ const buildActivityView = (entry: AuditEntry): ActivityView => {
     ACCOUNT_REGISTERED: "Registered",
     ACCOUNT_VERIFIED: "Verified",
     ACCOUNT_VERIFICATION_RESENT: "Verification Resent",
+    LOGIN_SUCCEEDED: "Logged In",
+    LOGIN_FAILED: "Login Failed",
+    LOGIN_BLOCKED: "Login Blocked",
+    LOGOUT_SUCCEEDED: "Logged Out",
     PASSWORD_RESET_REQUESTED: "Reset Requested",
     PASSWORD_RESET_COMPLETED: "Password Reset",
     PASSWORD_RESET_FORCED: "Password Reset Sent",
@@ -192,6 +206,122 @@ const downloadCsv = (filename: string, content: string) => {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+};
+
+const downloadWorkbook = async (filename: string, workbook: Workbook) => {
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
+const BRAND_BLUE = "1D326C";
+const SUCCESS_FILL = "E8F7EE";
+const SUCCESS_TEXT = "0F8A5F";
+const WARNING_FILL = "FFF6E5";
+const WARNING_TEXT = "A16207";
+const DANGER_FILL = "FDECEC";
+const DANGER_TEXT = "B42318";
+const INFO_FILL = "EEF3FF";
+const INFO_TEXT = "1D4ED8";
+const GOLD_TEXT = "E6B34A";
+
+const buildBar = (value: number, max: number, width = 14) => {
+  if (max <= 0 || value <= 0) return "";
+  const size = Math.max(1, Math.round((value / max) * width));
+  return "█".repeat(size);
+};
+
+const styleWorksheet = (worksheet: Worksheet) => {
+  worksheet.views = [{ state: "frozen", ySplit: 1 }];
+  worksheet.getRow(1).height = 22;
+  worksheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  worksheet.getRow(1).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: BRAND_BLUE },
+  };
+  worksheet.getRow(1).alignment = { vertical: "middle" };
+  worksheet.eachRow((row: Row, rowNumber: number) => {
+    row.eachCell((cell: Cell) => {
+      cell.border = {
+        top: { style: "thin", color: { argb: "FFE5E7EB" } },
+        left: { style: "thin", color: { argb: "FFE5E7EB" } },
+        bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+        right: { style: "thin", color: { argb: "FFE5E7EB" } },
+      };
+      if (rowNumber > 1) {
+        cell.alignment = { vertical: "top", wrapText: true };
+      }
+    });
+  });
+  worksheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: worksheet.columnCount },
+  };
+};
+
+const addReportTitle = (worksheet: Worksheet, title: string, subtitle: string) => {
+  worksheet.insertRow(1, []);
+  worksheet.mergeCells(1, 1, 1, Math.max(worksheet.columnCount, 4));
+  const titleCell = worksheet.getCell("A1");
+  titleCell.value = title;
+  titleCell.font = { size: 16, bold: true, color: { argb: BRAND_BLUE } };
+  titleCell.alignment = { vertical: "middle" };
+
+  worksheet.insertRow(2, []);
+  worksheet.mergeCells(2, 1, 2, Math.max(worksheet.columnCount, 4));
+  const subtitleCell = worksheet.getCell("A2");
+  subtitleCell.value = subtitle;
+  subtitleCell.font = { size: 11, color: { argb: "FF64748B" } };
+
+  worksheet.spliceRows(3, 0, worksheet.getRow(1).values as []);
+  const headerRow = worksheet.getRow(3);
+  headerRow.eachCell((cell: Cell, colNumber: number) => {
+    cell.value = worksheet.getCell(4, colNumber).value;
+  });
+  worksheet.spliceRows(4, 1);
+  worksheet.views = [{ state: "frozen", ySplit: 3 }];
+  worksheet.getRow(3).height = 22;
+  worksheet.getRow(3).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  worksheet.getRow(3).fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: BRAND_BLUE },
+  };
+  worksheet.autoFilter = {
+    from: { row: 3, column: 1 },
+    to: { row: 3, column: worksheet.columnCount },
+  };
+};
+
+const styleReportSheet = (worksheet: Worksheet, title: string, subtitle: string) => {
+  styleWorksheet(worksheet);
+  addReportTitle(worksheet, title, subtitle);
+};
+
+const stylePillCell = (cell: Cell, fill: string, text: string) => {
+  cell.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: fill },
+  };
+  cell.font = {
+    bold: true,
+    color: { argb: text },
+  };
+  cell.alignment = {
+    vertical: "middle",
+    horizontal: "center",
+  };
 };
 
 // ─── Overview ────────────────────────────────────────────────────────────────
@@ -575,9 +705,10 @@ function AuditsTab() {
   const [selectedUser, setSelectedUser] = useState("all");
   const [selectedTopic, setSelectedTopic] = useState("all");
   const [selectedAction, setSelectedAction] = useState("all");
+  const [includeSecurity, setIncludeSecurity] = useState(true);
   const { data: auditPage, isLoading, isError } = useQuery({
-    queryKey: queryKeys.admin.audits({ page, pageSize: ACTIVITY_PAGE_SIZE }),
-    queryFn: () => getAudits({ page, pageSize: ACTIVITY_PAGE_SIZE }),
+    queryKey: queryKeys.admin.audits({ page, pageSize: ACTIVITY_PAGE_SIZE, includeSecurity: includeSecurity ? 1 : 0 }),
+    queryFn: () => getAudits({ page, pageSize: ACTIVITY_PAGE_SIZE, includeSecurity: includeSecurity ? 1 : 0 }),
     staleTime: 30_000,
   });
 
@@ -633,6 +764,20 @@ function AuditsTab() {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3 rounded-3xl border border-ink/10 bg-white p-4">
         <div className="flex flex-wrap gap-3">
+          <div className="min-w-[11rem]">
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.15em] text-slate">Log scope</label>
+            <select
+              value={includeSecurity ? "all" : "operational"}
+              onChange={(e) => {
+                setIncludeSecurity(e.target.value === "all");
+                setPage(1);
+              }}
+              className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-xs text-ink focus:outline-none focus:ring-2 focus:ring-neon"
+            >
+              <option value="all">All activity</option>
+              <option value="operational">Operational only</option>
+            </select>
+          </div>
           <div className="min-w-[11rem]">
             <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.15em] text-slate">User</label>
             <select
@@ -776,6 +921,455 @@ function AuditsTab() {
   );
 }
 
+function ReportsTab() {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: queryKeys.admin.reports(),
+    queryFn: getReports,
+    staleTime: 30_000,
+  });
+
+  const { mutate: exportReportsCsv, isPending: exportingReports } = useMutation({
+    mutationFn: async () => {
+      if (!data) return;
+      const ExcelJS = await import("exceljs");
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = "FMDQ Auctions Portal";
+      workbook.created = new Date();
+      workbook.modified = new Date();
+
+      const summarySheet = workbook.addWorksheet("Summary");
+      summarySheet.columns = [
+        { header: "Metric", key: "metric", width: 24 },
+        { header: "Value", key: "value", width: 14 },
+        { header: "Graph", key: "graph", width: 18 },
+      ];
+      const summaryRows = [
+        { metric: "Winning bidders", value: data.summary.winners },
+        { metric: "Won items", value: data.summary.wonItems },
+        { metric: "No-bid items", value: data.summary.noBidItems },
+        { metric: "Reserve not met", value: data.summary.reserveNotMetItems },
+      ];
+      const summaryMax = Math.max(...summaryRows.map((row) => row.value), 1);
+      summaryRows.forEach((row) => {
+        summarySheet.addRow({
+          ...row,
+          graph: buildBar(row.value, summaryMax),
+        });
+      });
+      styleReportSheet(summarySheet, "Auction Reports Summary", "Top-level auction reporting metrics");
+      summarySheet.eachRow((row, rowNumber) => {
+        if (rowNumber <= 3) return;
+        const metricCell = row.getCell(1);
+        const valueCell = row.getCell(2);
+        const graphCell = row.getCell(3);
+        metricCell.font = { bold: true, color: { argb: BRAND_BLUE } };
+        graphCell.font = { color: { argb: GOLD_TEXT } };
+        if (Number(valueCell.value) === 0) {
+          stylePillCell(valueCell, INFO_FILL, INFO_TEXT);
+        } else if (metricCell.value === "Reserve not met") {
+          stylePillCell(valueCell, WARNING_FILL, WARNING_TEXT);
+        } else {
+          stylePillCell(valueCell, SUCCESS_FILL, SUCCESS_TEXT);
+        }
+      });
+
+      const winnersSheet = workbook.addWorksheet("Winners");
+      winnersSheet.columns = [
+        { header: "Winner", key: "bidder", width: 24 },
+        { header: "Items won", key: "itemsWon", width: 12 },
+        { header: "Items graph", key: "itemsGraph", width: 18 },
+        { header: "Total won amount", key: "totalWonAmount", width: 18 },
+        { header: "Amount graph", key: "amountGraph", width: 18 },
+        { header: "Items", key: "itemTitles", width: 40 },
+      ];
+      const maxItemsWon = Math.max(...data.winners.map((winner) => winner.itemsWon), 1);
+      const maxWonAmount = Math.max(...data.winners.map((winner) => winner.totalWonAmount), 1);
+      data.winners.forEach((winner) => {
+        winnersSheet.addRow({
+          bidder: winner.bidder,
+          itemsWon: winner.itemsWon,
+          itemsGraph: buildBar(winner.itemsWon, maxItemsWon),
+          totalWonAmount: winner.totalWonAmount,
+          amountGraph: buildBar(winner.totalWonAmount, maxWonAmount),
+          itemTitles: winner.itemTitles.join(", "),
+        });
+      });
+      winnersSheet.getColumn("totalWonAmount").numFmt = '"NGN" #,##0';
+      styleReportSheet(winnersSheet, "Winning Bidders", "Grouped by bidder with value and item counts");
+      winnersSheet.eachRow((row, rowNumber) => {
+        if (rowNumber <= 3) return;
+        row.getCell(1).font = { bold: true, color: { argb: BRAND_BLUE } };
+        row.getCell(2).alignment = { horizontal: "center", vertical: "middle" };
+        row.getCell(4).font = { bold: true, color: { argb: SUCCESS_TEXT } };
+      });
+      winnersSheet.spliceColumns(5, 1);
+      winnersSheet.spliceColumns(3, 1);
+      winnersSheet.getColumn(1).width = 24;
+      winnersSheet.getColumn(2).width = 12;
+      winnersSheet.getColumn(3).width = 18;
+      winnersSheet.getColumn(4).width = 40;
+
+      const wonItemsSheet = workbook.addWorksheet("Won Items");
+      wonItemsSheet.columns = [
+        { header: "Winner", key: "winner", width: 24 },
+        { header: "Item", key: "title", width: 28 },
+        { header: "Lot", key: "lot", width: 14 },
+        { header: "Category", key: "category", width: 18 },
+        { header: "Winning bid", key: "winningBid", width: 18 },
+        { header: "Closed", key: "endTime", width: 22 },
+        { header: "Reserve outcome", key: "reserveOutcome", width: 18 },
+      ];
+      data.wonItems.forEach((item) => {
+        wonItemsSheet.addRow({
+          ...item,
+          endTime: formatDate(item.endTime),
+        });
+      });
+      wonItemsSheet.getColumn("winningBid").numFmt = '"NGN" #,##0';
+      styleReportSheet(wonItemsSheet, "Won Items", "Closed auction lots with successful winners");
+      wonItemsSheet.eachRow((row, rowNumber) => {
+        if (rowNumber <= 3) return;
+        row.getCell(1).font = { bold: true, color: { argb: BRAND_BLUE } };
+        row.getCell(5).font = { bold: true, color: { argb: SUCCESS_TEXT } };
+        const reserveCell = row.getCell(7);
+        const reserveValue = String(reserveCell.value ?? "").toLowerCase();
+        if (reserveValue === "reserve_met") {
+          stylePillCell(reserveCell, SUCCESS_FILL, SUCCESS_TEXT);
+          reserveCell.value = "Reserve met";
+        } else if (reserveValue === "no_reserve") {
+          stylePillCell(reserveCell, INFO_FILL, INFO_TEXT);
+          reserveCell.value = "No reserve";
+        } else {
+          stylePillCell(reserveCell, WARNING_FILL, WARNING_TEXT);
+          reserveCell.value = humanizeKey(String(reserveCell.value ?? ""));
+        }
+      });
+
+      const noBidSheet = workbook.addWorksheet("No Bid Items");
+      noBidSheet.columns = [
+        { header: "Item", key: "title", width: 28 },
+        { header: "Lot", key: "lot", width: 14 },
+        { header: "Category", key: "category", width: 18 },
+        { header: "Status", key: "status", width: 14 },
+        { header: "Archived", key: "archived", width: 12 },
+        { header: "End time", key: "endTime", width: 22 },
+      ];
+      data.noBidItems.forEach((item) => {
+        noBidSheet.addRow({
+          ...item,
+          archived: item.archived ? "Yes" : "No",
+          endTime: formatDate(item.endTime),
+        });
+      });
+      styleReportSheet(noBidSheet, "No-Bid Items", "Lots with no bidding activity");
+      noBidSheet.eachRow((row, rowNumber) => {
+        if (rowNumber <= 3) return;
+        row.getCell(1).font = { bold: true, color: { argb: BRAND_BLUE } };
+        const statusCell = row.getCell(4);
+        const statusValue = String(statusCell.value ?? "");
+        if (statusValue === "Closed") {
+          stylePillCell(statusCell, WARNING_FILL, WARNING_TEXT);
+        } else if (statusValue === "Live") {
+          stylePillCell(statusCell, INFO_FILL, INFO_TEXT);
+        } else if (statusValue === "Upcoming") {
+          stylePillCell(statusCell, INFO_FILL, INFO_TEXT);
+        } else {
+          stylePillCell(statusCell, DANGER_FILL, DANGER_TEXT);
+        }
+        const archivedCell = row.getCell(5);
+        if (String(archivedCell.value ?? "") === "Yes") {
+          stylePillCell(archivedCell, DANGER_FILL, DANGER_TEXT);
+        } else {
+          stylePillCell(archivedCell, SUCCESS_FILL, SUCCESS_TEXT);
+        }
+      });
+
+      const reserveNotMetSheet = workbook.addWorksheet("Reserve Not Met");
+      reserveNotMetSheet.columns = [
+        { header: "Item", key: "title", width: 28 },
+        { header: "Lot", key: "lot", width: 14 },
+        { header: "Category", key: "category", width: 18 },
+        { header: "Current bid", key: "currentBid", width: 18 },
+        { header: "Closed", key: "endTime", width: 22 },
+      ];
+      data.reserveNotMetItems.forEach((item) => {
+        reserveNotMetSheet.addRow({
+          ...item,
+          endTime: formatDate(item.endTime),
+        });
+      });
+      reserveNotMetSheet.getColumn("currentBid").numFmt = '"NGN" #,##0';
+      styleReportSheet(reserveNotMetSheet, "Reserve Not Met", "Closed lots that received bids but did not clear reserve");
+      reserveNotMetSheet.eachRow((row, rowNumber) => {
+        if (rowNumber <= 3) return;
+        row.getCell(1).font = { bold: true, color: { argb: BRAND_BLUE } };
+        row.getCell(4).font = { bold: true, color: { argb: WARNING_TEXT } };
+      });
+
+      await downloadWorkbook(`auction-reports-${new Date().toISOString().slice(0, 10)}.xlsx`, workbook);
+    },
+    onSuccess: () => toast.success("Reports workbook exported."),
+    onError: () => toast.error("Could not export reports workbook."),
+  });
+
+  if (isLoading) return <PageSpinner />;
+  if (isError || !data) return <ErrorMessage title="Could not load reports" />;
+
+  const topWinner = data.winners[0] ?? null;
+  const chartRows = [
+    { label: "Listed items", value: data.summary.wonItems + data.summary.noBidItems + data.summary.reserveNotMetItems, tone: "bg-neon" },
+    { label: "Won items", value: data.summary.wonItems, tone: "bg-emerald-500" },
+    { label: "No-bid items", value: data.summary.noBidItems, tone: "bg-amber-500" },
+    { label: "Reserve not met", value: data.summary.reserveNotMetItems, tone: "bg-rose-500" },
+  ];
+  const chartMax = Math.max(...chartRows.map((row) => row.value), 1);
+  const summaryCards = [
+    {
+      label: "Winning bidders",
+      value: data.summary.winners,
+      note: topWinner ? `Top performer: ${topWinner.bidder}` : "No winning bidder yet",
+      icon: Trophy,
+      accent: "from-[#ff8458] to-[#ff6b2c]",
+      text: "text-white",
+      muted: "text-white/80",
+    },
+    {
+      label: "Won items",
+      value: data.summary.wonItems,
+      note: data.wonItems[0] ? `${data.wonItems[0].title} closed successfully` : "No closed wins yet",
+      icon: Gavel,
+      accent: "from-white to-[#f8fafc]",
+      text: "text-ink",
+      muted: "text-slate",
+    },
+    {
+      label: "No-bid items",
+      value: data.summary.noBidItems,
+      note: data.noBidItems.length > 0 ? "Lots needing attention" : "Every tracked lot has bids",
+      icon: PackageSearch,
+      accent: "from-white to-[#f8fafc]",
+      text: "text-ink",
+      muted: "text-slate",
+    },
+    {
+      label: "Reserve not met",
+      value: data.summary.reserveNotMetItems,
+      note: data.reserveNotMetItems.length > 0 ? "Closed below reserve" : "No reserve misses recorded",
+      icon: AlertTriangle,
+      accent: "from-white to-[#f8fafc]",
+      text: "text-ink",
+      muted: "text-slate",
+    },
+  ];
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="rounded-[2rem] border border-ink/10 bg-white p-5 shadow-[0_18px_45px_rgba(15,23,42,0.05)] sm:p-6">
+        <div className="flex flex-col gap-6 xl:grid xl:grid-cols-[1.2fr_0.8fr]">
+          <div className="space-y-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.28em] text-slate">Auction intelligence</p>
+                <h2 className="mt-3 text-[28px] font-semibold text-neon sm:text-[32px]">Reports dashboard</h2>
+                <p className="mt-2 max-w-2xl text-sm text-slate">
+                  Review auction outcomes, compare lot performance, and export the full reporting workbook for finance and operations.
+                </p>
+              </div>
+              <Button variant="secondary" size="sm" isLoading={exportingReports} onClick={() => exportReportsCsv()}>
+                <Download size={14} />
+                Export reports workbook
+              </Button>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              {summaryCards.map(({ label, value, note, icon: Icon, accent, text, muted }) => (
+                <div
+                  key={label}
+                  className={`rounded-[1.6rem] bg-gradient-to-br ${accent} p-5 shadow-[0_16px_35px_rgba(15,23,42,0.06)]`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className={`text-xs font-semibold uppercase tracking-[0.18em] ${muted}`}>{label}</p>
+                      <p className={`mt-4 text-[2rem] font-semibold leading-none ${text}`}>{value}</p>
+                      <p className={`mt-3 text-sm ${muted}`}>{note}</p>
+                    </div>
+                    <span className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl ${label === "Winning bidders" ? "bg-white/20 text-white" : "bg-[#eef3ff] text-neon"}`}>
+                      <Icon size={20} />
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <Card className="border-none bg-[#fbfcff] shadow-none">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-[#eef3ff] text-neon">
+                <BarChart3 size={20} />
+              </span>
+              <div>
+                <p className="text-lg font-semibold text-ink">Auction comparison</p>
+                <p className="text-sm text-slate">How the major auction outcomes compare right now.</p>
+              </div>
+            </div>
+
+            <div className="mt-6 space-y-4">
+              {chartRows.map((row) => (
+                <div key={row.label} className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium text-ink">{row.label}</p>
+                    <p className="text-sm font-semibold text-ink">{row.value}</p>
+                  </div>
+                  <div className="h-3 overflow-hidden rounded-full bg-[#edf1f7]">
+                    <div
+                      className={`h-full rounded-full ${row.tone}`}
+                      style={{ width: `${Math.max((row.value / chartMax) * 100, row.value > 0 ? 10 : 0)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-8 rounded-[1.4rem] border border-ink/10 bg-white p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Top winner snapshot</p>
+              {topWinner ? (
+                <div className="mt-3">
+                  <p className="text-xl font-semibold text-neon">{topWinner.bidder}</p>
+                  <p className="mt-1 text-sm text-slate">
+                    {topWinner.itemsWon} item(s) won · {formatMoney(topWinner.totalWonAmount)}
+                  </p>
+                  <p className="mt-3 text-xs text-slate">{topWinner.itemTitles.join(", ")}</p>
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-slate">No winning bidder has been recorded yet.</p>
+              )}
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+        <Card className="overflow-hidden">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Leaderboard</p>
+              <h3 className="mt-2 text-xl font-semibold text-ink">Winning bidders</h3>
+            </div>
+            <p className="text-sm text-slate">{data.winners.length} bidder(s)</p>
+          </div>
+
+          <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-ink/10 bg-ash text-left">
+                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Winner</th>
+                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Items won</th>
+                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Total won amount</th>
+                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Items</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink/5">
+              {data.winners.length === 0 ? (
+                <tr><td colSpan={4} className="px-5 py-8 text-center text-sm text-slate">No winners yet.</td></tr>
+              ) : data.winners.map((winner) => (
+                <tr key={winner.bidder}>
+                  <td className="px-5 py-3 font-semibold text-ink">{winner.bidder}</td>
+                  <td className="px-5 py-3 text-slate">{winner.itemsWon}</td>
+                  <td className="px-5 py-3 text-slate">{formatMoney(winner.totalWonAmount)}</td>
+                  <td className="px-5 py-3 text-slate">{winner.itemTitles.join(", ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        </Card>
+
+        <Card className="overflow-hidden">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Outcome ledger</p>
+              <h3 className="mt-2 text-xl font-semibold text-ink">Won items</h3>
+            </div>
+            <p className="text-sm text-slate">{data.wonItems.length} successful lot(s)</p>
+          </div>
+
+          <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-ink/10 bg-ash text-left">
+                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Item</th>
+                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Winner</th>
+                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Winning bid</th>
+                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate">Closed</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink/5">
+              {data.wonItems.length === 0 ? (
+                <tr><td colSpan={4} className="px-5 py-8 text-center text-sm text-slate">No won items yet.</td></tr>
+              ) : data.wonItems.map((item) => (
+                <tr key={item.itemId}>
+                  <td className="px-5 py-3">
+                    <p className="font-semibold text-ink">{item.title}</p>
+                    <p className="text-xs text-slate">Lot {item.lot} · {item.category}</p>
+                  </td>
+                  <td className="px-5 py-3 text-slate">{item.winner}</td>
+                  <td className="px-5 py-3 text-slate">{formatMoney(item.winningBid)}</td>
+                  <td className="px-5 py-3 text-slate">{formatDate(item.endTime)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <Card>
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Attention needed</p>
+              <h3 className="mt-2 text-xl font-semibold text-ink">No-bid items</h3>
+            </div>
+            <p className="text-sm text-slate">{data.noBidItems.length} lot(s)</p>
+          </div>
+          <div className="space-y-3">
+            {data.noBidItems.length === 0 ? (
+              <p className="text-sm text-slate">Every tracked item has at least one bid.</p>
+            ) : data.noBidItems.map((item) => (
+              <div key={item.itemId} className="rounded-2xl border border-ink/10 px-4 py-3">
+                <p className="font-semibold text-ink">{item.title}</p>
+                <p className="text-xs text-slate">Lot {item.lot} · {item.category}</p>
+                <p className="mt-1 text-xs text-slate">{item.status} · {formatDate(item.endTime)}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card>
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Reserve pressure</p>
+              <h3 className="mt-2 text-xl font-semibold text-ink">Reserve not met</h3>
+            </div>
+            <p className="text-sm text-slate">{data.reserveNotMetItems.length} lot(s)</p>
+          </div>
+          <div className="space-y-3">
+            {data.reserveNotMetItems.length === 0 ? (
+              <p className="text-sm text-slate">No closed items are currently below reserve.</p>
+            ) : data.reserveNotMetItems.map((item) => (
+              <div key={item.itemId} className="rounded-2xl border border-ink/10 px-4 py-3">
+                <p className="font-semibold text-ink">{item.title}</p>
+                <p className="text-xs text-slate">Lot {item.lot} · {item.category}</p>
+                <p className="mt-1 text-xs text-slate">Current bid {formatMoney(item.currentBid)} · {formatDate(item.endTime)}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 // ─── Notifications ────────────────────────────────────────────────────────────
 
 function NotificationsTab() {
@@ -906,7 +1500,10 @@ function NotificationsTab() {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Operations() {
+  const { isSuperAdmin } = useAuth();
   const [tab, setTab] = useState<Tab>("overview");
+  const visibleTabs = isSuperAdmin ? TABS : TABS.filter(({ id }) => id !== "notifications");
+  const activeTab = !isSuperAdmin && tab === "notifications" ? "overview" : tab;
 
   return (
     <PageShell>
@@ -915,14 +1512,14 @@ export default function Operations() {
 
         {/* Tab bar */}
         <div className="flex gap-1 overflow-x-auto">
-          {TABS.map(({ id, label }) => (
+          {visibleTabs.map(({ id, label }) => (
             <button
               key={id}
               type="button"
               onClick={() => setTab(id)}
               className={cn(
                 "rounded-xl px-5 py-2.5 text-sm font-semibold whitespace-nowrap transition",
-                tab === id
+                activeTab === id
                   ? "bg-neon text-white shadow-sm"
                   : "bg-white text-slate hover:bg-[#eef3ff] hover:text-neon"
               )}
@@ -932,10 +1529,11 @@ export default function Operations() {
           ))}
         </div>
 
-        {tab === "overview" && <OverviewTab />}
-        {tab === "users" && <UsersTab />}
-        {tab === "audits" && <AuditsTab />}
-        {tab === "notifications" && <NotificationsTab />}
+        {activeTab === "overview" && <OverviewTab />}
+        {activeTab === "users" && <UsersTab />}
+        {activeTab === "audits" && <AuditsTab />}
+        {activeTab === "reports" && <ReportsTab />}
+        {isSuperAdmin && activeTab === "notifications" && <NotificationsTab />}
       </div>
     </PageShell>
   );

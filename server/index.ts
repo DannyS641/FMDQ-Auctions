@@ -1206,6 +1206,8 @@ registerAdminRoutes({
   processNotificationQueue,
   listUsersWithRoles,
   getAuditActorRoleLookup,
+  getItems,
+  getReserveState,
   getRoles,
   getUserById,
   getUserByIdWithPassword,

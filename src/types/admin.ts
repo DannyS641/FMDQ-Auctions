@@ -66,3 +66,53 @@ export type OperationsPayload = {
   recentAudits: AuditEntry[];
   notificationQueue: NotificationEntry[];
 };
+
+export type ReportWinner = {
+  bidder: string;
+  itemsWon: number;
+  totalWonAmount: number;
+  itemTitles: string[];
+};
+
+export type ReportWonItem = {
+  itemId: string;
+  title: string;
+  lot: string;
+  category: string;
+  winner: string;
+  winningBid: number;
+  endTime: string;
+  reserveOutcome: string;
+};
+
+export type ReportNoBidItem = {
+  itemId: string;
+  title: string;
+  lot: string;
+  category: string;
+  status: string;
+  endTime: string;
+  archived: boolean;
+};
+
+export type ReportReserveNotMetItem = {
+  itemId: string;
+  title: string;
+  lot: string;
+  category: string;
+  currentBid: number;
+  endTime: string;
+};
+
+export type ReportsPayload = {
+  summary: {
+    winners: number;
+    wonItems: number;
+    noBidItems: number;
+    reserveNotMetItems: number;
+  };
+  winners: ReportWinner[];
+  wonItems: ReportWonItem[];
+  noBidItems: ReportNoBidItem[];
+  reserveNotMetItems: ReportReserveNotMetItem[];
+};
