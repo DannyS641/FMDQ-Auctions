@@ -12,27 +12,40 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import {
   buildCsrfTokenValue,
-  canAccessDocumentVisibility,
   ensureCanManageTargetRoles,
-  parseDocumentNameWithVisibility,
-  type DocumentVisibility,
-  validateBidAmount,
   validateMalwareScanConfiguration
 } from "./security-logic.js";
-import { createItemReadModel } from "./item-read-model.js";
+import { createItemReadModel, type StoredItem } from "./item-read-model.js";
 import { createAuthService } from "./auth-service.js";
 import { createAdminService } from "./admin-service.js";
 import { createNotificationService } from "./notification-service.js";
 import { createItemWriteService } from "./item-write-service.js";
 import { createBidService } from "./bid-service.js";
 import { createBootstrapService } from "./bootstrap.js";
+import { createAuditService, parseAuditDetails } from "./audit-service.js";
+import { canAccessItemDocument, getLandingStats, getReserveState, sanitizeItemForAuth } from "./item-policy.js";
+import {
+  buildStoredFileUrl,
+  buildStoragePath,
+  createAsyncHandler,
+  decodeStoredFilePath,
+  fileExists,
+  guessContentType,
+  loadEnvFile,
+  parseCookies,
+  removeFileIfExists,
+  replaceFileExtension,
+  safeFileName,
+  toCsv,
+  toIso,
+} from "./platform-utils.js";
 import { registerAuthRoutes } from "./register-auth-routes.js";
 import { registerCatalogRoutes } from "./register-catalog-routes.js";
-import type { AuditEntry, AuditRow, AuthContext, NotificationQueueItem, Role, UserRow } from "./server-types.js";
+import { registerAdminRoutes } from "./register-admin-routes.js";
+import { registerItemMutationRoutes } from "./register-item-mutation-routes.js";
+import type { AuthContext, UserRow } from "./server-types.js";
 import {
-  canBidWithRole,
   canViewItemOperationsWithRole,
-  canViewReserveWithRole,
   isSuperAdminRole,
   normalizeDisplayRoleName,
   normalizeRole,
@@ -41,29 +54,12 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const loadEnvFile = async () => {
-  const envPath = path.join(path.dirname(__dirname), ".env");
-  try {
-    await fs.promises.access(envPath, fs.constants.F_OK);
-  } catch {
-    return;
-  }
-  const contents = await fs.promises.readFile(envPath, "utf8");
-  for (const rawLine of contents.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const equalsAt = line.indexOf("=");
-    if (equalsAt < 0) continue;
-    const key = line.slice(0, equalsAt).trim();
-    if (process.env[key]) continue;
-    process.env[key] = line.slice(equalsAt + 1).trim().replace(/^['"]|['"]$/g, "");
-  }
-};
-
-await loadEnvFile();
+await loadEnvFile(__dirname);
 
 const app = express();
 const runtimeEnvironment = process.env.NODE_ENV || "development";
+const allowDemoSeeding =
+  runtimeEnvironment !== "production" && String(process.env.ENABLE_DEMO_SEEDING || "").toLowerCase() === "true";
 const port = Number(process.env.PORT || 5174);
 const sessionCookieName = "fmdq_session";
 const sessionTtlHours = Math.max(Number(process.env.SESSION_TTL_HOURS || 8), 1);
@@ -270,78 +266,7 @@ app.use((req, res, next) => {
     next();
   })().catch(next);
 });
-type StoredFileRef = { name: string; url: string; visibility?: DocumentVisibility };
-type StoredBid = { bidder: string; amount: number; time: string; createdAt: string; bidderUserId?: string };
-type StoredItem = {
-  id: string;
-  title: string;
-  category: string;
-  lot: string;
-  sku: string;
-  condition: string;
-  location: string;
-  startBid: number;
-  reserve?: number;
-  increment: number;
-  currentBid: number;
-  startTime: string;
-  endTime: string;
-  description: string;
-  images: StoredFileRef[];
-  documents: StoredFileRef[];
-  bids: StoredBid[];
-  createdAt: string;
-  archivedAt?: string | null;
-};
-type BidAuditRow = {
-  entity_id: string;
-  details_json: Record<string, unknown> | string;
-  created_at: string;
-};
-type ItemRow = {
-  id: string;
-  title: string;
-  category: string;
-  lot: string;
-  sku: string;
-  condition: string;
-  location: string;
-  start_bid: number | string;
-  reserve: number | string;
-  increment_amount: number | string;
-  current_bid: number | string;
-  start_time: string;
-  end_time: string;
-  description: string;
-  created_at: string;
-  archived_at: string | null;
-};
-type ItemFileRow = { item_id: string; kind: string; name: string; url: string };
-type BidRow = { item_id: string; bidder_alias: string; bidder_user_id?: string | null; amount: number | string; bid_time: string; created_at: string };
 type EmailVerificationRow = { id: string; user_id: string; token: string; created_at: string; expires_at: string };
-type NotificationRow = {
-  id: string;
-  channel: "email";
-  event_type: string;
-  recipient: string;
-  subject: string;
-  status: "pending" | "sent" | "failed";
-  payload_json: Record<string, unknown> | string;
-  created_at: string;
-  processed_at: string | null;
-  next_attempt_at: string | null;
-  attempt_count: number | null;
-  claim_token: string | null;
-  claim_expires_at: string | null;
-  error_message: string | null;
-};
-type PaginatedResult<T> = {
-  items: T[];
-  page: number;
-  pageSize: number;
-  total: number;
-  totalPages: number;
-};
 
 const defaultCategories = ["Cars", "Furniture", "Household Appliances", "Kitchen Appliances", "Phones", "Other"];
 const smtpTransporter = notificationTransport === "smtp" && smtpHost && smtpUser && smtpPass
@@ -413,35 +338,6 @@ const seedItems: Array<Omit<StoredItem, "images" | "documents"> & { images: Stor
   ];
 })();
 
-const parseCookies = (req: express.Request) =>
-  String(req.headers.cookie || "")
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .reduce<Record<string, string>>((acc, entry) => {
-      const [key, ...rest] = entry.split("=");
-      if (!key) return acc;
-      acc[key] = decodeURIComponent(rest.join("="));
-      return acc;
-    }, {});
-
-const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "-");
-const replaceFileExtension = (name: string, extension: string) => {
-  const baseName = path.basename(name, path.extname(name)) || "image";
-  return `${safeFileName(baseName)}${extension}`;
-};
-const guessContentType = (name: string, fallback = "application/octet-stream") => {
-  const extension = path.extname(name).toLowerCase();
-  if ([".jpg", ".jpeg"].includes(extension)) return "image/jpeg";
-  if (extension === ".png") return "image/png";
-  if (extension === ".webp") return "image/webp";
-  if (extension === ".pdf") return "application/pdf";
-  if (extension === ".doc") return "application/msword";
-  if (extension === ".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  if (extension === ".xls") return "application/vnd.ms-excel";
-  if (extension === ".xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-  return fallback;
-};
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 const sanitizeDisplayName = (value: string) => value.trim().replace(/\s+/g, " ");
 const buildEmailVerificationUrl = (token: string) => `${appBaseUrl}/verify?token=${encodeURIComponent(token)}`;
@@ -556,15 +452,6 @@ const bulkImportUpload = multer({
   limits: { files: 2, fileSize: 25 * 1024 * 1024 }
 });
 
-const fileExists = async (filePath: string) => {
-  try {
-    await fs.promises.access(filePath, fs.constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 const hashPassword = (password: string) => {
   const salt = randomBytes(16).toString("hex");
   const hash = scryptSync(password, salt, 64).toString("hex");
@@ -601,20 +488,6 @@ const removeStoredFile = (url: string) => {
   const filePath = path.normalize(path.join(__dirname, url.replace(/^\/+/, "")));
   if (!filePath.startsWith(uploadsDir)) return;
   void removeFileIfExists(filePath);
-};
-
-const buildStoragePath = (kind: "image" | "document", originalName: string) =>
-  `${kind}s/${new Date().toISOString().slice(0, 10)}/${Date.now()}-${randomUUID()}-${safeFileName(originalName)}`;
-
-const buildStoredFileUrl = (kind: "image" | "document", storagePath: string) =>
-  `/uploads/${kind === "image" ? "images" : "documents"}/${encodeURIComponent(Buffer.from(storagePath, "utf8").toString("base64url"))}`;
-
-const decodeStoredFilePath = (encodedPath: string) => {
-  try {
-    return Buffer.from(decodeURIComponent(encodedPath), "base64url").toString("utf8");
-  } catch {
-    return null;
-  }
 };
 
 const runMalwareScan = async (filePath: string) => {
@@ -654,7 +527,7 @@ const verifyMalwareScannerHealth = async () => {
 };
 
 const uploadFileToManagedStorage = async (sourcePath: string, kind: "image" | "document", originalName: string) => {
-  const storagePath = buildStoragePath(kind, originalName);
+  const storagePath = buildStoragePath(kind, originalName, randomUUID);
   const bucket = kind === "image" ? imageBucket : documentBucket;
   const fileBuffer = await fs.promises.readFile(sourcePath);
   const uploadResult = await supabase.storage.from(bucket).upload(storagePath, fileBuffer, {
@@ -766,37 +639,6 @@ const pruneExpiredDatabaseRows = async () => {
   const securityEventsCutoff = new Date(Date.now() - securityEventsRetentionMs).toISOString();
   await handleSupabase(await supabase.from("bid_idempotency_keys").delete().lte("expires_at", now));
   await handleSupabase(await supabase.from("security_events").delete().lte("created_at", securityEventsCutoff));
-};
-
-const removeFileIfExists = async (filePath: string) => {
-  try {
-    await fs.promises.unlink(filePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      throw error;
-    }
-  }
-};
-
-const formatBidTime = (createdAt: string) =>
-  new Date(createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-
-const toIso = (value: string) => {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
-};
-
-const csvEscape = (value: string | number | boolean) => `"${String(value).replace(/"/g, "\"\"")}"`;
-const toCsv = (rows: Array<Record<string, string | number | boolean>>) => {
-  if (!rows.length) return "";
-  const headers = Object.keys(rows[0]);
-  return [headers.join(","), ...rows.map((row) => headers.map((header) => csvEscape(row[header] ?? "")).join(","))].join("\n");
-};
-
-const parsePaginationValue = (value: unknown, fallback: number, max: number) => {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(Math.max(Math.floor(parsed), 1), max);
 };
 
 const handleSupabase = <T>(result: { data: T; error: { message: string } | null }) => {
@@ -999,36 +841,6 @@ const ensureCanManageTargetUser = (actor: AuthContext, targetRoles: string[]) =>
   return ensureCanManageTargetRoles(actor.role, targetRoles);
 };
 
-const isUserWinningItem = (auth: AuthContext, item: StoredItem) => {
-  if (!auth.userId) return false;
-  if (new Date(item.endTime).getTime() > Date.now()) return false;
-  if (item.currentBid <= 0) return false;
-  const matchingBid = item.bids.find((bid) => bid.bidderUserId === auth.userId);
-  return Boolean(matchingBid && matchingBid.amount === item.currentBid);
-};
-
-const canAccessItemDocument = (auth: AuthContext, item: StoredItem, visibility: DocumentVisibility) =>
-  canAccessDocumentVisibility({
-    signedIn: auth.signedIn,
-    adminAuthorized: auth.adminAuthorized,
-    role: auth.role,
-    itemArchived: Boolean(item.archivedAt),
-    itemEnded: new Date(item.endTime).getTime() <= Date.now(),
-    reserveState: getReserveState(item),
-    isWinner: isUserWinningItem(auth, item)
-  }, visibility);
-
-const sanitizeItemForAuth = (item: StoredItem, auth: AuthContext): StoredItem => ({
-  ...item,
-  reserve: canViewReserveWithRole(auth.role) ? item.reserve : undefined,
-  bids: item.bids.map((bid) => ({
-    ...bid,
-    bidder: canViewItemOperationsWithRole(auth.role) || auth.adminAuthorized ? bid.bidder : "Anonymous bidder",
-    bidderUserId: canViewItemOperationsWithRole(auth.role) || auth.adminAuthorized ? bid.bidderUserId : undefined
-  })),
-  documents: item.documents.filter((document) => canAccessItemDocument(auth, item, document.visibility || "bidder_visible"))
-});
-
 const getEmailVerificationRow = async (token: string) =>
   handleSupabaseMaybe<EmailVerificationRow>(
     await supabase
@@ -1064,46 +876,6 @@ const createPasswordResetToken = (user: UserRow & { password_hash?: string }) =>
   return { token, expiresAt, resetUrl: buildPasswordResetUrl(token) };
 };
 
-const queuePasswordReset = async (user: UserRow & { password_hash?: string }, triggeredBy?: string) => {
-  const reset = createPasswordResetToken(user);
-  await queueNotification(
-    "PASSWORD_RESET",
-    "Reset your FMDQ Auctions password",
-    {
-      email: user.email,
-      displayName: user.display_name,
-      resetUrl: reset.resetUrl,
-      expiresAt: reset.expiresAt,
-      triggeredBy: triggeredBy || "self-service"
-    },
-    user.email
-  );
-  return reset;
-};
-
-const appendAudit = async (req: express.Request, entry: AuditEntry) => {
-  const auth = await getAuthContext(req);
-  const details = redactSensitiveAuditDetails({
-    ...entry.details,
-    actorRole: auth.role,
-    ...(auth.userId ? { actorUserId: auth.userId } : {}),
-  });
-
-  await handleSupabase(
-    await supabase.from("audits").insert({
-      id: randomUUID(),
-      event_type: entry.eventType,
-      entity_type: entry.entityType,
-      entity_id: entry.entityId,
-      actor: entry.actor,
-      actor_type: entry.actorType,
-      request_id: String((req as express.Request & { requestId?: string }).requestId || ""),
-      details_json: details,
-      created_at: new Date().toISOString()
-    })
-  );
-};
-
 const getCategories = async () => {
   const rows = handleSupabase(
     await supabase.from("categories").select("name").order("name", { ascending: true })
@@ -1118,64 +890,11 @@ const getRoles = async () => {
   return rows.map((row) => row.name);
 };
 
-const formatProcessUptime = (uptimeSeconds: number) => {
-  const totalMinutes = Math.max(0, Math.floor(uptimeSeconds / 60));
-  const days = Math.floor(totalMinutes / (60 * 24));
-  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
-  const minutes = totalMinutes % 60;
-
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-};
-
-const getLandingStats = async () => {
-  const items = await getItems();
-  const users = await listUsersWithRoles();
-  const now = Date.now();
-
-  const activeLots = items.filter((item) => {
-    if (item.archivedAt) return false;
-    return new Date(item.endTime).getTime() > now;
-  }).length;
-
-  const verifiedBidders = users.filter(
-    (user) => user.status === "active" && user.roles.includes("Bidder")
-  ).length;
-
-  return {
-    activeLots,
-    verifiedBidders,
-    accountUptime: formatProcessUptime(process.uptime()),
-  };
-};
-
-const getReserveState = (item: StoredItem) => {
-  if (item.reserve == null || item.reserve <= 0) return "no_reserve";
-  if (new Date(item.endTime).getTime() > Date.now()) {
-    return item.currentBid >= item.reserve ? "reserve_met" : "reserve_pending";
-  }
-  return item.currentBid >= item.reserve ? "reserve_met" : "reserve_not_met";
-};
-
-const parseAuditDetails = (value: Record<string, unknown> | string | null | undefined) => {
-  if (!value) return {} as Record<string, unknown>;
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-  return value;
-};
-
 const {
   listUsersWithRoles,
   getAuditActorRoleLookup,
   redactSensitiveAuditDetails,
   sanitizeNotificationPayloadForAdmin,
-  mapAuditRowToEntry,
   mapNotificationRow,
   mapNotificationRowForAdmin,
   getRecentAudits,
@@ -1216,6 +935,31 @@ const {
   sendOpsAlert,
 });
 
+const { appendAudit } = createAuditService({
+  supabase,
+  handleSupabase,
+  redactSensitiveAuditDetails,
+  getAuthContext,
+  randomUUID,
+});
+
+const queuePasswordReset = async (user: UserRow & { password_hash?: string }, triggeredBy?: string) => {
+  const reset = createPasswordResetToken(user);
+  await queueNotification(
+    "PASSWORD_RESET",
+    "Reset your FMDQ Auctions password",
+    {
+      email: user.email,
+      displayName: user.display_name,
+      resetUrl: reset.resetUrl,
+      expiresAt: reset.expiresAt,
+      triggeredBy: triggeredBy || "self-service",
+    },
+    user.email
+  );
+  return reset;
+};
+
 const {
   validateNewItem,
   validateCategoryName,
@@ -1248,19 +992,24 @@ const {
   queueNotification,
 });
 
-const { getItems, getItemById } = createItemReadModel({
+const { getItems, getItemSummaries, getItemById } = createItemReadModel({
   supabase,
   handleSupabase,
   handleSupabaseMaybe,
   parseAuditDetails,
 });
 
+const getLandingStatsSummary = () => getLandingStats({
+  getItems,
+  listUsersWithRoles,
+});
+
 const {
-  resolveLegacyBidOwnerForNotification,
   getUserBidRecords,
   validateBid,
   placeBidAtomically,
   queueBidActivityNotifications,
+  backfillLegacyBidAuditAttribution,
 } = createBidService({
   supabase,
   handleSupabase,
@@ -1272,51 +1021,6 @@ const {
   getUserByDisplayName,
   queueNotification,
 });
-
-const backfillLegacyBidAuditAttribution = async () => {
-  const users = handleSupabase(
-    await supabase.from("users").select("id,display_name").eq("status", "active")
-  ) as Array<{ id: string; display_name: string }>;
-  const uniqueDisplayNameMap = new Map<string, string>();
-  const duplicateDisplayNames = new Set<string>();
-  for (const user of users) {
-    if (uniqueDisplayNameMap.has(user.display_name)) {
-      duplicateDisplayNames.add(user.display_name);
-      uniqueDisplayNameMap.delete(user.display_name);
-      continue;
-    }
-    if (!duplicateDisplayNames.has(user.display_name)) {
-      uniqueDisplayNameMap.set(user.display_name, user.id);
-    }
-  }
-  const bidAudits = handleSupabase(
-    await supabase
-      .from("audits")
-      .select("id,entity_id,actor,details_json,created_at")
-      .eq("event_type", "BID_PLACED")
-      .order("created_at", { ascending: false })
-  ) as Array<Pick<AuditRow, "id" | "entity_id" | "actor" | "details_json" | "created_at">>;
-  for (const audit of bidAudits) {
-    const details = parseAuditDetails(audit.details_json);
-    if (details.bidderUserId) continue;
-    const matchedUserId = uniqueDisplayNameMap.get(audit.actor);
-    if (!matchedUserId) continue;
-    await handleSupabase(
-      await supabase
-        .from("audits")
-        .update({ details_json: { ...details, bidderUserId: matchedUserId } })
-        .eq("id", audit.id)
-    );
-    await handleSupabase(
-      await supabase
-        .from("bids")
-        .update({ bidder_user_id: matchedUserId })
-        .eq("item_id", String(audit.entity_id))
-        .eq("created_at", String(audit.created_at))
-        .is("bidder_user_id", null)
-    );
-  }
-};
 
 const runMaintenanceTasks = async () => {
   if (maintenanceInFlight) return;
@@ -1366,11 +1070,7 @@ const startNotificationWorkerLoop = async () => {
 const checkBidRateLimit = async (req: express.Request, actor: string, itemId: string) =>
   recordSharedRateLimitAttempt(req, "BID_ATTEMPT", `${actor}:${itemId}`, bidRateWindowMs, bidRateLimit, { itemId });
 
-const asyncHandler = (
-  fn: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<void>
-) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  void fn(req, res, next).catch(next);
-};
+const asyncHandler = createAsyncHandler;
 
 const requireAdminToken = asyncHandler(async (req, res, next) => {
   const auth = await getAuthContext(req);
@@ -1450,38 +1150,6 @@ registerAuthRoutes({
   randomUUID,
 });
 
-app.get("/api/exports/audits.csv", requireAdminToken, asyncHandler(async (req, res) => {
-  const rows = handleSupabase(
-    await supabase
-      .from("audits")
-      .select("id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at")
-      .order("created_at", { ascending: false })
-  ) as AuditRow[];
-  const formatted = rows.map((row) => ({
-    id: row.id,
-    eventType: row.event_type,
-    entityType: row.entity_type,
-    entityId: row.entity_id,
-    actor: row.actor,
-    actorType: row.actor_type,
-    requestId: row.request_id,
-    details: JSON.stringify(redactSensitiveAuditDetails(parseAuditDetails(row.details_json))),
-    createdAt: row.created_at
-  }));
-  const auth = await getAuthContext(req);
-  await appendAudit(req, {
-    eventType: "EXPORT_AUDITS",
-    entityType: "export",
-    entityId: "audits.csv",
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { rowCount: formatted.length }
-  });
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", 'attachment; filename="audits.csv"');
-  res.send(toCsv(formatted));
-}));
-
 registerCatalogRoutes({
   app,
   supabase,
@@ -1494,10 +1162,11 @@ registerCatalogRoutes({
   appendAudit,
   queueNotification,
   getItems,
+  getItemSummaries,
   getItemById,
   sanitizeItemForAuth,
   getCategories,
-  getLandingStats,
+  getLandingStats: getLandingStatsSummary,
   validateCategoryName,
   canAccessItemDocument,
   fileExists,
@@ -1519,732 +1188,72 @@ registerCatalogRoutes({
   getUserBidRecords,
 });
 
-app.get("/api/admin/operations", requireAdminToken, asyncHandler(async (req, res) => {
-  const items = await getItems(true);
-  const pendingNotifications = handleSupabase(await supabase.from("notification_queue").select("id").eq("status", "pending")) as Array<{ id: string }>;
-  const audits = handleSupabase(await supabase.from("audits").select("id")) as Array<{ id: string }>;
-  const wins = handleSupabase(await supabase.from("audits").select("id").eq("event_type", "BID_PLACED")) as Array<{ id: string }>;
-  const users = await listUsersWithRoles();
-  const summary = {
-    totalItems: items.length,
-    liveCount: items.filter((item) => new Date(item.startTime).getTime() <= Date.now() && new Date(item.endTime).getTime() >= Date.now() && !item.archivedAt).length,
-    closedCount: items.filter((item) => new Date(item.endTime).getTime() < Date.now() && !item.archivedAt).length,
-    archivedCount: items.filter((item) => Boolean(item.archivedAt)).length,
-    pendingNotifications: pendingNotifications.length,
-    auditCount: audits.length,
-    wins: wins.length,
-    totalUsers: users.length,
-    activeUsers: users.filter((user) => user.status === "active").length,
-    disabledUsers: users.filter((user) => user.status === "disabled").length,
-    adminUsers: users.filter((user) => user.roles.includes("Admin")).length,
-    superAdminUsers: users.filter((user) => user.roles.includes("SuperAdmin")).length
-  };
-  res.json({
-    summary,
-    metrics: {
-      totalItems: summary.totalItems,
-      liveItems: summary.liveCount,
-      closedItems: summary.closedCount,
-      archivedItems: summary.archivedCount,
-      pendingNotifications: summary.pendingNotifications,
-      auditEvents: summary.auditCount,
-      wins: summary.wins
-    },
-    recentAudits: await getRecentAudits(20),
-    notificationQueue: await getNotificationQueue(20)
-  });
-}));
+registerAdminRoutes({
+  app,
+  supabase,
+  asyncHandler,
+  requireAdminToken,
+  requireSuperAdminToken,
+  bulkImportUpload,
+  handleSupabase,
+  getAuthContext,
+  appendAudit,
+  parseAuditDetails,
+  redactSensitiveAuditDetails,
+  mapNotificationRowForAdmin,
+  getRecentAudits,
+  getNotificationQueue,
+  processNotificationQueue,
+  listUsersWithRoles,
+  getAuditActorRoleLookup,
+  getRoles,
+  getUserById,
+  getUserByIdWithPassword,
+  getUserByEmail,
+  getUserRoles,
+  ensureCanManageTargetUser,
+  queuePasswordReset,
+  createEmailVerificationToken,
+  queueNotification,
+  parseCsv,
+  getImportValue,
+  splitImportList,
+  normalizeEmail,
+  sanitizeDisplayName,
+  hashPassword,
+  randomUUID,
+  toCsv,
+});
 
-app.get("/api/admin/audits", requireAdminToken, asyncHandler(async (req, res) => {
-  const itemId = String(req.query.itemId || "").trim();
-  const from = String(req.query.from || "").trim();
-  const to = String(req.query.to || "").trim();
-  const eventType = String(req.query.eventType || "").trim();
-  const actor = String(req.query.actor || "").trim();
-  const entityType = String(req.query.entityType || "").trim();
-  const includeSecurity = String(req.query.includeSecurity || "") === "1";
-  const page = Math.max(1, Number(req.query.page || 1) || 1);
-  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
-  const offset = (page - 1) * pageSize;
-  let request = supabase
-    .from("audits")
-    .select("id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at", { count: "exact" })
-    .order("created_at", { ascending: false })
-    .range(offset, offset + pageSize - 1);
-  if (itemId) request = request.eq("entity_id", itemId);
-  if (from) request = request.gte("created_at", from);
-  if (to) request = request.lte("created_at", to);
-  if (eventType) request = request.eq("event_type", eventType);
-  if (actor) request = request.ilike("actor", `%${actor}%`);
-  if (entityType) request = request.eq("entity_type", entityType);
-  const result = await request;
-  const rows = handleSupabase(result) as AuditRow[];
-  const filteredRows = includeSecurity ? rows : rows.filter((row) => !securityTelemetryEvents.has(row.event_type));
-  const actorRoleLookup = await getAuditActorRoleLookup();
-  res.json({
-    items: filteredRows.map((row) => ({
-      ...row,
-      details_json: redactSensitiveAuditDetails(parseAuditDetails(row.details_json)),
-      actor_role:
-        (typeof row.details_json === "object" &&
-        row.details_json !== null &&
-        "actorRole" in row.details_json &&
-        typeof row.details_json.actorRole === "string"
-          ? row.details_json.actorRole
-          : null) ??
-        actorRoleLookup.get(row.actor) ??
-        null,
-    })),
-    total: result.count ?? filteredRows.length,
-    page,
-    pageSize,
-  });
-}));
-
-app.get("/api/admin/notifications", requireAdminToken, asyncHandler(async (req, res) => {
-  const page = Math.max(1, Number(req.query.page || 1) || 1);
-  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
-  const offset = (page - 1) * pageSize;
-  const rowsResult = await supabase
-    .from("notification_queue")
-    .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,next_attempt_at,attempt_count,claim_token,claim_expires_at,error_message", { count: "exact" })
-    .order("created_at", { ascending: false })
-    .range(offset, offset + pageSize - 1);
-  const rows = handleSupabase(rowsResult) as NotificationRow[];
-  res.json({
-    items: rows.map(mapNotificationRowForAdmin),
-    total: rowsResult.count ?? rows.length,
-    page,
-    pageSize,
-  });
-}));
-
-app.post("/api/admin/notifications/process", requireAdminToken, asyncHandler(async (req, res) => {
-  const processed = await processNotificationQueue();
-  res.json({ processed, transport: notificationTransport });
-}));
-
-app.get("/api/admin/users", requireAdminToken, asyncHandler(async (req, res) => {
-  res.json(await listUsersWithRoles());
-}));
-
-app.get("/api/admin/roles", requireAdminToken, asyncHandler(async (req, res) => {
-  res.json(await getRoles());
-}));
-
-app.post("/api/admin/users/:id/roles", requireSuperAdminToken, express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const userId = String(req.params.id || "").trim();
-  const roleName = String(req.body?.roleName || "").trim();
-  if (!userId || !roleName) {
-    res.status(400).json({ error: "User ID and role name are required." });
-    return;
-  }
-  const availableRoles = await getRoles();
-  if (!availableRoles.includes(roleName)) {
-    res.status(400).json({ error: "That role does not exist." });
-    return;
-  }
-  const user = await getUserById(userId);
-  if (!user) {
-    res.status(404).json({ error: "User not found." });
-    return;
-  }
-  await handleSupabase(await supabase.from("user_roles").upsert({ user_id: user.id, role_name: roleName, created_at: new Date().toISOString() }, { onConflict: "user_id,role_name" }));
-  const auth = await getAuthContext(req);
-  await appendAudit(req, {
-    eventType: "USER_ROLE_ASSIGNED",
-    entityType: "user",
-    entityId: user.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { email: user.email, role: roleName }
-  });
-  res.json({ updated: true, message: `${roleName} assigned to ${user.display_name}.` });
-}));
-
-app.delete("/api/admin/users/:id/roles/:roleName", requireSuperAdminToken, asyncHandler(async (req, res) => {
-  const userId = String(req.params.id || "").trim();
-  const roleName = String(req.params.roleName || "").trim();
-  if (!userId || !roleName) {
-    res.status(400).json({ error: "User ID and role name are required." });
-    return;
-  }
-  const user = await getUserById(userId);
-  if (!user) {
-    res.status(404).json({ error: "User not found." });
-    return;
-  }
-  if ((await getUserRoles(user.id)).length <= 1) {
-    res.status(400).json({ error: "Every user must retain at least one role." });
-    return;
-  }
-  await handleSupabase(await supabase.from("user_roles").delete().eq("user_id", user.id).eq("role_name", roleName));
-  const auth = await getAuthContext(req);
-  await appendAudit(req, {
-    eventType: "USER_ROLE_REMOVED",
-    entityType: "user",
-    entityId: user.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { email: user.email, role: roleName }
-  });
-  res.json({ updated: true, message: `${roleName} removed from ${user.display_name}.` });
-}));
-
-app.post("/api/admin/users/:id/disable", requireAdminToken, express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const userId = String(req.params.id || "").trim();
-  const auth = await getAuthContext(req);
-  const reason = sanitizeDisplayName(String(req.body?.reason || "")) || "No reason provided";
-  if (!userId) {
-    res.status(400).json({ error: "User ID is required." });
-    return;
-  }
-  if (auth.userId && auth.userId === userId) {
-    res.status(400).json({ error: "You cannot disable your own account." });
-    return;
-  }
-  const user = await getUserByIdWithPassword(userId);
-  if (!user) {
-    res.status(404).json({ error: "User not found." });
-    return;
-  }
-  const targetRoles = (await getUserRoles(user.id)).map((row) => row.role_name);
-  const targetCheck = ensureCanManageTargetUser(auth, targetRoles);
-  if (!targetCheck.ok) {
-    res.status(403).json({ error: targetCheck.error });
-    return;
-  }
-  if (user.status === "disabled") {
-    res.json({ updated: true, message: `${user.display_name} is already disabled.` });
-    return;
-  }
-  await handleSupabase(
-    await supabase
-      .from("users")
-      .update({ status: "disabled" })
-      .eq("id", user.id)
-  );
-  await handleSupabase(await supabase.from("sessions").delete().eq("user_id", user.id));
-  await appendAudit(req, {
-    eventType: "USER_DISABLED",
-    entityType: "user",
-    entityId: user.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { email: user.email, target: user.display_name, reason }
-  });
-  res.json({ updated: true, message: `${user.display_name} has been disabled and signed out everywhere.` });
-}));
-
-app.post("/api/admin/users/:id/enable", requireAdminToken, asyncHandler(async (req, res) => {
-  const userId = String(req.params.id || "").trim();
-  const auth = await getAuthContext(req);
-  if (!userId) {
-    res.status(400).json({ error: "User ID is required." });
-    return;
-  }
-  const user = await getUserByIdWithPassword(userId);
-  if (!user) {
-    res.status(404).json({ error: "User not found." });
-    return;
-  }
-  const targetRoles = (await getUserRoles(user.id)).map((row) => row.role_name);
-  const targetCheck = ensureCanManageTargetUser(auth, targetRoles);
-  if (!targetCheck.ok) {
-    res.status(403).json({ error: targetCheck.error });
-    return;
-  }
-  if (user.status === "active") {
-    res.json({ updated: true, message: `${user.display_name} is already active.` });
-    return;
-  }
-  await handleSupabase(
-    await supabase
-      .from("users")
-      .update({ status: "active" })
-      .eq("id", user.id)
-  );
-  await appendAudit(req, {
-    eventType: "USER_ENABLED",
-    entityType: "user",
-    entityId: user.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { email: user.email, target: user.display_name }
-  });
-  res.json({ updated: true, message: `${user.display_name} has been re-enabled.` });
-}));
-
-app.post("/api/admin/users/:id/password-reset", requireAdminToken, asyncHandler(async (req, res) => {
-  const user = await getUserByIdWithPassword(String(req.params.id || "").trim());
-  if (!user || user.status !== "active") {
-    res.status(404).json({ error: "Active user not found." });
-    return;
-  }
-  const auth = await getAuthContext(req);
-  const targetRoles = (await getUserRoles(user.id)).map((row) => row.role_name);
-  const targetCheck = ensureCanManageTargetUser(auth, targetRoles);
-  if (!targetCheck.ok) {
-    res.status(403).json({ error: targetCheck.error });
-    return;
-  }
-  await queuePasswordReset(user, auth.actor);
-  await appendAudit(req, {
-    eventType: "PASSWORD_RESET_FORCED",
-    entityType: "system",
-    entityId: user.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { email: user.email, target: user.display_name }
-  });
-  res.json({ queued: true, count: 1, message: `Password reset sent to ${user.email}.` });
-}));
-
-app.post("/api/admin/users/password-resets", requireAdminToken, express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
-  const scope = String(req.body?.scope || "selected");
-  const role = String(req.body?.role || "").trim();
-  const selectedIds = Array.isArray(req.body?.userIds) ? req.body.userIds.map((value: unknown) => String(value).trim()).filter(Boolean) : [];
-  const auth = await getAuthContext(req);
-  const users = (await listUsersWithRoles()).filter((user) => user.status === "active");
-  const targets = users.filter((user) => {
-    if (scope === "all") return true;
-    if (scope === "role") return role ? user.roles.includes(role) : false;
-    return selectedIds.includes(user.id);
-  }).filter((user) => isSuperAdminRole(auth.role) || !user.roles.includes("SuperAdmin"));
-  if (!targets.length) {
-    res.status(400).json({ error: "No users matched the selected bulk reset criteria." });
-    return;
-  }
-  for (const target of targets) {
-    await queuePasswordReset({
-      id: target.id,
-      email: target.email,
-      display_name: target.displayName,
-      status: target.status,
-      created_at: target.createdAt,
-      last_login_at: target.lastLoginAt,
-      password_hash: (await getUserByIdWithPassword(target.id))?.password_hash
-    }, auth.actor);
-  }
-  await appendAudit(req, {
-    eventType: "PASSWORD_RESET_BULK_FORCED",
-    entityType: "system",
-    entityId: scope === "role" ? role || "bulk" : scope,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { scope, count: targets.length, role: role || "n/a" }
-  });
-  res.json({ queued: true, count: targets.length, message: `Queued password resets for ${targets.length} user(s).` });
-}));
-
-app.post("/api/admin/users/bulk-import", requireSuperAdminToken, bulkImportUpload.single("csv"), asyncHandler(async (req, res) => {
-  const csvFile = req.file;
-  if (!csvFile) {
-    res.status(400).json({ error: "Upload a CSV file first." });
-    return;
-  }
-
-  const auth = await getAuthContext(req);
-  const report: {
-    created: number;
-    skipped: number;
-    failed: number;
-    items: Array<{ row: number; status: "created" | "skipped" | "failed"; email: string; message: string }>;
-  } = { created: 0, skipped: 0, failed: 0, items: [] };
-
-  try {
-    const rows = parseCsv(await fs.promises.readFile(csvFile.path, "utf8"));
-    if (!rows.length) {
-      res.status(400).json({ error: "The uploaded CSV is empty." });
-      return;
-    }
-    const availableRoles = await getRoles();
-    for (const [index, row] of rows.entries()) {
-      const email = normalizeEmail(getImportValue(row, ["email"]));
-      const displayName = sanitizeDisplayName(getImportValue(row, ["display_name", "displayName", "full_name", "name"]));
-      const roles = splitImportList(getImportValue(row, ["roles", "role"])).filter((role) => availableRoles.includes(role));
-      const status = getImportValue(row, ["status"]).trim() || "pending_verification";
-      if (!email || !displayName) {
-        report.failed += 1;
-        report.items.push({ row: index + 2, status: "failed", email: email || `row-${index + 2}`, message: "Email and display name are required." });
-        continue;
-      }
-      if (await getUserByEmail(email)) {
-        report.skipped += 1;
-        report.items.push({ row: index + 2, status: "skipped", email, message: "Skipped because a user with that email already exists." });
-        continue;
-      }
-      const userId = randomUUID();
-      const createdAt = new Date().toISOString();
-      const assignedRoles = roles.length ? roles : ["Bidder"];
-      await handleSupabase(await supabase.from("users").insert({
-        id: userId,
-        email,
-        password_hash: hashPassword(randomUUID()),
-        display_name: displayName,
-        status: status === "active" || status === "disabled" ? status : "pending_verification",
-        created_at: createdAt,
-        last_login_at: null
-      }));
-      await handleSupabase(await supabase.from("user_roles").insert(
-        assignedRoles.map((roleName) => ({
-          user_id: userId,
-          role_name: roleName,
-          created_at: createdAt
-        }))
-      ));
-      if (status === "active") {
-        const user = await getUserByEmail(email);
-        if (user) {
-          await queuePasswordReset(user, auth.actor);
-        }
-      } else {
-        const verification = await createEmailVerificationToken(userId);
-        await queueNotification(
-          "ACCOUNT_VERIFICATION",
-          "Confirm your FMDQ Auctions account",
-          { email, displayName, verifyUrl: verification.verifyUrl },
-          email
-        );
-      }
-      report.created += 1;
-      report.items.push({ row: index + 2, status: "created", email, message: `Created with roles: ${assignedRoles.join(", ")}.` });
-    }
-    await appendAudit(req, {
-      eventType: "USER_BULK_IMPORTED",
-      entityType: "system",
-      entityId: "user-bulk-import",
-      actor: auth.actor,
-      actorType: auth.actorType,
-      details: { created: report.created, skipped: report.skipped, failed: report.failed }
-    });
-    res.json(report);
-  } finally {
-    await removeFileIfExists(csvFile.path);
-  }
-}));
-
-app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{ name: "csv", maxCount: 1 }, { name: "bundle", maxCount: 1 }]), asyncHandler(async (req, res) => {
-  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
-  const csvFile = files?.csv?.[0];
-  const zipFile = files?.bundle?.[0];
-  if (!csvFile) {
-    res.status(400).json({ error: "Upload a CSV file first." });
-    return;
-  }
-
-  const auth = await getAuthContext(req);
-  const tempExtractDir = await fs.promises.mkdtemp(path.join(importsDir, "bulk-"));
-  const createdIds: string[] = [];
-  const pendingRows: Array<{
-    row: number;
-    title: string;
-    value: Extract<ReturnType<typeof validateNewItem>, { ok: true }>["value"];
-    imageNames: string[];
-    documentEntries: Array<{ name: string; visibility: DocumentVisibility }>;
-  }> = [];
-  const report: {
-    created: number;
-    skipped: number;
-    failed: number;
-    items: Array<{ row: number; status: "created" | "skipped" | "failed"; title: string; itemId?: string; message: string }>;
-  } = {
-    created: 0,
-    skipped: 0,
-    failed: 0,
-    items: []
-  };
-
-  try {
-    const csvRows = parseCsv(await fs.promises.readFile(csvFile.path, "utf8"));
-    if (!csvRows.length) {
-      res.status(400).json({ error: "The uploaded CSV is empty." });
-      return;
-    }
-
-    let extractedFiles = new Map<string, string>();
-    if (zipFile) {
-      await inspectImportArchive(zipFile.path);
-      extractedFiles = await extractImportArchive(zipFile.path, tempExtractDir);
-    }
-    const seenLots = new Set<string>();
-    const seenSkus = new Set<string>();
-
-    for (const [index, row] of csvRows.entries()) {
-      const title = getImportValue(row, ["title", "item_title"]);
-      try {
-        const payload = {
-          title,
-          category: getImportValue(row, ["category"]),
-          lot: getImportValue(row, ["lot", "lot_number"]),
-          sku: getImportValue(row, ["sku", "asset_code", "sku_asset_code"]),
-          condition: getImportValue(row, ["condition"]),
-          location: getImportValue(row, ["location"]),
-          startBid: getImportValue(row, ["start_bid", "starting_bid"]),
-          reserve: getImportValue(row, ["reserve", "reserve_price"]),
-          increment: getImportValue(row, ["increment", "bid_increment"]),
-          startTime: getImportValue(row, ["start_time", "auction_start", "start"]),
-          endTime: getImportValue(row, ["end_time", "auction_end", "end"]),
-          description: getImportValue(row, ["description", "item_description"])
-        };
-        const validation = validateNewItem(payload);
-        if (!validation.ok) {
-          report.failed += 1;
-          report.items.push({ row: index + 2, status: "failed", title: title || `Row ${index + 2}`, message: validation.error });
-          continue;
-        }
-        if (seenLots.has(validation.value.lot) || seenSkus.has(validation.value.sku)) {
-          report.failed += 1;
-          report.items.push({
-            row: index + 2,
-            status: "failed",
-            title: validation.value.title,
-            message: "Duplicate lot or SKU detected within the uploaded CSV."
-          });
-          continue;
-        }
-        seenLots.add(validation.value.lot);
-        seenSkus.add(validation.value.sku);
-
-        const duplicate = await findExistingItemByLotOrSku(validation.value.lot, validation.value.sku);
-        if (duplicate) {
-          report.skipped += 1;
-          report.items.push({ row: index + 2, status: "skipped", title: validation.value.title, itemId: duplicate.id, message: `Skipped because lot or SKU already exists on ${duplicate.title}.` });
-          continue;
-        }
-
-        const normalizedRow = Object.entries(row).reduce<Record<string, string>>((acc, [key, value]) => {
-          acc[normalizeImportKey(key)] = value;
-          return acc;
-        }, {});
-        const imageNames = Object.entries(normalizedRow)
-          .filter(([key, value]) => key.startsWith("image") && value.trim())
-          .flatMap(([, value]) => splitImportList(value));
-        const documentEntries = Object.entries(normalizedRow)
-          .filter(([key, value]) => (key.startsWith("document") || key.startsWith("doc")) && value.trim())
-          .flatMap(([key, value]) => splitImportList(value).map((name) => ({
-            key,
-            name,
-            visibility: normalizeDocumentVisibility(
-              normalizedRow[`${key}_visibility`] || normalizedRow.document_visibility || normalizedRow.doc_visibility
-            )
-          })));
-        for (const name of imageNames) {
-          if (!extractedFiles.get(name.toLowerCase())) {
-            throw new Error(`Image file "${name}" was not found in the ZIP.`);
-          }
-        }
-        for (const entry of documentEntries) {
-          if (!extractedFiles.get(entry.name.toLowerCase())) {
-            throw new Error(`Document file "${entry.name}" was not found in the ZIP.`);
-          }
-        }
-        pendingRows.push({
-          row: index + 2,
-          title: validation.value.title,
-          value: validation.value,
-          imageNames,
-          documentEntries: documentEntries.map((entry) => ({ name: entry.name, visibility: entry.visibility }))
-        });
-      } catch (error) {
-        report.failed += 1;
-        report.items.push({
-          row: index + 2,
-          status: "failed",
-          title: title || `Row ${index + 2}`,
-          message: error instanceof Error ? error.message : "Import failed."
-        });
-      }
-    }
-
-    if (report.failed > 0) {
-      res.status(400).json({
-        ...report,
-        message: "Bulk import validation failed. No items were created."
-      });
-      return;
-    }
-
-    try {
-      for (const row of pendingRows) {
-        const imageFiles = await Promise.all(row.imageNames.map(async (name) => {
-          const sourcePath = extractedFiles.get(name.toLowerCase());
-          if (!sourcePath) throw new Error(`Image file "${name}" was not found in the ZIP.`);
-          return copyImportedFile(sourcePath, "image");
-        }));
-        const documentFiles = await Promise.all(row.documentEntries.map(async (entry) => {
-          const sourcePath = extractedFiles.get(entry.name.toLowerCase());
-          if (!sourcePath) throw new Error(`Document file "${entry.name}" was not found in the ZIP.`);
-          return copyImportedFile(sourcePath, "document", entry.visibility);
-        }));
-
-        try {
-          const itemId = await createItemRecord(req, row.value, auth, { images: imageFiles, documents: documentFiles });
-          createdIds.push(itemId);
-          report.created += 1;
-          report.items.push({ row: row.row, status: "created", title: row.title, itemId, message: "Imported successfully." });
-        } catch (error) {
-          await cleanupManagedFiles([...imageFiles, ...documentFiles]);
-          throw error;
-        }
-      }
-    } catch (error) {
-      for (const itemId of createdIds.reverse()) {
-        await rollbackCreatedItem(itemId).catch(() => undefined);
-      }
-      res.status(500).json({
-        ...report,
-        error: error instanceof Error ? error.message : "Bulk import failed.",
-        message: "Bulk import failed during commit. Created items were rolled back."
-      });
-      return;
-    }
-
-    await appendAudit(req, {
-      eventType: "ITEM_BULK_IMPORTED",
-      entityType: "system",
-      entityId: "bulk-import",
-      actor: auth.actor,
-      actorType: auth.actorType,
-      details: { created: report.created, skipped: report.skipped, failed: report.failed }
-    });
-    res.json(report);
-  } finally {
-    await removeFileIfExists(csvFile.path);
-    if (zipFile) await removeFileIfExists(zipFile.path);
-    await fs.promises.rm(tempExtractDir, { recursive: true, force: true });
-  }
-}));
-
-app.post("/api/items", requireAdminToken, upload.fields([{ name: "images", maxCount: 8 }, { name: "documents", maxCount: 8 }]), asyncHandler(async (req, res) => {
-  const validation = validateNewItem(req.body as Record<string, string>);
-  if (!validation.ok) {
-    res.status(400).json({ error: validation.error });
-    return;
-  }
-  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
-  const images = files?.images || [];
-  const documents = files?.documents || [];
-  const auth = await getAuthContext(req);
-  const documentVisibility = normalizeDocumentVisibility(String(req.body.documentVisibility || "admin_only"));
-  const preparedImages = await Promise.all(images.map((image) => prepareUploadedMulterFile(image, "image")));
-  const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document", documentVisibility)));
-  const itemId = await createItemRecord(req, validation.value, auth, {
-    images: preparedImages,
-    documents: preparedDocuments
-  });
-  res.status(201).json(await getItemById(itemId, true));
-}));
-
-app.patch("/api/items/:id", requireAdminToken, upload.fields([{ name: "images", maxCount: 8 }, { name: "documents", maxCount: 8 }]), asyncHandler(async (req, res) => {
-  const existing = await getItemById(req.params.id, true);
-  if (!existing) {
-    res.status(404).json({ error: "Item not found." });
-    return;
-  }
-  const validation = validateNewItem(req.body as Record<string, string>);
-  if (!validation.ok) {
-    res.status(400).json({ error: validation.error });
-    return;
-  }
-  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
-  const images = files?.images || [];
-  const documents = files?.documents || [];
-  const auth = await getAuthContext(req);
-  const documentVisibility = normalizeDocumentVisibility(String(req.body.documentVisibility || "admin_only"));
-  const preparedImages = await Promise.all(images.map((image) => prepareUploadedMulterFile(image, "image")));
-  const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document", documentVisibility)));
-
-  await handleSupabase(await supabase.from("categories").upsert({ name: validation.value.category }, { onConflict: "name" }));
-  await handleSupabase(
-    await supabase.from("items").update({
-      title: validation.value.title,
-      category: validation.value.category,
-      lot: validation.value.lot,
-      sku: validation.value.sku,
-      condition: validation.value.condition,
-      location: validation.value.location,
-      start_bid: validation.value.startBid,
-      reserve: validation.value.reserve,
-      increment_amount: validation.value.increment,
-      start_time: validation.value.startTime,
-      end_time: validation.value.endTime,
-      description: validation.value.description
-    }).eq("id", existing.id)
-  );
-  if (images.length) {
-    await handleSupabase(await supabase.from("item_files").insert(
-      preparedImages.map((image) => ({
-        id: randomUUID(),
-        item_id: existing.id,
-        kind: "image",
-        name: image.name,
-        url: image.url
-      }))
-    ));
-  }
-  if (documents.length) {
-    await handleSupabase(await supabase.from("item_files").insert(
-      preparedDocuments.map((document) => ({
-        id: randomUUID(),
-        item_id: existing.id,
-        kind: "document",
-        name: document.name,
-        url: document.url
-      }))
-    ));
-  }
-  await appendAudit(req, {
-    eventType: "ITEM_UPDATED",
-    entityType: "item",
-    entityId: existing.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { title: validation.value.title, category: validation.value.category }
-  });
-  await queueNotification("ITEM_UPDATED", `Auction item updated: ${validation.value.title}`, { itemId: existing.id, title: validation.value.title });
-  res.json(await getItemById(existing.id, true));
-}));
-
-app.delete("/api/items/:id", requireAdminToken, asyncHandler(async (req, res) => {
-  const existing = await getItemById(req.params.id, true);
-  if (!existing) {
-    res.status(404).json({ error: "Item not found." });
-    return;
-  }
-  const auth = await getAuthContext(req);
-  await handleSupabase(await supabase.from("items").update({ archived_at: new Date().toISOString() }).eq("id", existing.id));
-  await appendAudit(req, {
-    eventType: "ITEM_ARCHIVED",
-    entityType: "item",
-    entityId: existing.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { title: existing.title }
-  });
-  await queueNotification("ITEM_ARCHIVED", `Auction item archived: ${existing.title}`, { itemId: existing.id, title: existing.title });
-  res.json({ ok: true });
-}));
-
-app.post("/api/items/:id/restore", requireAdminToken, asyncHandler(async (req, res) => {
-  const existing = await getItemById(req.params.id, true);
-  if (!existing) {
-    res.status(404).json({ error: "Item not found." });
-    return;
-  }
-  const auth = await getAuthContext(req);
-  await handleSupabase(await supabase.from("items").update({ archived_at: null }).eq("id", existing.id));
-  await appendAudit(req, {
-    eventType: "ITEM_RESTORED",
-    entityType: "item",
-    entityId: existing.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { title: existing.title }
-  });
-  await queueNotification("ITEM_RESTORED", `Auction item restored: ${existing.title}`, { itemId: existing.id, title: existing.title });
-  res.json(await getItemById(existing.id, true));
-}));
+registerItemMutationRoutes({
+  app,
+  asyncHandler,
+  requireAdminToken,
+  upload,
+  bulkImportUpload,
+  importsDir,
+  randomUUID,
+  getAuthContext,
+  appendAudit,
+  queueNotification,
+  getItemById,
+  handleSupabase,
+  supabase,
+  validateNewItem,
+  parseCsv,
+  normalizeImportKey,
+  inspectImportArchive,
+  extractImportArchive,
+  getImportValue,
+  splitImportList,
+  normalizeDocumentVisibility,
+  prepareUploadedMulterFile,
+  copyImportedFile,
+  createItemRecord,
+  cleanupManagedFiles,
+  rollbackCreatedItem,
+  findExistingItemByLotOrSku,
+});
 
 app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error(error);
@@ -2262,6 +1271,7 @@ const { start } = createBootstrapService({
   app,
   port,
   runtimeEnvironment,
+  allowDemoSeeding,
   notificationTransport,
   outboxDir,
   smtpTransporter,

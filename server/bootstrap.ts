@@ -1,4 +1,5 @@
 import type express from "express";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 type SeedBid = {
   bidder: string;
@@ -32,6 +33,7 @@ type CreateBootstrapServiceOptions = {
   app: express.Express;
   port: number;
   runtimeEnvironment: string;
+  allowDemoSeeding: boolean;
   notificationTransport: string;
   outboxDir: string;
   smtpTransporter: { verify: () => Promise<unknown> } | null;
@@ -46,18 +48,7 @@ type CreateBootstrapServiceOptions = {
   backfillLegacyBidAuditAttribution: () => Promise<void>;
   startNotificationWorkerLoop: () => Promise<void>;
   handleSupabase: HandleSupabase;
-  supabase: {
-    from: (table: string) => {
-      select: (columns: string) => {
-        limit: (value: number) => Promise<unknown>;
-      };
-      upsert: (value: unknown, options?: unknown) => Promise<unknown>;
-      insert: (value: unknown) => Promise<unknown>;
-      delete: () => {
-        lte: (column: string, value: string) => Promise<unknown>;
-      };
-    };
-  };
+  supabase: SupabaseClient;
   defaultCategories: string[];
   seedItems: SeedItem[];
   randomUUID: () => string;
@@ -67,6 +58,7 @@ export const createBootstrapService = ({
   app,
   port,
   runtimeEnvironment,
+  allowDemoSeeding,
   notificationTransport,
   outboxDir,
   smtpTransporter,
@@ -99,6 +91,7 @@ export const createBootstrapService = ({
   };
 
   const seedItemsIfEmpty = async () => {
+    if (!allowDemoSeeding) return;
     const rows = handleSupabase(await supabase.from("items").select("id").limit(1)) as Array<{ id: string }>;
     if (rows.length > 0) return;
     for (const item of seedItems) {

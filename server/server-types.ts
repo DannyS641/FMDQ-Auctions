@@ -1,4 +1,5 @@
 import type { Role } from "../shared/permissions.js";
+export type { Role };
 
 export type AuditEntry = {
   eventType: string;

@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseDocumentNameWithVisibility } from "./security-logic.js";
 import type { AuthContext, AuditEntry, UserRow } from "./server-types.js";
 import type { StoredItem } from "./item-read-model.js";
@@ -23,24 +24,7 @@ type StoredBidRecord = {
 
 type RegisterCatalogRoutesOptions = {
   app: express.Express;
-  supabase: {
-    from: (table: string) => {
-      select: (columns: string) => {
-        eq: (column: string, value: string) => {
-          limit: (value: number) => Promise<unknown>;
-          maybeSingle: () => Promise<unknown>;
-        };
-      };
-      storage?: never;
-      upsert?: never;
-      delete?: never;
-    };
-    storage: {
-      from: (bucket: string) => {
-        download: (path: string) => Promise<{ data: Blob | null; error: unknown }>;
-      };
-    };
-  };
+  supabase: SupabaseClient;
   asyncHandler: (fn: AsyncRouteHandler) => express.RequestHandler;
   handleSupabase: <T>(result: { data: T; error: { message: string } | null }) => T;
   handleSupabaseMaybe: <T>(result: { data: T | null; error: { message: string } | null }, allowNotFound?: boolean) => T | null;
@@ -50,6 +34,7 @@ type RegisterCatalogRoutesOptions = {
   appendAudit: (req: express.Request, entry: AuditEntry) => Promise<void>;
   queueNotification: (eventType: string, subject: string, payload: Record<string, unknown>, recipient?: string) => Promise<void>;
   getItems: (includeArchived?: boolean) => Promise<StoredItem[]>;
+  getItemSummaries: (includeArchived?: boolean) => Promise<StoredItem[]>;
   getItemById: (id: string, includeArchived?: boolean) => Promise<StoredItem | null>;
   sanitizeItemForAuth: (item: StoredItem, auth: AuthContext) => StoredItem;
   getCategories: () => Promise<string[]>;
@@ -66,7 +51,7 @@ type RegisterCatalogRoutesOptions = {
   documentBucket: string;
   imageAccessPolicy: string;
   getReserveState: (item: StoredItem) => string;
-  toCsv: (rows: Array<Record<string, unknown>>) => string;
+  toCsv: (rows: Array<Record<string, string | number | boolean>>) => string;
   checkBidRateLimit: (req: express.Request, actor: string, itemId: string) => Promise<boolean>;
   validateBid: (item: StoredItem, amount: number) => { ok: true } | { ok: false; error: string };
   placeBidAtomically: (
@@ -76,15 +61,22 @@ type RegisterCatalogRoutesOptions = {
     bidderAlias: string,
     bidderUserId: string,
     idempotencyKey: string
-  ) => Promise<{
-    ok: boolean;
-    status: number;
-    error?: string;
-    duplicate?: boolean;
-    bidSequence?: number;
-    currentBid: number;
-    previousBidderUserId?: string | null;
-  }>;
+  ) => Promise<
+    | {
+        ok: true;
+        bidId: string;
+        bidSequence: number;
+        currentBid: number;
+        previousBidderUserId: string | null;
+        duplicate: boolean;
+      }
+    | {
+        ok: false;
+        status: number;
+        error?: string;
+        duplicate?: boolean;
+      }
+  >;
   queueBidActivityNotifications: (
     item: StoredItem,
     bidder: { userId?: string; email?: string; displayName: string },
@@ -107,6 +99,7 @@ export const registerCatalogRoutes = ({
   appendAudit,
   queueNotification,
   getItems,
+  getItemSummaries,
   getItemById,
   sanitizeItemForAuth,
   getCategories,
@@ -230,7 +223,7 @@ export const registerCatalogRoutes = ({
       res.status(403).json({ error: "Admin role required." });
       return;
     }
-    const items = await getItems(includeArchived);
+    const items = await getItemSummaries(includeArchived);
     res.json(items.map((item) => sanitizeItemForAuth(item, auth)));
   }));
 

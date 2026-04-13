@@ -217,11 +217,57 @@ export const createBidService = ({
     );
   };
 
+  const backfillLegacyBidAuditAttribution = async () => {
+    const users = handleSupabase(
+      await supabase.from("users").select("id,display_name").eq("status", "active")
+    ) as Array<{ id: string; display_name: string }>;
+    const uniqueDisplayNameMap = new Map<string, string>();
+    const duplicateDisplayNames = new Set<string>();
+    for (const user of users) {
+      if (uniqueDisplayNameMap.has(user.display_name)) {
+        duplicateDisplayNames.add(user.display_name);
+        uniqueDisplayNameMap.delete(user.display_name);
+        continue;
+      }
+      if (!duplicateDisplayNames.has(user.display_name)) {
+        uniqueDisplayNameMap.set(user.display_name, user.id);
+      }
+    }
+    const bidAudits = handleSupabase(
+      await supabase
+        .from("audits")
+        .select("id,entity_id,actor,details_json,created_at")
+        .eq("event_type", "BID_PLACED")
+        .order("created_at", { ascending: false })
+    ) as Array<Pick<AuditRow, "id" | "entity_id" | "actor" | "details_json" | "created_at">>;
+    for (const audit of bidAudits) {
+      const details = parseAuditDetails(audit.details_json);
+      if (details.bidderUserId) continue;
+      const matchedUserId = uniqueDisplayNameMap.get(audit.actor);
+      if (!matchedUserId) continue;
+      await handleSupabase(
+        await supabase
+          .from("audits")
+          .update({ details_json: { ...details, bidderUserId: matchedUserId } })
+          .eq("id", audit.id)
+      );
+      await handleSupabase(
+        await supabase
+          .from("bids")
+          .update({ bidder_user_id: matchedUserId })
+          .eq("item_id", String(audit.entity_id))
+          .eq("created_at", String(audit.created_at))
+          .is("bidder_user_id", null)
+      );
+    }
+  };
+
   return {
     resolveLegacyBidOwnerForNotification,
     getUserBidRecords,
     validateBid,
     placeBidAtomically,
     queueBidActivityNotifications,
+    backfillLegacyBidAuditAttribution,
   };
 };
