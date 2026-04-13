@@ -1,4 +1,6 @@
-export type Role = "Guest" | "Bidder" | "ShopOwner" | "Admin" | "SuperAdmin";
+import type { Role } from "../../shared/permissions";
+
+export type { Role };
 
 export type AuthSession = {
   signedIn: boolean;

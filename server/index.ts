@@ -4,7 +4,6 @@ import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
-import AdmZip from "adm-zip";
 import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import nodemailer from "nodemailer";
@@ -13,20 +12,31 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import {
   buildCsrfTokenValue,
-  buildNotificationMeta,
   canAccessDocumentVisibility,
-  encodeDocumentNameWithVisibility,
   ensureCanManageTargetRoles,
   parseDocumentNameWithVisibility,
   type DocumentVisibility,
-  validateArchiveEntries,
   validateBidAmount,
   validateMalwareScanConfiguration
 } from "./security-logic.js";
 import { createItemReadModel } from "./item-read-model.js";
 import { createAuthService } from "./auth-service.js";
 import { createAdminService } from "./admin-service.js";
+import { createNotificationService } from "./notification-service.js";
+import { createItemWriteService } from "./item-write-service.js";
+import { createBidService } from "./bid-service.js";
+import { createBootstrapService } from "./bootstrap.js";
+import { registerAuthRoutes } from "./register-auth-routes.js";
+import { registerCatalogRoutes } from "./register-catalog-routes.js";
 import type { AuditEntry, AuditRow, AuthContext, NotificationQueueItem, Role, UserRow } from "./server-types.js";
+import {
+  canBidWithRole,
+  canViewItemOperationsWithRole,
+  canViewReserveWithRole,
+  isSuperAdminRole,
+  normalizeDisplayRoleName,
+  normalizeRole,
+} from "../shared/permissions.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -348,15 +358,7 @@ const smtpTransporter = notificationTransport === "smtp" && smtpHost && smtpUser
       }
     })
   : null;
-let notificationProcessingInFlight = false;
 let maintenanceInFlight = false;
-
-class NotificationClaimLostError extends Error {
-  constructor(entryId: string) {
-    super(`Notification claim for ${entryId} expired before it could be finalized.`);
-    this.name = "NotificationClaimLostError";
-  }
-}
 
 const seedItems: Array<Omit<StoredItem, "images" | "documents"> & { images: StoredFileRef[]; documents: StoredFileRef[] }> = (() => {
   const now = Date.now();
@@ -422,16 +424,6 @@ const parseCookies = (req: express.Request) =>
       acc[key] = decodeURIComponent(rest.join("="));
       return acc;
     }, {});
-
-const normalizeRole = (roles: string[]): Role => {
-  if (roles.includes("SuperAdmin")) return "SuperAdmin";
-  if (roles.includes("Admin")) return "Admin";
-  if (roles.includes("ShopOwner") || roles.includes("Observer")) return "ShopOwner";
-  if (roles.includes("Bidder")) return "Bidder";
-  return "Guest";
-};
-
-const normalizeDisplayRoleName = (role: string) => role === "Observer" ? "ShopOwner" : role;
 
 const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "-");
 const replaceFileExtension = (name: string, extension: string) => {
@@ -1028,11 +1020,11 @@ const canAccessItemDocument = (auth: AuthContext, item: StoredItem, visibility: 
 
 const sanitizeItemForAuth = (item: StoredItem, auth: AuthContext): StoredItem => ({
   ...item,
-  reserve: auth.role === "Admin" || auth.role === "SuperAdmin" ? item.reserve : undefined,
+  reserve: canViewReserveWithRole(auth.role) ? item.reserve : undefined,
   bids: item.bids.map((bid) => ({
     ...bid,
-    bidder: auth.role === "ShopOwner" || auth.adminAuthorized ? bid.bidder : "Anonymous bidder",
-    bidderUserId: auth.role === "ShopOwner" || auth.adminAuthorized ? bid.bidderUserId : undefined
+    bidder: canViewItemOperationsWithRole(auth.role) || auth.adminAuthorized ? bid.bidder : "Anonymous bidder",
+    bidderUserId: canViewItemOperationsWithRole(auth.role) || auth.adminAuthorized ? bid.bidderUserId : undefined
   })),
   documents: item.documents.filter((document) => canAccessItemDocument(auth, item, document.visibility || "bidder_visible"))
 });
@@ -1089,56 +1081,6 @@ const queuePasswordReset = async (user: UserRow & { password_hash?: string }, tr
   return reset;
 };
 
-const queueBidActivityNotifications = async (
-  item: StoredItem,
-  bidder: { userId?: string; email?: string; displayName: string },
-  amount: number,
-  previousLeader?: StoredBid
-) => {
-  const imageUrl = item.images[0]?.url ? `${appBaseUrl}${item.images[0].url}` : "";
-
-  if (bidder.email) {
-    await queueNotification(
-      "BID_PLACED",
-      `Your bid was placed for ${item.title}`,
-      {
-        itemId: item.id,
-        title: item.title,
-        amount,
-        currentBid: amount,
-        displayName: bidder.displayName,
-        imageUrl,
-        itemUrl: buildItemUrl(item.id)
-      },
-      bidder.email
-    );
-  }
-
-  if (!previousLeader || previousLeader.bidderUserId === bidder.userId) return;
-  const previousLeaderUserId = previousLeader.bidderUserId
-    || await resolveLegacyBidOwnerForNotification(item.id, previousLeader.amount, bidder.userId);
-  if (!previousLeaderUserId || previousLeaderUserId === bidder.userId) return;
-
-  const previousLeaderUser = await getUserById(previousLeaderUserId);
-  if (!previousLeaderUser?.email) return;
-
-  await queueNotification(
-    "OUTBID_ALERT",
-    `You were outbid on ${item.title}`,
-    {
-      itemId: item.id,
-      title: item.title,
-      previousBid: previousLeader.amount,
-      currentBid: amount,
-      displayName: previousLeaderUser.display_name,
-      imageUrl,
-      itemUrl: buildItemUrl(item.id)
-    },
-    previousLeaderUser.email
-  );
-};
-
-
 const appendAudit = async (req: express.Request, entry: AuditEntry) => {
   const auth = await getAuthContext(req);
   const details = redactSensitiveAuditDetails({
@@ -1160,51 +1102,6 @@ const appendAudit = async (req: express.Request, entry: AuditEntry) => {
       created_at: new Date().toISOString()
     })
   );
-};
-
-const queueNotification = async (
-  eventType: string,
-  subject: string,
-  payload: Record<string, unknown>,
-  recipient = notificationRecipient
-) => {
-  if (eventType === "ACCOUNT_VERIFICATION") {
-    await handleSupabase(
-      await supabase
-        .from("notification_queue")
-        .delete()
-        .eq("event_type", "ACCOUNT_VERIFICATION")
-        .eq("recipient", recipient)
-        .eq("status", "pending")
-    );
-  }
-  if (eventType === "PASSWORD_RESET") {
-    await handleSupabase(
-      await supabase
-        .from("notification_queue")
-        .delete()
-        .eq("event_type", "PASSWORD_RESET")
-        .eq("recipient", recipient)
-        .eq("status", "pending")
-    );
-  }
-  const basePayload = {
-    id: randomUUID(),
-    channel: "email" as const,
-    event_type: eventType,
-    recipient,
-    subject,
-    status: "pending" as const,
-    payload_json: payload,
-    created_at: new Date().toISOString(),
-    processed_at: null,
-    next_attempt_at: new Date().toISOString(),
-    attempt_count: 0,
-    claim_token: null,
-    claim_expires_at: null,
-    error_message: null
-  };
-  await handleSupabase(await supabase.from("notification_queue").insert(basePayload));
 };
 
 const getCategories = async () => {
@@ -1292,11 +1189,88 @@ const {
   securityTelemetryEvents,
 });
 
+const {
+  queueNotification,
+  processNotificationQueue,
+} = createNotificationService({
+  supabase,
+  handleSupabase,
+  handleSupabaseMaybe,
+  mapNotificationRow,
+  sanitizeNotificationPayloadForAdmin,
+  notificationRecipient,
+  notificationTransport,
+  notificationClaimTtlMs,
+  notificationLeaseRenewMs,
+  notificationMaxAttempts,
+  outboxDir,
+  deadLetterDir,
+  appBaseUrl,
+  imageBucket,
+  smtpFrom,
+  smtpTransporter,
+  decodeStoredFilePath,
+  guessContentType,
+  safeFileName,
+  buildSignInUrl,
+  sendOpsAlert,
+});
+
+const {
+  validateNewItem,
+  validateCategoryName,
+  parseCsv,
+  normalizeImportKey,
+  inspectImportArchive,
+  extractImportArchive,
+  getImportValue,
+  splitImportList,
+  normalizeDocumentVisibility,
+  prepareUploadedMulterFile,
+  copyImportedFile,
+  createItemRecord,
+  cleanupManagedFiles,
+  rollbackCreatedItem,
+  findExistingItemByLotOrSku,
+} = createItemWriteService({
+  supabase,
+  handleSupabase,
+  maxImportArchiveEntries,
+  maxImportExtractedBytes,
+  toIso,
+  validateManagedFileContent,
+  normalizeImageForUpload,
+  runMalwareScan,
+  uploadFileToManagedStorage,
+  removeFileIfExists,
+  removeManagedStoredFile,
+  appendAudit,
+  queueNotification,
+});
+
 const { getItems, getItemById } = createItemReadModel({
   supabase,
   handleSupabase,
   handleSupabaseMaybe,
   parseAuditDetails,
+});
+
+const {
+  resolveLegacyBidOwnerForNotification,
+  getUserBidRecords,
+  validateBid,
+  placeBidAtomically,
+  queueBidActivityNotifications,
+} = createBidService({
+  supabase,
+  handleSupabase,
+  parseAuditDetails,
+  sessionTtlMs,
+  appBaseUrl,
+  getItems,
+  getUserById,
+  getUserByDisplayName,
+  queueNotification,
 });
 
 const backfillLegacyBidAuditAttribution = async () => {
@@ -1341,437 +1315,6 @@ const backfillLegacyBidAuditAttribution = async () => {
         .eq("created_at", String(audit.created_at))
         .is("bidder_user_id", null)
     );
-  }
-};
-
-const resolveLegacyBidOwnerForNotification = async (
-  itemId: string,
-  previousBidAmount: number,
-  currentBidderUserId?: string
-) => {
-  const matchingAudits = handleSupabase(
-    await supabase
-      .from("audits")
-      .select("actor,details_json,created_at")
-      .eq("event_type", "BID_PLACED")
-      .eq("entity_id", itemId)
-      .order("created_at", { ascending: false })
-      .limit(50)
-  ) as Array<Pick<AuditRow, "actor" | "details_json" | "created_at">>;
-
-  for (const audit of matchingAudits) {
-    const details = parseAuditDetails(audit.details_json);
-    if (Number(details.amount || 0) !== previousBidAmount) continue;
-
-    const attributedUserId = String(details.bidderUserId || "");
-    if (attributedUserId && attributedUserId !== currentBidderUserId) {
-      return attributedUserId;
-    }
-
-    const fallbackUser = await getUserByDisplayName(audit.actor).catch(() => null);
-    if (fallbackUser?.id && fallbackUser.id !== currentBidderUserId) {
-      await handleSupabase(
-        await supabase
-          .from("bids")
-          .update({ bidder_user_id: fallbackUser.id })
-          .eq("item_id", itemId)
-          .eq("amount", previousBidAmount)
-          .is("bidder_user_id", null)
-      );
-      return fallbackUser.id;
-    }
-  }
-
-  return "";
-};
-
-const getUserBidRecords = async (userId: string) => {
-  const bidRows = handleSupabase(
-    await supabase
-      .from("bids")
-      .select("item_id,amount,created_at")
-      .eq("bidder_user_id", userId)
-      .order("created_at", { ascending: false })
-  ) as Array<{ item_id: string; amount: number | string; created_at: string }>;
-  const latestBidByItem = new Map<string, { amount: number; createdAt: string }>();
-  for (const row of bidRows) {
-    if (!latestBidByItem.has(row.item_id)) {
-      latestBidByItem.set(row.item_id, {
-        amount: Number(row.amount),
-        createdAt: row.created_at
-      });
-    }
-  }
-  const uniqueItemIds = Array.from(latestBidByItem.keys());
-  const items = new Map((await getItems(true)).map((item) => [item.id, item]));
-  return uniqueItemIds.flatMap((itemId) => {
-    const item = items.get(itemId);
-    if (!item) return [];
-    const latestBid = latestBidByItem.get(itemId);
-    if (!latestBid) return [];
-    const latestAmount = latestBid.amount;
-    const status = new Date(item.endTime).getTime() > Date.now()
-      ? (item.currentBid === latestAmount ? "winning" : "outbid")
-      : (item.currentBid === latestAmount ? "won" : "lost");
-    return [{
-      itemId: item.id,
-      title: item.title,
-      category: item.category,
-      lot: item.lot,
-      currentBid: item.currentBid,
-      yourLatestBid: latestAmount,
-      endTime: item.endTime,
-      lastBidAt: latestBid.createdAt,
-      status
-    }];
-  });
-};
-
-const getPendingNotificationQueue = async () => {
-  const now = new Date().toISOString();
-  const rows = handleSupabase(
-    await supabase
-      .from("notification_queue")
-      .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,next_attempt_at,attempt_count,claim_token,claim_expires_at,error_message")
-      .eq("status", "pending")
-      .lte("next_attempt_at", now)
-      .or(`claim_expires_at.is.null,claim_expires_at.lte.${now}`)
-      .order("next_attempt_at", { ascending: true })
-      .order("created_at", { ascending: true })
-      .limit(10)
-  ) as NotificationRow[];
-  return rows.map(mapNotificationRow);
-};
-
-const claimNotificationQueueEntry = async (entry: NotificationQueueItem) => {
-  const claimTime = new Date().toISOString();
-  const claimToken = `claim:${randomUUID()}`;
-  const claimExpiresAt = new Date(Date.now() + notificationClaimTtlMs).toISOString();
-  let request = supabase
-    .from("notification_queue")
-    .update({
-      claim_token: claimToken,
-      claim_expires_at: claimExpiresAt,
-      processed_at: claimTime,
-      error_message: null
-    })
-    .eq("id", entry.id)
-    .eq("status", "pending")
-    .lte("next_attempt_at", claimTime);
-  request = entry.claimToken ? request.eq("claim_token", entry.claimToken) : request.is("claim_token", null);
-  const result = await request
-    .select("id,claim_token")
-    .maybeSingle();
-  if (result.error) throw new Error(result.error.message);
-  return result.data?.claim_token === claimToken ? claimToken : null;
-};
-
-const updateNotificationOutcome = async (
-  entryId: string,
-  claimToken: string,
-  status: "pending" | "sent" | "failed",
-  errorMessage: string | null,
-  processedAt = new Date().toISOString(),
-  nextAttemptAt: string | null = processedAt,
-  attemptCount?: number
-) => {
-  const row = await handleSupabaseMaybe<{ id: string }>(
-    await supabase
-      .from("notification_queue")
-      .update({
-        status,
-        processed_at: processedAt,
-        next_attempt_at: nextAttemptAt,
-        attempt_count: attemptCount,
-        claim_token: null,
-        claim_expires_at: null,
-        error_message: errorMessage
-      })
-      .eq("id", entryId)
-      .eq("claim_token", claimToken)
-      .select("id")
-      .maybeSingle(),
-    true
-  );
-  if (!row) {
-    await sendOpsAlert("Notification claim was lost before outcome update", {
-      entryId,
-      status,
-      processedAt,
-      nextAttemptAt,
-      attemptCount: Number(attemptCount || 0)
-    });
-    throw new NotificationClaimLostError(entryId);
-  }
-};
-
-const renewNotificationClaimLease = async (entryId: string, claimToken: string) => {
-  const nextClaimExpiry = new Date(Date.now() + notificationClaimTtlMs).toISOString();
-  const row = await handleSupabaseMaybe<{ id: string }>(
-    await supabase
-      .from("notification_queue")
-      .update({ claim_expires_at: nextClaimExpiry })
-      .eq("id", entryId)
-      .eq("claim_token", claimToken)
-      .select("id")
-      .maybeSingle(),
-    true
-  );
-  if (!row) {
-    await sendOpsAlert("Notification claim lease could not be renewed", {
-      entryId,
-      claimToken,
-      nextClaimExpiry
-    });
-    throw new NotificationClaimLostError(entryId);
-  }
-};
-
-const startNotificationClaimLeaseRenewal = (entryId: string, claimToken: string) => {
-  let renewalError: Error | null = null;
-  let latestRenewal = Promise.resolve();
-  const timer = setInterval(() => {
-    latestRenewal = renewNotificationClaimLease(entryId, claimToken).catch((error) => {
-      renewalError = error instanceof Error ? error : new Error("Unable to renew notification claim lease.");
-    });
-  }, notificationLeaseRenewMs);
-
-  return async () => {
-    clearInterval(timer);
-    await latestRenewal;
-    if (renewalError) {
-      throw renewalError;
-    }
-  };
-};
-
-const escapeHtml = (value: unknown) =>
-  String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-
-const loadEmailInlineImage = async (imageUrl: string, title: string) => {
-  const imageMatch = imageUrl.match(/^\/uploads\/images\/(.+)$/);
-  if (!imageMatch) return null;
-  const storagePath = decodeStoredFilePath(imageMatch[1]);
-  if (!storagePath) return null;
-  const downloadResult = await supabase.storage.from(imageBucket).download(storagePath);
-  if (downloadResult.error || !downloadResult.data) return null;
-  const content = Buffer.from(await downloadResult.data.arrayBuffer());
-  return {
-    cid: `auction-item-${randomUUID()}@fmdq-auctions`,
-    filename: safeFileName(path.basename(storagePath) || `${title || "auction-item"}.jpg`),
-    contentType: guessContentType(storagePath),
-    content
-  };
-};
-
-const renderNotificationContent = async (entry: NotificationQueueItem) => {
-  if (entry.eventType === "ACCOUNT_VERIFICATION") {
-    const displayName = escapeHtml(entry.payload.displayName || "there");
-    const verifyUrl = String(entry.payload.verifyUrl || "");
-    return {
-      text: `Hello ${displayName},\n\nUse the link below to verify your FMDQ Auctions account:\n${verifyUrl}\n\nThis link expires in 24 hours.`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-          <p>Hello ${displayName},</p>
-          <p>Use the link below to verify your FMDQ Auctions account:</p>
-          <p><a href="${escapeHtml(verifyUrl)}">${escapeHtml(verifyUrl)}</a></p>
-          <p>This link expires in 24 hours.</p>
-        </div>
-      `
-    };
-  }
-
-  if (entry.eventType === "ACCOUNT_VERIFIED") {
-    const displayName = escapeHtml(entry.payload.displayName || "there");
-    const signInUrl = buildSignInUrl();
-    return {
-      text: `Hello ${displayName},\n\nYour FMDQ Auctions account has been verified. You can now sign in here:\n${signInUrl}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-          <p>Hello ${displayName},</p>
-          <p>Your FMDQ Auctions account has been verified.</p>
-          <p>You can now sign in here: <a href="${escapeHtml(signInUrl)}">${escapeHtml(signInUrl)}</a></p>
-        </div>
-      `
-    };
-  }
-
-  if (entry.eventType === "PASSWORD_RESET") {
-    const displayName = escapeHtml(entry.payload.displayName || "there");
-    const resetUrl = String(entry.payload.resetUrl || "");
-    return {
-      text: `Hello ${displayName},\n\nUse the link below to reset your FMDQ Auctions password:\n${resetUrl}\n\nThis link expires in 1 hour.`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-          <p>Hello ${displayName},</p>
-          <p>Use the link below to reset your FMDQ Auctions password:</p>
-          <p><a href="${escapeHtml(resetUrl)}">${escapeHtml(resetUrl)}</a></p>
-          <p>This link expires in 1 hour.</p>
-        </div>
-      `
-    };
-  }
-
-  if (entry.eventType === "BID_PLACED") {
-    const displayName = escapeHtml(entry.payload.displayName || "there");
-    const title = escapeHtml(entry.payload.title || "this auction item");
-    const currentBid = escapeHtml(entry.payload.currentBid || entry.payload.amount || "");
-    const inlineImage = await loadEmailInlineImage(String(entry.payload.imageUrl || ""), title);
-    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding`);
-    return {
-      text: `Hello ${displayName},\n\nYour bid of ${currentBid} was placed successfully for ${title}.\n\nView the item here:\n${itemUrl}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-          ${inlineImage ? `<img src="cid:${escapeHtml(inlineImage.cid)}" alt="${title}" style="display:block;width:100%;max-width:520px;border-radius:18px;margin:0 0 18px;" />` : ""}
-          <p>Hello ${displayName},</p>
-          <p>Your bid of <strong>${currentBid}</strong> was placed successfully for <strong>${title}</strong>.</p>
-          <p>View the item here: <a href="${escapeHtml(itemUrl)}">${escapeHtml(itemUrl)}</a></p>
-        </div>
-      `,
-      attachments: inlineImage ? [inlineImage] : []
-    };
-  }
-
-  if (entry.eventType === "OUTBID_ALERT") {
-    const displayName = escapeHtml(entry.payload.displayName || "there");
-    const title = escapeHtml(entry.payload.title || "this auction item");
-    const previousBid = escapeHtml(entry.payload.previousBid || "");
-    const currentBid = escapeHtml(entry.payload.currentBid || "");
-    const inlineImage = await loadEmailInlineImage(String(entry.payload.imageUrl || ""), title);
-    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding`);
-    return {
-      text: `Hello ${displayName},\n\nYou were outbid on ${title}.\nYour previous bid: ${previousBid}\nCurrent bid: ${currentBid}\n\nOpen the item to place a new bid:\n${itemUrl}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-          ${inlineImage ? `<img src="cid:${escapeHtml(inlineImage.cid)}" alt="${title}" style="display:block;width:100%;max-width:520px;border-radius:18px;margin:0 0 18px;" />` : ""}
-          <p>Hello ${displayName},</p>
-          <p>You were outbid on <strong>${title}</strong>.</p>
-          <p>Your previous bid: <strong>${previousBid}</strong><br />Current bid: <strong>${currentBid}</strong></p>
-          <p>Open the item to place a new bid: <a href="${escapeHtml(itemUrl)}">${escapeHtml(itemUrl)}</a></p>
-        </div>
-      `,
-      attachments: inlineImage ? [inlineImage] : []
-    };
-  }
-
-  const prettyPayload = JSON.stringify(entry.payload, null, 2);
-  return {
-    text: `${entry.subject}\n\n${prettyPayload}`,
-    html: `
-      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-        <p>${escapeHtml(entry.subject)}</p>
-        <pre style="white-space: pre-wrap; background: #f8fafc; padding: 12px; border-radius: 8px;">${escapeHtml(prettyPayload)}</pre>
-      </div>
-    `,
-    attachments: []
-  };
-};
-
-const deliverNotification = async (entry: NotificationQueueItem, claimToken: string) => {
-  const processedAt = new Date().toISOString();
-  const stopLeaseRenewal = startNotificationClaimLeaseRenewal(entry.id, claimToken);
-  try {
-    if (notificationTransport === "noop") {
-      await stopLeaseRenewal();
-      await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
-      return;
-    }
-    if (notificationTransport === "smtp") {
-      if (!smtpTransporter) {
-        throw new Error("SMTP transport is enabled but SMTP_HOST, SMTP_USER, or SMTP_PASS is missing.");
-      }
-      const content = await renderNotificationContent(entry);
-      await smtpTransporter.sendMail({
-        from: smtpFrom,
-        to: entry.recipient,
-        subject: entry.subject,
-        text: content.text,
-        html: content.html,
-        attachments: content.attachments
-      });
-      await stopLeaseRenewal();
-      await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
-      return;
-    }
-    const filePath = path.join(outboxDir, `${processedAt.replace(/[:.]/g, "-")}-${entry.id}.json`);
-    await fs.promises.writeFile(filePath, JSON.stringify({
-      id: entry.id,
-      channel: entry.channel,
-      eventType: entry.eventType,
-      recipient: entry.recipient,
-      subject: entry.subject,
-      payload: sanitizeNotificationPayloadForAdmin(entry.payload),
-      createdAt: entry.createdAt,
-      processedAt
-    }, null, 2), "utf8");
-    await stopLeaseRenewal();
-    await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
-  } catch (error) {
-    await stopLeaseRenewal().catch(() => undefined);
-    throw error;
-  }
-};
-
-const processNotificationQueue = async () => {
-  if (notificationProcessingInFlight) return 0;
-  notificationProcessingInFlight = true;
-  try {
-    const entries = await getPendingNotificationQueue();
-    let processed = 0;
-    for (const entry of entries) {
-      const claimToken = await claimNotificationQueueEntry(entry);
-      if (!claimToken) continue;
-      try {
-        await deliverNotification(entry, claimToken);
-        processed += 1;
-      } catch (error) {
-        if (error instanceof NotificationClaimLostError) {
-          continue;
-        }
-        const errorMessage = error instanceof Error ? error.message : "Notification processing failed.";
-        const now = new Date();
-        const currentMeta = {
-          attempts: Number(entry.attemptCount || 0),
-          nextAttemptAt: entry.nextAttemptAt || undefined
-        };
-        const retry = buildNotificationMeta(currentMeta, errorMessage, now, notificationMaxAttempts);
-        if (retry.nextStatus === "failed") {
-          const deadLetterPath = path.join(deadLetterDir, `${now.toISOString().replace(/[:.]/g, "-")}-${entry.id}.json`);
-          await fs.promises.writeFile(deadLetterPath, JSON.stringify({
-            id: entry.id,
-            eventType: entry.eventType,
-            recipient: entry.recipient,
-            subject: entry.subject,
-            payload: sanitizeNotificationPayloadForAdmin(entry.payload),
-            errorMessage
-          }, null, 2), "utf8");
-          await sendOpsAlert("Notification moved to dead letter", {
-            entryId: entry.id,
-            eventType: entry.eventType,
-            recipient: entry.recipient,
-            errorMessage,
-            attempts: retry.meta.attempts
-          });
-        }
-        await updateNotificationOutcome(
-          entry.id,
-          claimToken,
-          retry.nextStatus,
-          errorMessage,
-          now.toISOString(),
-          retry.meta.nextAttemptAt || now.toISOString(),
-          retry.meta.attempts
-        );
-      }
-    }
-    return processed;
-  } finally {
-    notificationProcessingInFlight = false;
   }
 };
 
@@ -1820,362 +1363,6 @@ const startNotificationWorkerLoop = async () => {
   }, notificationPollMs);
 };
 
-const validateNewItem = (body: Record<string, string>) => {
-  const title = (body.title || "").trim();
-  const category = (body.category || "").trim();
-  const lot = (body.lot || "").trim();
-  const sku = (body.sku || "").trim();
-  const condition = (body.condition || "").trim();
-  const location = (body.location || "").trim();
-  const description = (body.description || "").trim();
-  const startBid = Number(body.startBid);
-  const rawReserve = (body.reserve || "").trim();
-  const reserve = rawReserve ? Number(rawReserve) : 0;
-  const increment = Number(body.increment || Math.max(500, Math.round(startBid * 0.02)));
-  const startTime = toIso(body.startTime || "");
-  const endTime = toIso(body.endTime || "");
-  if (!title || !category || !lot || !sku || !condition || !location) return { ok: false as const, error: "Missing required item fields." };
-  if (!startTime || !endTime) return { ok: false as const, error: "Invalid start or end time." };
-  if (new Date(endTime).getTime() <= new Date(startTime).getTime()) return { ok: false as const, error: "Auction end time must be after start time." };
-  if (!Number.isFinite(startBid) || startBid <= 0) return { ok: false as const, error: "Starting bid must be greater than zero." };
-  if (!Number.isFinite(reserve) || reserve < 0) return { ok: false as const, error: "Reserve price cannot be negative." };
-  if (reserve > 0 && reserve < startBid) return { ok: false as const, error: "Reserve price must be at least the starting bid when provided." };
-  if (!Number.isFinite(increment) || increment <= 0) return { ok: false as const, error: "Bid increment must be greater than zero." };
-  return {
-    ok: true as const,
-    value: { title, category, lot, sku, condition, location, description, startBid, reserve, increment, startTime, endTime }
-  };
-};
-
-const validateCategoryName = (value: string) => {
-  const name = value.trim();
-  if (!name) return { ok: false as const, error: "Category name is required." };
-  if (name.length > 60) return { ok: false as const, error: "Category name must be 60 characters or fewer." };
-  return { ok: true as const, value: name };
-};
-
-const parseCsv = (content: string) => {
-  const rows: string[][] = [];
-  let current = "";
-  let row: string[] = [];
-  let inQuotes = false;
-  for (let index = 0; index < content.length; index += 1) {
-    const char = content[index];
-    const next = content[index + 1];
-    if (char === "\"") {
-      if (inQuotes && next === "\"") {
-        current += "\"";
-        index += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-    if (char === "," && !inQuotes) {
-      row.push(current);
-      current = "";
-      continue;
-    }
-    if ((char === "\n" || char === "\r") && !inQuotes) {
-      if (char === "\r" && next === "\n") index += 1;
-      row.push(current);
-      current = "";
-      if (row.some((cell) => cell.trim() !== "")) rows.push(row);
-      row = [];
-      continue;
-    }
-    current += char;
-  }
-  if (current.length || row.length) {
-    row.push(current);
-    if (row.some((cell) => cell.trim() !== "")) rows.push(row);
-  }
-  if (!rows.length) return [];
-  const headers = rows[0].map((value) => value.trim());
-  return rows.slice(1).map((values) =>
-    headers.reduce<Record<string, string>>((acc, header, index) => {
-      acc[header] = (values[index] || "").trim();
-      return acc;
-    }, {})
-  );
-};
-
-const normalizeImportKey = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
-
-const inspectImportArchive = async (zipPath: string) => {
-  const zip = new AdmZip(zipPath);
-  const entries = zip
-    .getEntries()
-    .filter((entry) => !entry.isDirectory)
-    .map((entry) => entry.entryName.trim())
-    .filter(Boolean);
-  validateArchiveEntries(entries, maxImportArchiveEntries);
-};
-
-const extractImportArchive = async (zipPath: string, targetDir: string) => {
-  const zip = new AdmZip(zipPath);
-  let totalBytes = 0;
-  let totalFiles = 0;
-  const map = new Map<string, string>();
-
-  for (const entry of zip.getEntries()) {
-    if (entry.isDirectory) continue;
-    const normalizedEntryName = entry.entryName.replace(/\\/g, "/").trim();
-    validateArchiveEntries([normalizedEntryName], maxImportArchiveEntries);
-    totalFiles += 1;
-    if (totalFiles > maxImportArchiveEntries) {
-      throw new Error(`The ZIP bundle contains too many extracted files. Maximum allowed is ${maxImportArchiveEntries}.`);
-    }
-
-    const data = entry.getData();
-    totalBytes += data.length;
-    if (totalBytes > maxImportExtractedBytes) {
-      throw new Error(`The extracted ZIP bundle exceeds the ${Math.round(maxImportExtractedBytes / (1024 * 1024))} MB safety limit.`);
-    }
-
-    const fileName = path.basename(normalizedEntryName);
-    const outputPath = path.join(targetDir, `${randomUUID()}-${fileName}`);
-    await fs.promises.writeFile(outputPath, data);
-    map.set(fileName.toLowerCase(), outputPath);
-  }
-
-  return map;
-};
-
-const getImportValue = (row: Record<string, string>, candidates: string[]) => {
-  const normalized = Object.entries(row).reduce<Record<string, string>>((acc, [key, value]) => {
-    acc[normalizeImportKey(key)] = value;
-    return acc;
-  }, {});
-  for (const candidate of candidates) {
-    const value = normalized[normalizeImportKey(candidate)];
-    if (typeof value === "string") return value;
-  }
-  return "";
-};
-
-const splitImportList = (value: string) =>
-  value
-    .split(/[;,|]/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
-const documentExtensions = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx"]);
-const normalizeDocumentVisibility = (value: string | undefined): DocumentVisibility => {
-  const normalized = (value || "").trim().toLowerCase();
-  if (normalized === "bidder_visible" || normalized === "winner_only") return normalized;
-  return "admin_only";
-};
-
-const prepareManagedFile = async (
-  sourcePath: string,
-  kind: "image" | "document",
-  originalName = path.basename(sourcePath),
-  visibility: DocumentVisibility = "bidder_visible"
-) => {
-  const extension = path.extname(sourcePath).toLowerCase();
-  if (kind === "image" && !imageExtensions.has(extension)) {
-    throw new Error(`Unsupported image file type for ${path.basename(sourcePath)}.`);
-  }
-  if (kind === "document" && !documentExtensions.has(extension)) {
-    throw new Error(`Unsupported document file type for ${path.basename(sourcePath)}.`);
-  }
-  await validateManagedFileContent(sourcePath, originalName, kind);
-  let workingPath = sourcePath;
-  let workingName = originalName;
-  let normalizedPath = "";
-
-  if (kind === "image") {
-    const normalized = await normalizeImageForUpload(sourcePath, originalName);
-    workingPath = normalized.path;
-    workingName = normalized.originalName;
-    normalizedPath = normalized.path;
-  }
-
-  const scannedPath = await runMalwareScan(workingPath);
-  try {
-    const stored = await uploadFileToManagedStorage(scannedPath, kind, workingName);
-    return {
-      id: randomUUID(),
-      kind,
-      name: kind === "document" ? encodeDocumentNameWithVisibility(originalName, visibility) : workingName,
-      url: stored.url
-    };
-  } finally {
-    await removeFileIfExists(scannedPath);
-    if (normalizedPath) await removeFileIfExists(normalizedPath);
-  }
-};
-
-const copyImportedFile = async (sourcePath: string, kind: "image" | "document", visibility: DocumentVisibility = "bidder_visible") => {
-  return prepareManagedFile(sourcePath, kind, path.basename(sourcePath), visibility);
-};
-
-const prepareUploadedMulterFile = async (
-  file: Express.Multer.File,
-  kind: "image" | "document",
-  visibility: DocumentVisibility = "bidder_visible"
-) => {
-  try {
-    return await prepareManagedFile(file.path, kind, file.originalname, visibility);
-  } finally {
-    await removeFileIfExists(file.path);
-  }
-};
-
-const createItemRecord = async (
-  req: express.Request,
-  validation: Extract<ReturnType<typeof validateNewItem>, { ok: true }>["value"],
-  auth: AuthContext,
-  extra?: { images?: Array<{ id: string; kind: "image" | "document"; name: string; url: string }>; documents?: Array<{ id: string; kind: "image" | "document"; name: string; url: string }>; currentBid?: number }
-) => {
-  const itemId = randomUUID();
-  const createdAt = new Date().toISOString();
-  const images = extra?.images || [];
-  const documents = extra?.documents || [];
-  await handleSupabase(await supabase.from("categories").upsert({ name: validation.category }, { onConflict: "name" }));
-  await handleSupabase(await supabase.from("items").insert({
-    id: itemId,
-    title: validation.title,
-    category: validation.category,
-    lot: validation.lot,
-    sku: validation.sku,
-    condition: validation.condition,
-    location: validation.location,
-    start_bid: validation.startBid,
-    reserve: validation.reserve,
-    increment_amount: validation.increment,
-    current_bid: extra?.currentBid || 0,
-    start_time: validation.startTime,
-    end_time: validation.endTime,
-    description: validation.description,
-    created_at: createdAt
-  }));
-  if (images.length) {
-    await handleSupabase(await supabase.from("item_files").insert(
-      images.map((image) => ({
-        id: image.id,
-        item_id: itemId,
-        kind: image.kind,
-        name: image.name,
-        url: image.url
-      }))
-    ));
-  }
-  if (documents.length) {
-    await handleSupabase(await supabase.from("item_files").insert(
-      documents.map((document) => ({
-        id: document.id,
-        item_id: itemId,
-        kind: document.kind,
-        name: document.name,
-        url: document.url
-      }))
-    ));
-  }
-  await appendAudit(req, {
-    eventType: "ITEM_CREATED",
-    entityType: "item",
-    entityId: itemId,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { title: validation.title, category: validation.category, lot: validation.lot, sku: validation.sku }
-  });
-  await queueNotification("ITEM_CREATED", `Auction item created: ${validation.title}`, { itemId, title: validation.title });
-  return itemId;
-};
-
-const cleanupManagedFiles = async (files: Array<{ url: string }>) => {
-  for (const file of files) {
-    await removeManagedStoredFile(file.url).catch(() => undefined);
-  }
-};
-
-const rollbackCreatedItem = async (itemId: string) => {
-  const files = handleSupabase(
-    await supabase.from("item_files").select("url").eq("item_id", itemId)
-  ) as Array<{ url: string }>;
-  await cleanupManagedFiles(files);
-  await handleSupabase(await supabase.from("item_files").delete().eq("item_id", itemId));
-  await handleSupabase(await supabase.from("audits").delete().eq("entity_type", "item").eq("entity_id", itemId));
-  await supabase.from("notification_queue").delete().contains("payload_json", { itemId });
-  await handleSupabase(await supabase.from("items").delete().eq("id", itemId));
-};
-
-const findExistingItemByLotOrSku = async (lot: string, sku: string) => {
-  const rows = handleSupabase(
-    await supabase
-      .from("items")
-      .select("id,title,lot,sku")
-      .or(`lot.eq.${lot},sku.eq.${sku}`)
-      .limit(10)
-  ) as Array<{ id: string; title: string; lot: string; sku: string }>;
-  return rows.find((row) => row.lot === lot || row.sku === sku) || null;
-};
-
-const validateBid = (item: StoredItem, amount: number) => {
-  return validateBidAmount(item, amount, Date.now());
-};
-
-const placeBidAtomically = async (
-  item: StoredItem,
-  amount: number,
-  expectedCurrentBid: number,
-  bidderAlias: string,
-  bidderUserId: string,
-  idempotencyKey: string
-) => {
-  const bidId = randomUUID();
-  const createdAt = new Date().toISOString();
-  const idempotencyExpiresAt = new Date(Date.now() + sessionTtlMs).toISOString();
-  const result = await supabase.rpc("place_auction_bid", {
-    p_item_id: item.id,
-    p_bid_id: bidId,
-    p_bidder_alias: bidderAlias,
-    p_bidder_user_id: bidderUserId,
-    p_amount: amount,
-    p_expected_current_bid: expectedCurrentBid,
-    p_idempotency_key: idempotencyKey || null,
-    p_created_at: createdAt,
-    p_idempotency_expires_at: idempotencyExpiresAt
-  });
-  if (result.error) {
-    const message = result.error.message || "Unable to place bid.";
-    if (message.includes("ITEM_NOT_FOUND")) {
-      return { ok: false as const, status: 404, error: "Item not found." };
-    }
-    if (message.includes("IDEMPOTENCY_KEY_CONFLICT")) {
-      return { ok: false as const, status: 409, error: "Duplicate bid submission detected." };
-    }
-    if (message.includes("BID_STATE_CHANGED")) {
-      return { ok: false as const, status: 409, error: "Item bid state changed. Refresh and try again." };
-    }
-    if (message.includes("BIDDING_CLOSED")) {
-      return { ok: false as const, status: 400, error: "Bidding is closed or not yet open for this item." };
-    }
-    if (message.includes("BID_TOO_LOW:")) {
-      const requiredBid = message.split("BID_TOO_LOW:")[1]?.trim() || "";
-      return { ok: false as const, status: 400, error: `Bid must be at least ${requiredBid}.` };
-    }
-    if (message.includes("INVALID_INCREMENT:")) {
-      const increment = message.split("INVALID_INCREMENT:")[1]?.trim() || "";
-      return { ok: false as const, status: 400, error: `Bid must increase by ${increment}.` };
-    }
-    throw new Error(message);
-  }
-
-  const row = Array.isArray(result.data) ? result.data[0] : result.data;
-  return {
-    ok: true as const,
-    bidId: String(row?.bid_id || bidId),
-    bidSequence: Number(row?.bid_sequence || 0),
-    currentBid: Number(row?.current_bid || amount),
-    previousBidderUserId: row?.previous_bidder_user_id ? String(row.previous_bidder_user_id) : null,
-    duplicate: Boolean(row?.duplicate)
-  };
-};
-
 const checkBidRateLimit = async (req: express.Request, actor: string, itemId: string) =>
   recordSharedRateLimitAttempt(req, "BID_ATTEMPT", `${actor}:${itemId}`, bidRateWindowMs, bidRateLimit, { itemId });
 
@@ -2198,7 +1385,7 @@ const requireAdminToken = asyncHandler(async (req, res, next) => {
 
 const requireItemOperationsViewerToken = asyncHandler(async (req, res, next) => {
   const auth = await getAuthContext(req);
-  if (!(auth.adminAuthorized || auth.role === "ShopOwner")) {
+  if (!(auth.adminAuthorized || canViewItemOperationsWithRole(auth.role))) {
     res.status(403).json({
       error: "Item operations access requires an authenticated ShopOwner or Admin account."
     });
@@ -2209,732 +1396,59 @@ const requireItemOperationsViewerToken = asyncHandler(async (req, res, next) => 
 
 const requireSuperAdminToken = asyncHandler(async (req, res, next) => {
   const auth = await getAuthContext(req);
-  if (!auth.signedIn || auth.role !== "SuperAdmin") {
+  if (!auth.signedIn || !isSuperAdminRole(auth.role)) {
     res.status(403).json({ error: "Super admin access is required." });
     return;
   }
   next();
 });
 
-const seedRoles = async () => {
-  for (const role of ["SuperAdmin", "Admin", "Bidder", "ShopOwner"]) {
-    await handleSupabase(await supabase.from("roles").upsert({ name: role }, { onConflict: "name" }));
-  }
-};
-
-const seedCategoriesIfEmpty = async () => {
-  const rows = handleSupabase(await supabase.from("categories").select("name").limit(1)) as Array<{ name: string }>;
-  if (rows.length > 0) return;
-  await handleSupabase(await supabase.from("categories").insert(defaultCategories.map((name) => ({ name }))));
-};
-
-const seedItemsIfEmpty = async () => {
-  const rows = handleSupabase(await supabase.from("items").select("id").limit(1)) as Array<{ id: string }>;
-  if (rows.length > 0) return;
-  for (const item of seedItems) {
-    await handleSupabase(
-      await supabase.from("items").insert({
-        id: item.id,
-        title: item.title,
-        category: item.category,
-        lot: item.lot,
-        sku: item.sku,
-        condition: item.condition,
-        location: item.location,
-        start_bid: item.startBid,
-        reserve: item.reserve,
-        increment_amount: item.increment,
-        current_bid: item.currentBid,
-        start_time: item.startTime,
-        end_time: item.endTime,
-        description: item.description,
-        created_at: item.createdAt
-      })
-    );
-    if (item.bids.length) {
-      await handleSupabase(
-        await supabase.from("bids").insert(
-          item.bids.map((bid) => ({
-            id: randomUUID(),
-            item_id: item.id,
-            bidder_alias: bid.bidder,
-            amount: bid.amount,
-            bid_time: bid.time,
-            created_at: bid.createdAt
-          }))
-        )
-      );
-    }
-  }
-  await handleSupabase(
-    await supabase.from("audits").insert({
-      id: randomUUID(),
-      event_type: "SYSTEM_SEED",
-      entity_type: "system",
-      entity_id: "seed",
-      actor: "system",
-      actor_type: "system",
-      request_id: "seed",
-      details_json: { itemCount: seedItems.length },
-      created_at: new Date().toISOString()
-    })
-  );
-};
-
 app.get("/api/health", asyncHandler(async (req, res) => {
   res.json({ status: "ok" });
 }));
 
-app.get("/api/auth/me", asyncHandler(async (req, res) => {
-  const session = await serializeSession(req);
-  res.json(session ? { signedIn: true, user: session } : { signedIn: false, user: null });
-}));
-
-app.post("/api/auth/resend-verification", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const email = normalizeEmail(String(req.body?.email || ""));
-  if (!email) {
-    res.status(400).json({ error: "Email is required." });
-    return;
-  }
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `resend:${email}`)))) {
-    res.status(429).json({ error: "Too many verification attempts. Please wait and try again." });
-    return;
-  }
-  const user = await getUserByEmail(email);
-  if (!user || user.status !== "pending_verification") {
-    res.json({ queued: true, message: "If a pending account exists for that email, a fresh verification link has been sent." });
-    return;
-  }
-  const verification = await createEmailVerificationToken(user.id);
-  await queueNotification(
-    "ACCOUNT_VERIFICATION",
-    "Confirm your FMDQ Auctions account",
-    { email: user.email, displayName: user.display_name, verifyUrl: verification.verifyUrl },
-    user.email
-  );
-  await appendAudit(req, {
-    eventType: "ACCOUNT_VERIFICATION_RESENT",
-    entityType: "system",
-    entityId: user.id,
-    actor: user.display_name,
-    actorType: "user",
-    details: { email: user.email }
-  });
-  res.json({ queued: true, message: "A new verification link has been sent to your email." });
-}));
-
-app.post("/api/auth/register", express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
-  const email = normalizeEmail(String(req.body?.email || ""));
-  const password = String(req.body?.password || "");
-  const displayName = sanitizeDisplayName(String(req.body?.displayName || ""));
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `register:${email}`)))) {
-    res.status(429).json({ error: "Too many signup attempts. Please wait and try again." });
-    return;
-  }
-  if (!email || !displayName || !password) {
-    res.status(400).json({ error: "Display name, email, and password are required." });
-    return;
-  }
-  if (!isStrongPassword(password)) {
-    res.status(400).json({ error: passwordRuleMessage });
-    return;
-  }
-  const existing = await getUserByEmail(email);
-  if (existing) {
-    res.status(409).json({ error: "An account with that email already exists." });
-    return;
-  }
-  const userId = randomUUID();
-  const createdAt = new Date().toISOString();
-  await handleSupabase(
-    await supabase.from("users").insert({
-      id: userId,
-      email,
-      password_hash: hashPassword(password),
-      display_name: displayName,
-      status: "pending_verification",
-      created_at: createdAt,
-      last_login_at: null
-    })
-  );
-  await handleSupabase(
-    await supabase.from("user_roles").insert({ user_id: userId, role_name: "Bidder", created_at: createdAt })
-  );
-  const verification = await createEmailVerificationToken(userId);
-  await queueNotification(
-    "ACCOUNT_VERIFICATION",
-    "Confirm your FMDQ Auctions account",
-    { email, displayName, verifyUrl: verification.verifyUrl },
-    email
-  );
-  await appendAudit(req, {
-    eventType: "ACCOUNT_REGISTERED",
-    entityType: "system",
-    entityId: userId,
-    actor: displayName,
-    actorType: "user",
-    details: { email, status: "pending_verification" }
-  });
-  res.status(201).json({
-    registered: true,
-    verificationRequired: true,
-    email,
-    verificationUrl: process.env.NODE_ENV === "production" || notificationTransport === "smtp" ? undefined : verification.verifyUrl,
-    message: "Account created. Check your email to verify your account, then sign in."
-  });
-}));
-
-app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
-  const email = normalizeEmail(String(req.body?.email || ""));
-  const password = String(req.body?.password || "");
-  const auditActor = sanitizeDisplayName(email) || "unknown";
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `login:${email}`)))) {
-    res.status(429).json({ error: "Too many sign-in attempts. Please wait and try again." });
-    return;
-  }
-  const user = await getUserByEmail(email);
-  if (!user || !verifyPassword(password, user.password_hash || "")) {
-    await appendAudit(req, {
-      eventType: "LOGIN_FAILED",
-      entityType: "auth",
-      entityId: email || "unknown",
-      actor: auditActor,
-      actorType: "user",
-      details: { email, reason: "invalid_credentials" }
-    });
-    res.status(401).json({ error: "Invalid email or password." });
-    return;
-  }
-  if (user.status === "pending_verification") {
-    await appendAudit(req, {
-      eventType: "LOGIN_BLOCKED",
-      entityType: "auth",
-      entityId: user.id,
-      actor: user.display_name,
-      actorType: "user",
-      details: { email: user.email, reason: "pending_verification" }
-    });
-    res.status(403).json({ error: "Please verify your email before signing in." });
-    return;
-  }
-  if (user.status !== "active") {
-    await appendAudit(req, {
-      eventType: "LOGIN_BLOCKED",
-      entityType: "auth",
-      entityId: user.id,
-      actor: user.display_name,
-      actorType: "user",
-      details: { email: user.email, reason: `status_${user.status}` }
-    });
-    res.status(403).json({ error: "This account is not active." });
-    return;
-  }
-  const lastLoginAt = new Date().toISOString();
-  await handleSupabase(await supabase.from("users").update({ last_login_at: lastLoginAt }).eq("id", user.id));
-  const sessionRecord = await createUserSession(res, user.id);
-  const roles = await getUserRoles(user.id);
-  const role = normalizeRole(roles.map((row) => row.role_name));
-  await appendAudit(req, {
-    eventType: "LOGIN_SUCCEEDED",
-    entityType: "auth",
-    entityId: user.id,
-    actor: user.display_name,
-    actorType: "user",
-    details: { email: user.email, role }
-  });
-  res.json({
-    signedIn: true,
-    user: {
-      id: user.id,
-      email: user.email,
-      displayName: user.display_name,
-      status: user.status,
-      createdAt: user.created_at,
-      lastLoginAt,
-      role
-    },
-    csrfToken: buildCsrfToken(sessionRecord.sessionId)
-  });
-}));
-
-app.post("/api/auth/verify-email", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const token = String(req.body?.token || "").trim();
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `verify:${token.slice(0, 12)}`)))) {
-    res.status(429).json({ error: "Too many verification attempts. Please wait and try again." });
-    return;
-  }
-  if (!token) {
-    res.status(400).json({ error: "Verification token is required." });
-    return;
-  }
-  const row = await getEmailVerificationRow(token);
-  if (!row) {
-    res.status(404).json({ error: "Verification link is invalid or has already been used." });
-    return;
-  }
-  if (new Date(row.expires_at).getTime() <= Date.now()) {
-    await handleSupabase(await supabase.from("email_verification_tokens").delete().eq("token", token));
-    res.status(410).json({ error: "Verification link has expired. Please create your account again or request a new link." });
-    return;
-  }
-  const user = await getUserById(row.user_id);
-  if (!user) {
-    await handleSupabase(await supabase.from("email_verification_tokens").delete().eq("token", token));
-    res.status(404).json({ error: "Account not found for this verification link." });
-    return;
-  }
-  await handleSupabase(await supabase.from("users").update({ status: "active" }).eq("id", user.id));
-  await handleSupabase(await supabase.from("email_verification_tokens").delete().eq("user_id", user.id));
-  await queueNotification(
-    "ACCOUNT_VERIFIED",
-    "FMDQ Auctions account verified",
-    {
-      email: user.email,
-      displayName: user.display_name
-    },
-    user.email
-  );
-  await appendAudit(req, {
-    eventType: "ACCOUNT_VERIFIED",
-    entityType: "system",
-    entityId: user.id,
-    actor: user.display_name,
-    actorType: "user",
-    details: { email: user.email, status: "active" }
-  });
-  res.json({ verified: true, message: "Your account has been verified. You can now sign in." });
-}));
-
-app.post("/api/auth/request-password-reset", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const email = normalizeEmail(String(req.body?.email || ""));
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `reset-request:${email}`)))) {
-    res.status(429).json({ error: "Too many password reset requests. Please wait and try again." });
-    return;
-  }
-  if (!email) {
-    res.status(400).json({ error: "Email is required." });
-    return;
-  }
-  const user = await getUserByEmail(email);
-  if (user && user.status === "active") {
-    await queuePasswordReset(user, "self-service");
-    await appendAudit(req, {
-      eventType: "PASSWORD_RESET_REQUESTED",
-      entityType: "system",
-      entityId: user.id,
-      actor: user.display_name,
-      actorType: "user",
-      details: { email: user.email, channel: "email" }
-    });
-  }
-  res.json({
-    requested: true,
-    message: "If an active account exists for that email, a password reset link has been sent."
-  });
-}));
-
-app.post("/api/auth/reset-password", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const token = String(req.body?.token || "").trim();
-  const password = String(req.body?.password || "");
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `reset:${token.slice(0, 12)}`)))) {
-    res.status(429).json({ error: "Too many password reset attempts. Please wait and try again." });
-    return;
-  }
-  if (!token || !password) {
-    res.status(400).json({ error: "Token and new password are required." });
-    return;
-  }
-  if (!isStrongPassword(password)) {
-    res.status(400).json({ error: passwordRuleMessage });
-    return;
-  }
-  const payload = parseSignedToken<{ type: string; sub: string; exp: string; fp: string }>(token);
-  if (!payload || payload.type !== "password-reset") {
-    res.status(400).json({ error: "Password reset link is invalid." });
-    return;
-  }
-  if (new Date(payload.exp).getTime() <= Date.now()) {
-    res.status(410).json({ error: "Password reset link has expired." });
-    return;
-  }
-  const user = await getUserByIdWithPassword(payload.sub);
-  if (!user || user.status !== "active") {
-    res.status(404).json({ error: "Account not found for this reset link." });
-    return;
-  }
-  if (passwordHashFingerprint(user.password_hash || "") !== payload.fp) {
-    res.status(409).json({ error: "This reset link is no longer valid. Request a new one." });
-    return;
-  }
-  await handleSupabase(await supabase.from("users").update({ password_hash: hashPassword(password) }).eq("id", user.id));
-  await handleSupabase(await supabase.from("sessions").delete().eq("user_id", user.id));
-  await appendAudit(req, {
-    eventType: "PASSWORD_RESET_COMPLETED",
-    entityType: "system",
-    entityId: user.id,
-    actor: user.display_name,
-    actorType: "user",
-    details: { email: user.email }
-  });
-  res.json({ reset: true, message: "Password updated successfully. You can now sign in." });
-}));
-
-app.post("/api/auth/logout", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  const sessionId = parseCookies(req)[sessionCookieName];
-  if (auth.signedIn && auth.userId) {
-    await appendAudit(req, {
-      eventType: "LOGOUT_SUCCEEDED",
-      entityType: "auth",
-      entityId: auth.userId,
-      actor: auth.actor,
-      actorType: auth.actorType,
-      details: { currentSession: Boolean(sessionId) }
-    });
-  }
-  if (sessionId) {
-    await deleteSessionRow(sessionId).catch(() => undefined);
-  }
-  clearSessionCookie(res);
-  res.json({ ok: true });
-}));
-
-app.get("/api/me/profile", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const user = await getUserById(auth.userId);
-  if (!user) {
-    res.status(404).json({ error: "User not found." });
-    return;
-  }
-  const roles = await getUserRoles(user.id);
-  res.json({
-    id: user.id,
-    email: user.email,
-    displayName: user.display_name,
-    status: user.status,
-    createdAt: user.created_at,
-    lastLoginAt: user.last_login_at,
-    role: auth.role,
-    roles: roles.map((row) => normalizeDisplayRoleName(row.role_name))
-  });
-}));
-
-app.get("/api/me/sessions", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const currentSessionId = parseCookies(req)[sessionCookieName] || "";
-  const sessions = await getUserSessions(auth.userId);
-  res.json(sessions.map((session) => ({
-    id: session.id,
-    createdAt: session.created_at,
-    expiresAt: session.expires_at,
-    current: session.id === currentSessionId
-  })));
-}));
-
-app.delete("/api/me/sessions/:id", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const session = await getSessionRow(String(req.params.id || ""));
-  if (!session || session.user_id !== auth.userId) {
-    res.status(404).json({ error: "Session not found." });
-    return;
-  }
-  await deleteSessionRow(session.id);
-  const currentSessionId = parseCookies(req)[sessionCookieName] || "";
-  if (session.id === currentSessionId) {
-    clearSessionCookie(res);
-  }
-  await appendAudit(req, {
-    eventType: "SESSION_REVOKED",
-    entityType: "user",
-    entityId: auth.userId,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { revoked: 1 }
-  });
-  res.json({ revoked: true, message: "Session revoked." });
-}));
-
-app.delete("/api/me/sessions", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const currentSessionId = parseCookies(req)[sessionCookieName] || "";
-  const sessions = await getUserSessions(auth.userId);
-  const revocable = sessions.filter((session) => session.id !== currentSessionId);
-  for (const session of revocable) {
-    await deleteSessionRow(session.id);
-  }
-  await appendAudit(req, {
-    eventType: "SESSIONS_REVOKED",
-    entityType: "user",
-    entityId: auth.userId,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { count: revocable.length }
-  });
-  res.json({ revoked: true, count: revocable.length, message: `Revoked ${revocable.length} other session(s).` });
-}));
-
-app.get("/api/me/dashboard", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const bidRecords = await getUserBidRecords(auth.userId);
-  const sessions = await getUserSessions(auth.userId);
-  const closedItems = (await getItems(true)).filter((item) => new Date(item.endTime).getTime() < Date.now());
-  res.json({
-    summary: {
-      openBidCount: bidRecords.filter((record) => ["winning", "outbid", "active"].includes(record.status)).length,
-      wonAuctionCount: bidRecords.filter((record) => record.status === "won").length,
-      activeSessionCount: sessions.length,
-      totalBidCount: bidRecords.length,
-      reserveMetClosedCount: closedItems.filter((item) => getReserveState(item) === "reserve_met").length,
-      reserveNotMetClosedCount: closedItems.filter((item) => getReserveState(item) === "reserve_not_met").length
-    },
-    recentBidActivity: bidRecords.slice(0, 8)
-  });
-}));
-
-app.get("/api/me/bids", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  res.json(await getUserBidRecords(auth.userId));
-}));
-
-app.get("/uploads/images/:file", asyncHandler(async (req, res) => {
-  const rawFile = String(req.params.file || "");
-  if (imageAccessPolicy !== "public") {
-    const auth = await getAuthContext(req);
-    if (!auth.signedIn) {
-      res.status(401).json({ error: "Sign in required to access item images." });
-      return;
-    }
-    if (imageAccessPolicy === "bidder_visible") {
-      const publicUrl = `/uploads/images/${rawFile}`;
-      const row = handleSupabaseMaybe<ItemFileRow>(
-        await supabase.from("item_files").select("item_id,kind,name,url").eq("kind", "image").eq("url", publicUrl).maybeSingle(),
-        true
-      );
-      const item = row ? await getItemById(row.item_id, true) : null;
-      const itemVisible = item && !item.archivedAt;
-      if (!auth.adminAuthorized && (!itemVisible || !(auth.role === "Bidder" || auth.role === "ShopOwner"))) {
-        res.status(403).json({ error: "You do not have access to this image." });
-        return;
-      }
-    }
-  }
-  const localFileName = safeFileName(rawFile);
-  const localPath = path.join(imagesDir, localFileName);
-  if (localFileName && await fileExists(localPath)) {
-    res.sendFile(localPath);
-    return;
-  }
-  const storagePath = decodeStoredFilePath(rawFile);
-  if (!storagePath) {
-    res.status(404).json({ error: "Image not found." });
-    return;
-  }
-  const result = await supabase.storage.from(imageBucket).download(storagePath);
-  if (result.error || !result.data) {
-    res.status(404).json({ error: "Image not found." });
-    return;
-  }
-  const buffer = Buffer.from(await result.data.arrayBuffer());
-  res.setHeader("Content-Type", result.data.type || guessContentType(storagePath, "image/jpeg"));
-  res.setHeader("Cache-Control", "private, max-age=300");
-  res.send(buffer);
-}));
-
-app.get("/uploads/documents/:file", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn) {
-    res.status(401).json({ error: "Sign in required to access documents." });
-    return;
-  }
-  const rawFile = String(req.params.file || "");
-  if (!rawFile) {
-    res.status(404).json({ error: "Document not found." });
-    return;
-  }
-  const publicUrl = `/uploads/documents/${rawFile}`;
-  const row = handleSupabaseMaybe<ItemFileRow>(
-    await supabase.from("item_files").select("item_id,kind,name,url").eq("kind", "document").eq("url", publicUrl).maybeSingle(),
-    true
-  );
-  if (!row) {
-    res.status(404).json({ error: "Document not found." });
-    return;
-  }
-  const item = await getItemById(row.item_id, true);
-  const parsedDocument = parseDocumentNameWithVisibility(row.name);
-  if (!item || !canAccessItemDocument(auth, item, parsedDocument.visibility)) {
-    res.status(403).json({ error: "You do not have access to this document." });
-    return;
-  }
-  const localFileName = safeFileName(rawFile);
-  const localPath = path.join(docsDir, localFileName);
-  if (localFileName && await fileExists(localPath)) {
-    res.sendFile(localPath);
-    return;
-  }
-  const storagePath = decodeStoredFilePath(rawFile);
-  if (!storagePath) {
-    res.status(404).json({ error: "Document file not found." });
-    return;
-  }
-  const result = await supabase.storage.from(documentBucket).download(storagePath);
-  if (result.error || !result.data) {
-    res.status(404).json({ error: "Document file not found." });
-    return;
-  }
-  const buffer = Buffer.from(await result.data.arrayBuffer());
-  res.setHeader("Content-Type", result.data.type || guessContentType(parsedDocument.displayName, "application/octet-stream"));
-  res.setHeader("Content-Disposition", `inline; filename="${safeFileName(parsedDocument.displayName)}"`);
-  res.send(buffer);
-}));
-
-app.get("/api/items", asyncHandler(async (req, res) => {
-  const includeArchived = String(req.query.includeArchived || "") === "1";
-  const auth = await getAuthContext(req);
-  if (includeArchived && !auth.adminAuthorized) {
-    res.status(403).json({ error: "Admin role required." });
-    return;
-  }
-  const items = await getItems(includeArchived);
-  res.json(items.map((item) => sanitizeItemForAuth(item, auth)));
-}));
-
-app.get("/api/items/:id", asyncHandler(async (req, res) => {
-  const includeArchived = String(req.query.includeArchived || "") === "1";
-  const auth = await getAuthContext(req);
-  if (includeArchived && !auth.adminAuthorized) {
-    res.status(403).json({ error: "Admin role required." });
-    return;
-  }
-  const item = await getItemById(req.params.id, includeArchived);
-  if (!item) {
-    res.status(404).json({ error: "Item not found" });
-    return;
-  }
-  res.json(sanitizeItemForAuth(item, auth));
-}));
-
-app.get("/api/categories", asyncHandler(async (req, res) => {
-  res.json(await getCategories());
-}));
-
-app.get("/api/landing-stats", asyncHandler(async (req, res) => {
-  res.json(await getLandingStats());
-}));
-
-app.post("/api/categories", express.json({ limit: "128kb" }), requireAdminToken, asyncHandler(async (req, res) => {
-  const validation = validateCategoryName(String(req.body?.name || ""));
-  if (!validation.ok) {
-    res.status(400).json({ error: validation.error });
-    return;
-  }
-  const before = new Set(await getCategories());
-  await handleSupabase(await supabase.from("categories").upsert({ name: validation.value }, { onConflict: "name" }));
-  const created = !before.has(validation.value);
-  const auth = await getAuthContext(req);
-  await appendAudit(req, {
-    eventType: created ? "CATEGORY_CREATED" : "CATEGORY_RECONFIRMED",
-    entityType: "system",
-    entityId: validation.value,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { category: validation.value, created }
-  });
-  res.status(created ? 201 : 200).json({ created });
-}));
-
-app.delete("/api/categories/:name", requireAdminToken, asyncHandler(async (req, res) => {
-  const validation = validateCategoryName(req.params.name);
-  if (!validation.ok) {
-    res.status(400).json({ error: validation.error });
-    return;
-  }
-  const rows = handleSupabase(await supabase.from("items").select("id").eq("category", validation.value).limit(1)) as Array<{ id: string }>;
-  if (rows.length > 0) {
-    res.status(409).json({ error: "Category is assigned to one or more items." });
-    return;
-  }
-  const existing = new Set(await getCategories());
-  if (!existing.has(validation.value)) {
-    res.status(404).json({ error: "Category not found." });
-    return;
-  }
-  await handleSupabase(await supabase.from("categories").delete().eq("name", validation.value));
-  const auth = await getAuthContext(req);
-  await appendAudit(req, {
-    eventType: "CATEGORY_DELETED",
-    entityType: "system",
-    entityId: validation.value,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { category: validation.value }
-  });
-  res.json({ ok: true });
-}));
-
-app.get("/api/exports/items.csv", requireItemOperationsViewerToken, asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  const items = (await getItems(auth.adminAuthorized)).map((item) => sanitizeItemForAuth(item, auth));
-  const rows = items.map((item) => ({
-    winner: (() => {
-      if (new Date(item.endTime).getTime() > Date.now() || item.currentBid <= 0) return "";
-      const winningBid = [...item.bids]
-        .sort((a, b) => new Date(b.time ?? b.createdAt ?? 0).getTime() - new Date(a.time ?? a.createdAt ?? 0).getTime())
-        .find((bid) => bid.amount === item.currentBid);
-      return winningBid?.bidder || "";
-    })(),
-    id: item.id,
-    title: item.title,
-    category: item.category,
-    lot: item.lot,
-    sku: item.sku,
-    condition: item.condition,
-    location: item.location,
-    startBid: item.startBid,
-    reserve: auth.role === "Admin" || auth.role === "SuperAdmin" ? item.reserve : "",
-    increment: item.increment,
-    currentBid: item.currentBid,
-    reserveOutcome: getReserveState(item),
-    startTime: item.startTime,
-    endTime: item.endTime,
-    bidCount: item.bids.length
-  }));
-  await appendAudit(req, {
-    eventType: "EXPORT_ITEMS",
-    entityType: "export",
-    entityId: "items.csv",
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { rowCount: rows.length }
-  });
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", 'attachment; filename="items.csv"');
-  res.send(toCsv(rows));
-}));
+registerAuthRoutes({
+  app,
+  supabase,
+  asyncHandler,
+  serializeSession,
+  normalizeEmail,
+  sanitizeDisplayName,
+  checkAuthRateLimit,
+  getClientKey,
+  getUserByEmail,
+  getUserById,
+  getUserByIdWithPassword,
+  getUserRoles,
+  getUserSessions,
+  getSessionRow,
+  deleteSessionRow,
+  createUserSession,
+  getAuthContext,
+  normalizeRole,
+  normalizeDisplayRoleName,
+  createEmailVerificationToken,
+  getEmailVerificationRow,
+  queueNotification,
+  queuePasswordReset,
+  appendAudit,
+  notificationTransport,
+  isStrongPassword,
+  passwordRuleMessage,
+  handleSupabase,
+  hashPassword,
+  verifyPassword,
+  buildCsrfToken,
+  parseSignedToken,
+  passwordHashFingerprint,
+  parseCookies,
+  sessionCookieName,
+  clearSessionCookie,
+  getUserBidRecords,
+  getItems,
+  getReserveState,
+  randomUUID,
+});
 
 app.get("/api/exports/audits.csv", requireAdminToken, asyncHandler(async (req, res) => {
   const rows = handleSupabase(
@@ -2968,24 +1482,42 @@ app.get("/api/exports/audits.csv", requireAdminToken, asyncHandler(async (req, r
   res.send(toCsv(formatted));
 }));
 
-app.get("/api/me/wins", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const bidRecords = await getUserBidRecords(auth.userId!);
-  const wins = bidRecords
-    .filter((row) => row.status === "won")
-    .map((row) => ({
-      id: row.itemId,
-      title: row.title,
-      category: row.category,
-      currentBid: row.currentBid,
-      endTime: row.endTime
-    }));
-  res.json(wins);
-}));
+registerCatalogRoutes({
+  app,
+  supabase,
+  asyncHandler,
+  handleSupabase,
+  handleSupabaseMaybe,
+  getAuthContext,
+  requireAdminToken,
+  requireItemOperationsViewerToken,
+  appendAudit,
+  queueNotification,
+  getItems,
+  getItemById,
+  sanitizeItemForAuth,
+  getCategories,
+  getLandingStats,
+  validateCategoryName,
+  canAccessItemDocument,
+  fileExists,
+  safeFileName,
+  decodeStoredFilePath,
+  guessContentType,
+  imagesDir,
+  docsDir,
+  imageBucket,
+  documentBucket,
+  imageAccessPolicy,
+  getReserveState,
+  toCsv,
+  checkBidRateLimit,
+  validateBid,
+  placeBidAtomically,
+  queueBidActivityNotifications,
+  getUserById,
+  getUserBidRecords,
+});
 
 app.get("/api/admin/operations", requireAdminToken, asyncHandler(async (req, res) => {
   const items = await getItems(true);
@@ -3278,7 +1810,7 @@ app.post("/api/admin/users/password-resets", requireAdminToken, express.json({ l
     if (scope === "all") return true;
     if (scope === "role") return role ? user.roles.includes(role) : false;
     return selectedIds.includes(user.id);
-  }).filter((user) => auth.role === "SuperAdmin" || !user.roles.includes("SuperAdmin"));
+  }).filter((user) => isSuperAdminRole(auth.role) || !user.roles.includes("SuperAdmin"));
   if (!targets.length) {
     res.status(400).json({ error: "No users matched the selected bulk reset criteria." });
     return;
@@ -3714,88 +2246,6 @@ app.post("/api/items/:id/restore", requireAdminToken, asyncHandler(async (req, r
   res.json(await getItemById(existing.id, true));
 }));
 
-app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn) {
-    res.status(401).json({ error: "Sign in to place a bid." });
-    return;
-  }
-  if (!(auth.role === "Bidder" || auth.role === "Admin")) {
-    res.status(403).json({ error: "Your account does not have bidding permission." });
-    return;
-  }
-  const actor = auth.actor;
-  const idempotencyKey = String(req.header("x-idempotency-key") || "");
-  if (!(await checkBidRateLimit(req, actor, req.params.id))) {
-    res.status(429).json({ error: "Too many bid attempts. Please wait and try again." });
-    return;
-  }
-  const item = await getItemById(req.params.id);
-  if (!item) {
-    res.status(404).json({ error: "Item not found." });
-    return;
-  }
-  const amount = Number(req.body.amount || 0);
-  const expectedCurrentBid = Number(req.body.expectedCurrentBid || 0);
-  if (item.currentBid !== expectedCurrentBid) {
-    res.status(409).json({ error: "Item bid state changed. Refresh and try again." });
-    return;
-  }
-  const validation = validateBid(item, amount);
-  if (!validation.ok) {
-    res.status(400).json({ error: validation.error });
-    return;
-  }
-  const persistedBidderUserId = auth.userId && auth.userId !== "admin-token" ? auth.userId : "";
-  const biddingUser = auth.userId ? await getUserById(auth.userId) : null;
-  const bidResult = await placeBidAtomically(
-    item,
-    amount,
-    expectedCurrentBid,
-    "Bidder",
-    persistedBidderUserId,
-    idempotencyKey
-  );
-  if (!bidResult.ok) {
-    res.status(bidResult.status).json({ error: bidResult.error });
-    return;
-  }
-  if (bidResult.duplicate) {
-    res.status(409).json({ error: "Duplicate bid submission detected." });
-    return;
-  }
-  await appendAudit(req, {
-    eventType: "BID_PLACED",
-    entityType: "bid",
-    entityId: item.id,
-    actor,
-    actorType: auth.actorType,
-    details: {
-      amount,
-      bidSequence: bidResult.bidSequence
-    }
-  });
-  await queueBidActivityNotifications(
-    { ...item, currentBid: bidResult.currentBid },
-    {
-      userId: auth.userId,
-      email: biddingUser?.email,
-      displayName: biddingUser?.display_name || actor
-    },
-    amount,
-    item.currentBid > 0
-      ? {
-          bidder: "",
-          bidderUserId: bidResult.previousBidderUserId || undefined,
-          amount: item.currentBid,
-          time: "",
-          createdAt: ""
-        }
-      : undefined
-  );
-  res.json(await getItemById(item.id));
-}));
-
 app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error(error);
   void reportServerError(req, error);
@@ -3808,68 +2258,29 @@ app.use((error: unknown, req: express.Request, res: express.Response, next: expr
   res.status(500).json({ error: safeError });
 });
 
-const start = async () => {
-  if (runtimeEnvironment === "production" && notificationTransport === "file") {
-    throw new Error("NOTIFY_TRANSPORT=file is not allowed in production. Use smtp or noop.");
-  }
-  await handleSupabase(await supabase.from("roles").select("name").limit(1));
-  await verifyRequiredSchemaMigrations();
-  await detectSecurityEventsTable();
-  await verifyMalwareScannerHealth();
-  await ensureStorageBuckets();
-  await startMaintenanceLoop();
-  await seedRoles();
-  await seedCategoriesIfEmpty();
-  await seedItemsIfEmpty();
-  await backfillLegacyBidAuditAttribution();
-  await handleSupabase(await supabase.from("sessions").delete().lte("expires_at", new Date().toISOString()));
-  await handleSupabase(await supabase.from("email_verification_tokens").delete().lte("expires_at", new Date().toISOString()));
-  if (notificationTransport === "smtp") {
-    if (!smtpTransporter) {
-      throw new Error("SMTP transport is enabled but SMTP_HOST, SMTP_USER, or SMTP_PASS is missing.");
-    }
-    try {
-      await Promise.race([
-        smtpTransporter.verify(),
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error(`SMTP verification timed out after ${smtpVerifyTimeoutMs}ms.`)), smtpVerifyTimeoutMs);
-        })
-      ]);
-    } catch (error) {
-      if (runtimeEnvironment === "production") {
-        throw error;
-      }
-      console.warn("SMTP verification failed. Continuing startup because NODE_ENV is not production.");
-      console.warn(error);
-    }
-  }
-  await startNotificationWorkerLoop();
-  if (!shouldRunApiServer) {
-    console.log(`Notification worker running in ${notificationWorkerMode} mode.`);
-    console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const server = app.listen(port, () => {
-      console.log(`Auction API running at http://localhost:${port}`);
-      console.log("Storage backend: supabase-js");
-      console.log(`Notification worker mode: ${notificationWorkerMode}`);
-      console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
-      resolve();
-    });
-    server.once("error", (error: NodeJS.ErrnoException) => {
-      if (error.code === "EADDRINUSE") {
-        reject(
-          new Error(
-            `Port ${port} is already in use. Stop the existing backend process or change PORT in .env before starting another server instance.`
-          )
-        );
-        return;
-      }
-      reject(error);
-    });
-  });
-};
+const { start } = createBootstrapService({
+  app,
+  port,
+  runtimeEnvironment,
+  notificationTransport,
+  outboxDir,
+  smtpTransporter,
+  smtpVerifyTimeoutMs,
+  notificationWorkerMode,
+  shouldRunApiServer,
+  verifyRequiredSchemaMigrations,
+  detectSecurityEventsTable,
+  verifyMalwareScannerHealth,
+  ensureStorageBuckets,
+  startMaintenanceLoop,
+  backfillLegacyBidAuditAttribution,
+  startNotificationWorkerLoop,
+  handleSupabase,
+  supabase,
+  defaultCategories,
+  seedItems,
+  randomUUID,
+});
 
 const shouldAutoStart = process.argv[1] ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) : false;
 
