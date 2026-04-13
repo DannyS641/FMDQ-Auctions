@@ -4,7 +4,6 @@ import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
-import AdmZip from "adm-zip";
 import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import nodemailer from "nodemailer";
@@ -13,47 +12,54 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import {
   buildCsrfTokenValue,
-  buildNotificationMeta,
-  canAccessDocumentVisibility,
-  encodeDocumentNameWithVisibility,
   ensureCanManageTargetRoles,
-  parseDocumentNameWithVisibility,
-  type DocumentVisibility,
-  validateArchiveEntries,
-  validateBidAmount,
   validateMalwareScanConfiguration
 } from "./security-logic.js";
-import { createItemReadModel } from "./item-read-model.js";
+import { createItemReadModel, type StoredFileRef, type StoredItem } from "./item-read-model.js";
 import { createAuthService } from "./auth-service.js";
 import { createAdminService } from "./admin-service.js";
-import type { AuditEntry, AuditRow, AuthContext, NotificationQueueItem, Role, UserRow } from "./server-types.js";
+import { createNotificationService } from "./notification-service.js";
+import { createItemWriteService } from "./item-write-service.js";
+import { createBidService } from "./bid-service.js";
+import { createBootstrapService } from "./bootstrap.js";
+import { createAuditService, parseAuditDetails } from "./audit-service.js";
+import { canAccessItemDocument, getLandingStats, getReserveState, sanitizeItemForAuth } from "./item-policy.js";
+import {
+  buildStoredFileUrl,
+  buildStoragePath,
+  createAsyncHandler,
+  decodeStoredFilePath,
+  fileExists,
+  guessContentType,
+  loadEnvFile,
+  parseCookies,
+  removeFileIfExists,
+  replaceFileExtension,
+  safeFileName,
+  toCsv,
+  toIso,
+} from "./platform-utils.js";
+import { registerAuthRoutes } from "./register-auth-routes.js";
+import { registerCatalogRoutes } from "./register-catalog-routes.js";
+import { registerAdminRoutes } from "./register-admin-routes.js";
+import { registerItemMutationRoutes } from "./register-item-mutation-routes.js";
+import type { AuthContext, UserRow } from "./server-types.js";
+import {
+  canViewItemOperationsWithRole,
+  isSuperAdminRole,
+  normalizeDisplayRoleName,
+  normalizeRole,
+} from "../shared/permissions.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const loadEnvFile = async () => {
-  const envPath = path.join(path.dirname(__dirname), ".env");
-  try {
-    await fs.promises.access(envPath, fs.constants.F_OK);
-  } catch {
-    return;
-  }
-  const contents = await fs.promises.readFile(envPath, "utf8");
-  for (const rawLine of contents.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const equalsAt = line.indexOf("=");
-    if (equalsAt < 0) continue;
-    const key = line.slice(0, equalsAt).trim();
-    if (process.env[key]) continue;
-    process.env[key] = line.slice(equalsAt + 1).trim().replace(/^['"]|['"]$/g, "");
-  }
-};
-
-await loadEnvFile();
+await loadEnvFile(__dirname);
 
 const app = express();
 const runtimeEnvironment = process.env.NODE_ENV || "development";
+const allowDemoSeeding =
+  runtimeEnvironment !== "production" && String(process.env.ENABLE_DEMO_SEEDING || "").toLowerCase() === "true";
 const port = Number(process.env.PORT || 5174);
 const sessionCookieName = "fmdq_session";
 const sessionTtlHours = Math.max(Number(process.env.SESSION_TTL_HOURS || 8), 1);
@@ -260,78 +266,7 @@ app.use((req, res, next) => {
     next();
   })().catch(next);
 });
-type StoredFileRef = { name: string; url: string; visibility?: DocumentVisibility };
-type StoredBid = { bidder: string; amount: number; time: string; createdAt: string; bidderUserId?: string };
-type StoredItem = {
-  id: string;
-  title: string;
-  category: string;
-  lot: string;
-  sku: string;
-  condition: string;
-  location: string;
-  startBid: number;
-  reserve?: number;
-  increment: number;
-  currentBid: number;
-  startTime: string;
-  endTime: string;
-  description: string;
-  images: StoredFileRef[];
-  documents: StoredFileRef[];
-  bids: StoredBid[];
-  createdAt: string;
-  archivedAt?: string | null;
-};
-type BidAuditRow = {
-  entity_id: string;
-  details_json: Record<string, unknown> | string;
-  created_at: string;
-};
-type ItemRow = {
-  id: string;
-  title: string;
-  category: string;
-  lot: string;
-  sku: string;
-  condition: string;
-  location: string;
-  start_bid: number | string;
-  reserve: number | string;
-  increment_amount: number | string;
-  current_bid: number | string;
-  start_time: string;
-  end_time: string;
-  description: string;
-  created_at: string;
-  archived_at: string | null;
-};
-type ItemFileRow = { item_id: string; kind: string; name: string; url: string };
-type BidRow = { item_id: string; bidder_alias: string; bidder_user_id?: string | null; amount: number | string; bid_time: string; created_at: string };
 type EmailVerificationRow = { id: string; user_id: string; token: string; created_at: string; expires_at: string };
-type NotificationRow = {
-  id: string;
-  channel: "email";
-  event_type: string;
-  recipient: string;
-  subject: string;
-  status: "pending" | "sent" | "failed";
-  payload_json: Record<string, unknown> | string;
-  created_at: string;
-  processed_at: string | null;
-  next_attempt_at: string | null;
-  attempt_count: number | null;
-  claim_token: string | null;
-  claim_expires_at: string | null;
-  error_message: string | null;
-};
-type PaginatedResult<T> = {
-  items: T[];
-  page: number;
-  pageSize: number;
-  total: number;
-  totalPages: number;
-};
 
 const defaultCategories = ["Cars", "Furniture", "Household Appliances", "Kitchen Appliances", "Phones", "Other"];
 const smtpTransporter = notificationTransport === "smtp" && smtpHost && smtpUser && smtpPass
@@ -348,15 +283,7 @@ const smtpTransporter = notificationTransport === "smtp" && smtpHost && smtpUser
       }
     })
   : null;
-let notificationProcessingInFlight = false;
 let maintenanceInFlight = false;
-
-class NotificationClaimLostError extends Error {
-  constructor(entryId: string) {
-    super(`Notification claim for ${entryId} expired before it could be finalized.`);
-    this.name = "NotificationClaimLostError";
-  }
-}
 
 const seedItems: Array<Omit<StoredItem, "images" | "documents"> & { images: StoredFileRef[]; documents: StoredFileRef[] }> = (() => {
   const now = Date.now();
@@ -411,45 +338,6 @@ const seedItems: Array<Omit<StoredItem, "images" | "documents"> & { images: Stor
   ];
 })();
 
-const parseCookies = (req: express.Request) =>
-  String(req.headers.cookie || "")
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .reduce<Record<string, string>>((acc, entry) => {
-      const [key, ...rest] = entry.split("=");
-      if (!key) return acc;
-      acc[key] = decodeURIComponent(rest.join("="));
-      return acc;
-    }, {});
-
-const normalizeRole = (roles: string[]): Role => {
-  if (roles.includes("SuperAdmin")) return "SuperAdmin";
-  if (roles.includes("Admin")) return "Admin";
-  if (roles.includes("ShopOwner") || roles.includes("Observer")) return "ShopOwner";
-  if (roles.includes("Bidder")) return "Bidder";
-  return "Guest";
-};
-
-const normalizeDisplayRoleName = (role: string) => role === "Observer" ? "ShopOwner" : role;
-
-const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "-");
-const replaceFileExtension = (name: string, extension: string) => {
-  const baseName = path.basename(name, path.extname(name)) || "image";
-  return `${safeFileName(baseName)}${extension}`;
-};
-const guessContentType = (name: string, fallback = "application/octet-stream") => {
-  const extension = path.extname(name).toLowerCase();
-  if ([".jpg", ".jpeg"].includes(extension)) return "image/jpeg";
-  if (extension === ".png") return "image/png";
-  if (extension === ".webp") return "image/webp";
-  if (extension === ".pdf") return "application/pdf";
-  if (extension === ".doc") return "application/msword";
-  if (extension === ".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  if (extension === ".xls") return "application/vnd.ms-excel";
-  if (extension === ".xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-  return fallback;
-};
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 const sanitizeDisplayName = (value: string) => value.trim().replace(/\s+/g, " ");
 const buildEmailVerificationUrl = (token: string) => `${appBaseUrl}/verify?token=${encodeURIComponent(token)}`;
@@ -564,15 +452,6 @@ const bulkImportUpload = multer({
   limits: { files: 2, fileSize: 25 * 1024 * 1024 }
 });
 
-const fileExists = async (filePath: string) => {
-  try {
-    await fs.promises.access(filePath, fs.constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 const hashPassword = (password: string) => {
   const salt = randomBytes(16).toString("hex");
   const hash = scryptSync(password, salt, 64).toString("hex");
@@ -609,20 +488,6 @@ const removeStoredFile = (url: string) => {
   const filePath = path.normalize(path.join(__dirname, url.replace(/^\/+/, "")));
   if (!filePath.startsWith(uploadsDir)) return;
   void removeFileIfExists(filePath);
-};
-
-const buildStoragePath = (kind: "image" | "document", originalName: string) =>
-  `${kind}s/${new Date().toISOString().slice(0, 10)}/${Date.now()}-${randomUUID()}-${safeFileName(originalName)}`;
-
-const buildStoredFileUrl = (kind: "image" | "document", storagePath: string) =>
-  `/uploads/${kind === "image" ? "images" : "documents"}/${encodeURIComponent(Buffer.from(storagePath, "utf8").toString("base64url"))}`;
-
-const decodeStoredFilePath = (encodedPath: string) => {
-  try {
-    return Buffer.from(decodeURIComponent(encodedPath), "base64url").toString("utf8");
-  } catch {
-    return null;
-  }
 };
 
 const runMalwareScan = async (filePath: string) => {
@@ -662,7 +527,7 @@ const verifyMalwareScannerHealth = async () => {
 };
 
 const uploadFileToManagedStorage = async (sourcePath: string, kind: "image" | "document", originalName: string) => {
-  const storagePath = buildStoragePath(kind, originalName);
+  const storagePath = buildStoragePath(kind, originalName, randomUUID);
   const bucket = kind === "image" ? imageBucket : documentBucket;
   const fileBuffer = await fs.promises.readFile(sourcePath);
   const uploadResult = await supabase.storage.from(bucket).upload(storagePath, fileBuffer, {
@@ -774,37 +639,6 @@ const pruneExpiredDatabaseRows = async () => {
   const securityEventsCutoff = new Date(Date.now() - securityEventsRetentionMs).toISOString();
   await handleSupabase(await supabase.from("bid_idempotency_keys").delete().lte("expires_at", now));
   await handleSupabase(await supabase.from("security_events").delete().lte("created_at", securityEventsCutoff));
-};
-
-const removeFileIfExists = async (filePath: string) => {
-  try {
-    await fs.promises.unlink(filePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      throw error;
-    }
-  }
-};
-
-const formatBidTime = (createdAt: string) =>
-  new Date(createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-
-const toIso = (value: string) => {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
-};
-
-const csvEscape = (value: string | number | boolean) => `"${String(value).replace(/"/g, "\"\"")}"`;
-const toCsv = (rows: Array<Record<string, string | number | boolean>>) => {
-  if (!rows.length) return "";
-  const headers = Object.keys(rows[0]);
-  return [headers.join(","), ...rows.map((row) => headers.map((header) => csvEscape(row[header] ?? "")).join(","))].join("\n");
-};
-
-const parsePaginationValue = (value: unknown, fallback: number, max: number) => {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(Math.max(Math.floor(parsed), 1), max);
 };
 
 const handleSupabase = <T>(result: { data: T; error: { message: string } | null }) => {
@@ -1007,36 +841,6 @@ const ensureCanManageTargetUser = (actor: AuthContext, targetRoles: string[]) =>
   return ensureCanManageTargetRoles(actor.role, targetRoles);
 };
 
-const isUserWinningItem = (auth: AuthContext, item: StoredItem) => {
-  if (!auth.userId) return false;
-  if (new Date(item.endTime).getTime() > Date.now()) return false;
-  if (item.currentBid <= 0) return false;
-  const matchingBid = item.bids.find((bid) => bid.bidderUserId === auth.userId);
-  return Boolean(matchingBid && matchingBid.amount === item.currentBid);
-};
-
-const canAccessItemDocument = (auth: AuthContext, item: StoredItem, visibility: DocumentVisibility) =>
-  canAccessDocumentVisibility({
-    signedIn: auth.signedIn,
-    adminAuthorized: auth.adminAuthorized,
-    role: auth.role,
-    itemArchived: Boolean(item.archivedAt),
-    itemEnded: new Date(item.endTime).getTime() <= Date.now(),
-    reserveState: getReserveState(item),
-    isWinner: isUserWinningItem(auth, item)
-  }, visibility);
-
-const sanitizeItemForAuth = (item: StoredItem, auth: AuthContext): StoredItem => ({
-  ...item,
-  reserve: auth.role === "Admin" || auth.role === "SuperAdmin" ? item.reserve : undefined,
-  bids: item.bids.map((bid) => ({
-    ...bid,
-    bidder: auth.role === "ShopOwner" || auth.adminAuthorized ? bid.bidder : "Anonymous bidder",
-    bidderUserId: auth.role === "ShopOwner" || auth.adminAuthorized ? bid.bidderUserId : undefined
-  })),
-  documents: item.documents.filter((document) => canAccessItemDocument(auth, item, document.visibility || "bidder_visible"))
-});
-
 const getEmailVerificationRow = async (token: string) =>
   handleSupabaseMaybe<EmailVerificationRow>(
     await supabase
@@ -1072,141 +876,6 @@ const createPasswordResetToken = (user: UserRow & { password_hash?: string }) =>
   return { token, expiresAt, resetUrl: buildPasswordResetUrl(token) };
 };
 
-const queuePasswordReset = async (user: UserRow & { password_hash?: string }, triggeredBy?: string) => {
-  const reset = createPasswordResetToken(user);
-  await queueNotification(
-    "PASSWORD_RESET",
-    "Reset your FMDQ Auctions password",
-    {
-      email: user.email,
-      displayName: user.display_name,
-      resetUrl: reset.resetUrl,
-      expiresAt: reset.expiresAt,
-      triggeredBy: triggeredBy || "self-service"
-    },
-    user.email
-  );
-  return reset;
-};
-
-const queueBidActivityNotifications = async (
-  item: StoredItem,
-  bidder: { userId?: string; email?: string; displayName: string },
-  amount: number,
-  previousLeader?: StoredBid
-) => {
-  const imageUrl = item.images[0]?.url ? `${appBaseUrl}${item.images[0].url}` : "";
-
-  if (bidder.email) {
-    await queueNotification(
-      "BID_PLACED",
-      `Your bid was placed for ${item.title}`,
-      {
-        itemId: item.id,
-        title: item.title,
-        amount,
-        currentBid: amount,
-        displayName: bidder.displayName,
-        imageUrl,
-        itemUrl: buildItemUrl(item.id)
-      },
-      bidder.email
-    );
-  }
-
-  if (!previousLeader || previousLeader.bidderUserId === bidder.userId) return;
-  const previousLeaderUserId = previousLeader.bidderUserId
-    || await resolveLegacyBidOwnerForNotification(item.id, previousLeader.amount, bidder.userId);
-  if (!previousLeaderUserId || previousLeaderUserId === bidder.userId) return;
-
-  const previousLeaderUser = await getUserById(previousLeaderUserId);
-  if (!previousLeaderUser?.email) return;
-
-  await queueNotification(
-    "OUTBID_ALERT",
-    `You were outbid on ${item.title}`,
-    {
-      itemId: item.id,
-      title: item.title,
-      previousBid: previousLeader.amount,
-      currentBid: amount,
-      displayName: previousLeaderUser.display_name,
-      imageUrl,
-      itemUrl: buildItemUrl(item.id)
-    },
-    previousLeaderUser.email
-  );
-};
-
-
-const appendAudit = async (req: express.Request, entry: AuditEntry) => {
-  const auth = await getAuthContext(req);
-  const details = redactSensitiveAuditDetails({
-    ...entry.details,
-    actorRole: auth.role,
-    ...(auth.userId ? { actorUserId: auth.userId } : {}),
-  });
-
-  await handleSupabase(
-    await supabase.from("audits").insert({
-      id: randomUUID(),
-      event_type: entry.eventType,
-      entity_type: entry.entityType,
-      entity_id: entry.entityId,
-      actor: entry.actor,
-      actor_type: entry.actorType,
-      request_id: String((req as express.Request & { requestId?: string }).requestId || ""),
-      details_json: details,
-      created_at: new Date().toISOString()
-    })
-  );
-};
-
-const queueNotification = async (
-  eventType: string,
-  subject: string,
-  payload: Record<string, unknown>,
-  recipient = notificationRecipient
-) => {
-  if (eventType === "ACCOUNT_VERIFICATION") {
-    await handleSupabase(
-      await supabase
-        .from("notification_queue")
-        .delete()
-        .eq("event_type", "ACCOUNT_VERIFICATION")
-        .eq("recipient", recipient)
-        .eq("status", "pending")
-    );
-  }
-  if (eventType === "PASSWORD_RESET") {
-    await handleSupabase(
-      await supabase
-        .from("notification_queue")
-        .delete()
-        .eq("event_type", "PASSWORD_RESET")
-        .eq("recipient", recipient)
-        .eq("status", "pending")
-    );
-  }
-  const basePayload = {
-    id: randomUUID(),
-    channel: "email" as const,
-    event_type: eventType,
-    recipient,
-    subject,
-    status: "pending" as const,
-    payload_json: payload,
-    created_at: new Date().toISOString(),
-    processed_at: null,
-    next_attempt_at: new Date().toISOString(),
-    attempt_count: 0,
-    claim_token: null,
-    claim_expires_at: null,
-    error_message: null
-  };
-  await handleSupabase(await supabase.from("notification_queue").insert(basePayload));
-};
-
 const getCategories = async () => {
   const rows = handleSupabase(
     await supabase.from("categories").select("name").order("name", { ascending: true })
@@ -1221,64 +890,11 @@ const getRoles = async () => {
   return rows.map((row) => row.name);
 };
 
-const formatProcessUptime = (uptimeSeconds: number) => {
-  const totalMinutes = Math.max(0, Math.floor(uptimeSeconds / 60));
-  const days = Math.floor(totalMinutes / (60 * 24));
-  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
-  const minutes = totalMinutes % 60;
-
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-};
-
-const getLandingStats = async () => {
-  const items = await getItems();
-  const users = await listUsersWithRoles();
-  const now = Date.now();
-
-  const activeLots = items.filter((item) => {
-    if (item.archivedAt) return false;
-    return new Date(item.endTime).getTime() > now;
-  }).length;
-
-  const verifiedBidders = users.filter(
-    (user) => user.status === "active" && user.roles.includes("Bidder")
-  ).length;
-
-  return {
-    activeLots,
-    verifiedBidders,
-    accountUptime: formatProcessUptime(process.uptime()),
-  };
-};
-
-const getReserveState = (item: StoredItem) => {
-  if (item.reserve == null || item.reserve <= 0) return "no_reserve";
-  if (new Date(item.endTime).getTime() > Date.now()) {
-    return item.currentBid >= item.reserve ? "reserve_met" : "reserve_pending";
-  }
-  return item.currentBid >= item.reserve ? "reserve_met" : "reserve_not_met";
-};
-
-const parseAuditDetails = (value: Record<string, unknown> | string | null | undefined) => {
-  if (!value) return {} as Record<string, unknown>;
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-  return value;
-};
-
 const {
   listUsersWithRoles,
   getAuditActorRoleLookup,
   redactSensitiveAuditDetails,
   sanitizeNotificationPayloadForAdmin,
-  mapAuditRowToEntry,
   mapNotificationRow,
   mapNotificationRowForAdmin,
   getRecentAudits,
@@ -1292,488 +908,119 @@ const {
   securityTelemetryEvents,
 });
 
-const { getItems, getItemById } = createItemReadModel({
+const {
+  queueNotification,
+  processNotificationQueue,
+} = createNotificationService({
+  supabase,
+  handleSupabase,
+  handleSupabaseMaybe,
+  mapNotificationRow,
+  sanitizeNotificationPayloadForAdmin,
+  notificationRecipient,
+  notificationTransport,
+  notificationClaimTtlMs,
+  notificationLeaseRenewMs,
+  notificationMaxAttempts,
+  outboxDir,
+  deadLetterDir,
+  appBaseUrl,
+  imageBucket,
+  smtpFrom,
+  smtpTransporter,
+  decodeStoredFilePath,
+  guessContentType,
+  safeFileName,
+  buildSignInUrl,
+  sendOpsAlert,
+});
+
+const { appendAudit } = createAuditService({
+  supabase,
+  handleSupabase,
+  redactSensitiveAuditDetails,
+  getAuthContext,
+  randomUUID,
+});
+
+const queuePasswordReset = async (user: UserRow & { password_hash?: string }, triggeredBy?: string) => {
+  const reset = createPasswordResetToken(user);
+  await queueNotification(
+    "PASSWORD_RESET",
+    "Reset your FMDQ Auctions password",
+    {
+      email: user.email,
+      displayName: user.display_name,
+      resetUrl: reset.resetUrl,
+      expiresAt: reset.expiresAt,
+      triggeredBy: triggeredBy || "self-service",
+    },
+    user.email
+  );
+  return reset;
+};
+
+const {
+  validateNewItem,
+  validateCategoryName,
+  parseCsv,
+  normalizeImportKey,
+  inspectImportArchive,
+  extractImportArchive,
+  getImportValue,
+  splitImportList,
+  normalizeDocumentVisibility,
+  prepareUploadedMulterFile,
+  copyImportedFile,
+  createItemRecord,
+  cleanupManagedFiles,
+  rollbackCreatedItem,
+  findExistingItemByLotOrSku,
+} = createItemWriteService({
+  supabase,
+  handleSupabase,
+  maxImportArchiveEntries,
+  maxImportExtractedBytes,
+  toIso,
+  validateManagedFileContent,
+  normalizeImageForUpload,
+  runMalwareScan,
+  uploadFileToManagedStorage,
+  removeFileIfExists,
+  removeManagedStoredFile,
+  appendAudit,
+  queueNotification,
+});
+
+const { getItems, getItemSummaries, getItemById } = createItemReadModel({
   supabase,
   handleSupabase,
   handleSupabaseMaybe,
   parseAuditDetails,
 });
 
-const backfillLegacyBidAuditAttribution = async () => {
-  const users = handleSupabase(
-    await supabase.from("users").select("id,display_name").eq("status", "active")
-  ) as Array<{ id: string; display_name: string }>;
-  const uniqueDisplayNameMap = new Map<string, string>();
-  const duplicateDisplayNames = new Set<string>();
-  for (const user of users) {
-    if (uniqueDisplayNameMap.has(user.display_name)) {
-      duplicateDisplayNames.add(user.display_name);
-      uniqueDisplayNameMap.delete(user.display_name);
-      continue;
-    }
-    if (!duplicateDisplayNames.has(user.display_name)) {
-      uniqueDisplayNameMap.set(user.display_name, user.id);
-    }
-  }
-  const bidAudits = handleSupabase(
-    await supabase
-      .from("audits")
-      .select("id,entity_id,actor,details_json,created_at")
-      .eq("event_type", "BID_PLACED")
-      .order("created_at", { ascending: false })
-  ) as Array<Pick<AuditRow, "id" | "entity_id" | "actor" | "details_json" | "created_at">>;
-  for (const audit of bidAudits) {
-    const details = parseAuditDetails(audit.details_json);
-    if (details.bidderUserId) continue;
-    const matchedUserId = uniqueDisplayNameMap.get(audit.actor);
-    if (!matchedUserId) continue;
-    await handleSupabase(
-      await supabase
-        .from("audits")
-        .update({ details_json: { ...details, bidderUserId: matchedUserId } })
-        .eq("id", audit.id)
-    );
-    await handleSupabase(
-      await supabase
-        .from("bids")
-        .update({ bidder_user_id: matchedUserId })
-        .eq("item_id", String(audit.entity_id))
-        .eq("created_at", String(audit.created_at))
-        .is("bidder_user_id", null)
-    );
-  }
-};
+const getLandingStatsSummary = () => getLandingStats({
+  getItems,
+  listUsersWithRoles,
+});
 
-const resolveLegacyBidOwnerForNotification = async (
-  itemId: string,
-  previousBidAmount: number,
-  currentBidderUserId?: string
-) => {
-  const matchingAudits = handleSupabase(
-    await supabase
-      .from("audits")
-      .select("actor,details_json,created_at")
-      .eq("event_type", "BID_PLACED")
-      .eq("entity_id", itemId)
-      .order("created_at", { ascending: false })
-      .limit(50)
-  ) as Array<Pick<AuditRow, "actor" | "details_json" | "created_at">>;
-
-  for (const audit of matchingAudits) {
-    const details = parseAuditDetails(audit.details_json);
-    if (Number(details.amount || 0) !== previousBidAmount) continue;
-
-    const attributedUserId = String(details.bidderUserId || "");
-    if (attributedUserId && attributedUserId !== currentBidderUserId) {
-      return attributedUserId;
-    }
-
-    const fallbackUser = await getUserByDisplayName(audit.actor).catch(() => null);
-    if (fallbackUser?.id && fallbackUser.id !== currentBidderUserId) {
-      await handleSupabase(
-        await supabase
-          .from("bids")
-          .update({ bidder_user_id: fallbackUser.id })
-          .eq("item_id", itemId)
-          .eq("amount", previousBidAmount)
-          .is("bidder_user_id", null)
-      );
-      return fallbackUser.id;
-    }
-  }
-
-  return "";
-};
-
-const getUserBidRecords = async (userId: string) => {
-  const bidRows = handleSupabase(
-    await supabase
-      .from("bids")
-      .select("item_id,amount,created_at")
-      .eq("bidder_user_id", userId)
-      .order("created_at", { ascending: false })
-  ) as Array<{ item_id: string; amount: number | string; created_at: string }>;
-  const latestBidByItem = new Map<string, { amount: number; createdAt: string }>();
-  for (const row of bidRows) {
-    if (!latestBidByItem.has(row.item_id)) {
-      latestBidByItem.set(row.item_id, {
-        amount: Number(row.amount),
-        createdAt: row.created_at
-      });
-    }
-  }
-  const uniqueItemIds = Array.from(latestBidByItem.keys());
-  const items = new Map((await getItems(true)).map((item) => [item.id, item]));
-  return uniqueItemIds.flatMap((itemId) => {
-    const item = items.get(itemId);
-    if (!item) return [];
-    const latestBid = latestBidByItem.get(itemId);
-    if (!latestBid) return [];
-    const latestAmount = latestBid.amount;
-    const status = new Date(item.endTime).getTime() > Date.now()
-      ? (item.currentBid === latestAmount ? "winning" : "outbid")
-      : (item.currentBid === latestAmount ? "won" : "lost");
-    return [{
-      itemId: item.id,
-      title: item.title,
-      category: item.category,
-      lot: item.lot,
-      currentBid: item.currentBid,
-      yourLatestBid: latestAmount,
-      endTime: item.endTime,
-      lastBidAt: latestBid.createdAt,
-      status
-    }];
-  });
-};
-
-const getPendingNotificationQueue = async () => {
-  const now = new Date().toISOString();
-  const rows = handleSupabase(
-    await supabase
-      .from("notification_queue")
-      .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,next_attempt_at,attempt_count,claim_token,claim_expires_at,error_message")
-      .eq("status", "pending")
-      .lte("next_attempt_at", now)
-      .or(`claim_expires_at.is.null,claim_expires_at.lte.${now}`)
-      .order("next_attempt_at", { ascending: true })
-      .order("created_at", { ascending: true })
-      .limit(10)
-  ) as NotificationRow[];
-  return rows.map(mapNotificationRow);
-};
-
-const claimNotificationQueueEntry = async (entry: NotificationQueueItem) => {
-  const claimTime = new Date().toISOString();
-  const claimToken = `claim:${randomUUID()}`;
-  const claimExpiresAt = new Date(Date.now() + notificationClaimTtlMs).toISOString();
-  let request = supabase
-    .from("notification_queue")
-    .update({
-      claim_token: claimToken,
-      claim_expires_at: claimExpiresAt,
-      processed_at: claimTime,
-      error_message: null
-    })
-    .eq("id", entry.id)
-    .eq("status", "pending")
-    .lte("next_attempt_at", claimTime);
-  request = entry.claimToken ? request.eq("claim_token", entry.claimToken) : request.is("claim_token", null);
-  const result = await request
-    .select("id,claim_token")
-    .maybeSingle();
-  if (result.error) throw new Error(result.error.message);
-  return result.data?.claim_token === claimToken ? claimToken : null;
-};
-
-const updateNotificationOutcome = async (
-  entryId: string,
-  claimToken: string,
-  status: "pending" | "sent" | "failed",
-  errorMessage: string | null,
-  processedAt = new Date().toISOString(),
-  nextAttemptAt: string | null = processedAt,
-  attemptCount?: number
-) => {
-  const row = await handleSupabaseMaybe<{ id: string }>(
-    await supabase
-      .from("notification_queue")
-      .update({
-        status,
-        processed_at: processedAt,
-        next_attempt_at: nextAttemptAt,
-        attempt_count: attemptCount,
-        claim_token: null,
-        claim_expires_at: null,
-        error_message: errorMessage
-      })
-      .eq("id", entryId)
-      .eq("claim_token", claimToken)
-      .select("id")
-      .maybeSingle(),
-    true
-  );
-  if (!row) {
-    await sendOpsAlert("Notification claim was lost before outcome update", {
-      entryId,
-      status,
-      processedAt,
-      nextAttemptAt,
-      attemptCount: Number(attemptCount || 0)
-    });
-    throw new NotificationClaimLostError(entryId);
-  }
-};
-
-const renewNotificationClaimLease = async (entryId: string, claimToken: string) => {
-  const nextClaimExpiry = new Date(Date.now() + notificationClaimTtlMs).toISOString();
-  const row = await handleSupabaseMaybe<{ id: string }>(
-    await supabase
-      .from("notification_queue")
-      .update({ claim_expires_at: nextClaimExpiry })
-      .eq("id", entryId)
-      .eq("claim_token", claimToken)
-      .select("id")
-      .maybeSingle(),
-    true
-  );
-  if (!row) {
-    await sendOpsAlert("Notification claim lease could not be renewed", {
-      entryId,
-      claimToken,
-      nextClaimExpiry
-    });
-    throw new NotificationClaimLostError(entryId);
-  }
-};
-
-const startNotificationClaimLeaseRenewal = (entryId: string, claimToken: string) => {
-  let renewalError: Error | null = null;
-  let latestRenewal = Promise.resolve();
-  const timer = setInterval(() => {
-    latestRenewal = renewNotificationClaimLease(entryId, claimToken).catch((error) => {
-      renewalError = error instanceof Error ? error : new Error("Unable to renew notification claim lease.");
-    });
-  }, notificationLeaseRenewMs);
-
-  return async () => {
-    clearInterval(timer);
-    await latestRenewal;
-    if (renewalError) {
-      throw renewalError;
-    }
-  };
-};
-
-const escapeHtml = (value: unknown) =>
-  String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-
-const loadEmailInlineImage = async (imageUrl: string, title: string) => {
-  const imageMatch = imageUrl.match(/^\/uploads\/images\/(.+)$/);
-  if (!imageMatch) return null;
-  const storagePath = decodeStoredFilePath(imageMatch[1]);
-  if (!storagePath) return null;
-  const downloadResult = await supabase.storage.from(imageBucket).download(storagePath);
-  if (downloadResult.error || !downloadResult.data) return null;
-  const content = Buffer.from(await downloadResult.data.arrayBuffer());
-  return {
-    cid: `auction-item-${randomUUID()}@fmdq-auctions`,
-    filename: safeFileName(path.basename(storagePath) || `${title || "auction-item"}.jpg`),
-    contentType: guessContentType(storagePath),
-    content
-  };
-};
-
-const renderNotificationContent = async (entry: NotificationQueueItem) => {
-  if (entry.eventType === "ACCOUNT_VERIFICATION") {
-    const displayName = escapeHtml(entry.payload.displayName || "there");
-    const verifyUrl = String(entry.payload.verifyUrl || "");
-    return {
-      text: `Hello ${displayName},\n\nUse the link below to verify your FMDQ Auctions account:\n${verifyUrl}\n\nThis link expires in 24 hours.`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-          <p>Hello ${displayName},</p>
-          <p>Use the link below to verify your FMDQ Auctions account:</p>
-          <p><a href="${escapeHtml(verifyUrl)}">${escapeHtml(verifyUrl)}</a></p>
-          <p>This link expires in 24 hours.</p>
-        </div>
-      `
-    };
-  }
-
-  if (entry.eventType === "ACCOUNT_VERIFIED") {
-    const displayName = escapeHtml(entry.payload.displayName || "there");
-    const signInUrl = buildSignInUrl();
-    return {
-      text: `Hello ${displayName},\n\nYour FMDQ Auctions account has been verified. You can now sign in here:\n${signInUrl}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-          <p>Hello ${displayName},</p>
-          <p>Your FMDQ Auctions account has been verified.</p>
-          <p>You can now sign in here: <a href="${escapeHtml(signInUrl)}">${escapeHtml(signInUrl)}</a></p>
-        </div>
-      `
-    };
-  }
-
-  if (entry.eventType === "PASSWORD_RESET") {
-    const displayName = escapeHtml(entry.payload.displayName || "there");
-    const resetUrl = String(entry.payload.resetUrl || "");
-    return {
-      text: `Hello ${displayName},\n\nUse the link below to reset your FMDQ Auctions password:\n${resetUrl}\n\nThis link expires in 1 hour.`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-          <p>Hello ${displayName},</p>
-          <p>Use the link below to reset your FMDQ Auctions password:</p>
-          <p><a href="${escapeHtml(resetUrl)}">${escapeHtml(resetUrl)}</a></p>
-          <p>This link expires in 1 hour.</p>
-        </div>
-      `
-    };
-  }
-
-  if (entry.eventType === "BID_PLACED") {
-    const displayName = escapeHtml(entry.payload.displayName || "there");
-    const title = escapeHtml(entry.payload.title || "this auction item");
-    const currentBid = escapeHtml(entry.payload.currentBid || entry.payload.amount || "");
-    const inlineImage = await loadEmailInlineImage(String(entry.payload.imageUrl || ""), title);
-    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding`);
-    return {
-      text: `Hello ${displayName},\n\nYour bid of ${currentBid} was placed successfully for ${title}.\n\nView the item here:\n${itemUrl}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-          ${inlineImage ? `<img src="cid:${escapeHtml(inlineImage.cid)}" alt="${title}" style="display:block;width:100%;max-width:520px;border-radius:18px;margin:0 0 18px;" />` : ""}
-          <p>Hello ${displayName},</p>
-          <p>Your bid of <strong>${currentBid}</strong> was placed successfully for <strong>${title}</strong>.</p>
-          <p>View the item here: <a href="${escapeHtml(itemUrl)}">${escapeHtml(itemUrl)}</a></p>
-        </div>
-      `,
-      attachments: inlineImage ? [inlineImage] : []
-    };
-  }
-
-  if (entry.eventType === "OUTBID_ALERT") {
-    const displayName = escapeHtml(entry.payload.displayName || "there");
-    const title = escapeHtml(entry.payload.title || "this auction item");
-    const previousBid = escapeHtml(entry.payload.previousBid || "");
-    const currentBid = escapeHtml(entry.payload.currentBid || "");
-    const inlineImage = await loadEmailInlineImage(String(entry.payload.imageUrl || ""), title);
-    const itemUrl = String(entry.payload.itemUrl || `${appBaseUrl}/bidding`);
-    return {
-      text: `Hello ${displayName},\n\nYou were outbid on ${title}.\nYour previous bid: ${previousBid}\nCurrent bid: ${currentBid}\n\nOpen the item to place a new bid:\n${itemUrl}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-          ${inlineImage ? `<img src="cid:${escapeHtml(inlineImage.cid)}" alt="${title}" style="display:block;width:100%;max-width:520px;border-radius:18px;margin:0 0 18px;" />` : ""}
-          <p>Hello ${displayName},</p>
-          <p>You were outbid on <strong>${title}</strong>.</p>
-          <p>Your previous bid: <strong>${previousBid}</strong><br />Current bid: <strong>${currentBid}</strong></p>
-          <p>Open the item to place a new bid: <a href="${escapeHtml(itemUrl)}">${escapeHtml(itemUrl)}</a></p>
-        </div>
-      `,
-      attachments: inlineImage ? [inlineImage] : []
-    };
-  }
-
-  const prettyPayload = JSON.stringify(entry.payload, null, 2);
-  return {
-    text: `${entry.subject}\n\n${prettyPayload}`,
-    html: `
-      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-        <p>${escapeHtml(entry.subject)}</p>
-        <pre style="white-space: pre-wrap; background: #f8fafc; padding: 12px; border-radius: 8px;">${escapeHtml(prettyPayload)}</pre>
-      </div>
-    `,
-    attachments: []
-  };
-};
-
-const deliverNotification = async (entry: NotificationQueueItem, claimToken: string) => {
-  const processedAt = new Date().toISOString();
-  const stopLeaseRenewal = startNotificationClaimLeaseRenewal(entry.id, claimToken);
-  try {
-    if (notificationTransport === "noop") {
-      await stopLeaseRenewal();
-      await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
-      return;
-    }
-    if (notificationTransport === "smtp") {
-      if (!smtpTransporter) {
-        throw new Error("SMTP transport is enabled but SMTP_HOST, SMTP_USER, or SMTP_PASS is missing.");
-      }
-      const content = await renderNotificationContent(entry);
-      await smtpTransporter.sendMail({
-        from: smtpFrom,
-        to: entry.recipient,
-        subject: entry.subject,
-        text: content.text,
-        html: content.html,
-        attachments: content.attachments
-      });
-      await stopLeaseRenewal();
-      await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
-      return;
-    }
-    const filePath = path.join(outboxDir, `${processedAt.replace(/[:.]/g, "-")}-${entry.id}.json`);
-    await fs.promises.writeFile(filePath, JSON.stringify({
-      id: entry.id,
-      channel: entry.channel,
-      eventType: entry.eventType,
-      recipient: entry.recipient,
-      subject: entry.subject,
-      payload: sanitizeNotificationPayloadForAdmin(entry.payload),
-      createdAt: entry.createdAt,
-      processedAt
-    }, null, 2), "utf8");
-    await stopLeaseRenewal();
-    await updateNotificationOutcome(entry.id, claimToken, "sent", null, processedAt, processedAt, Number(entry.attemptCount || 0));
-  } catch (error) {
-    await stopLeaseRenewal().catch(() => undefined);
-    throw error;
-  }
-};
-
-const processNotificationQueue = async () => {
-  if (notificationProcessingInFlight) return 0;
-  notificationProcessingInFlight = true;
-  try {
-    const entries = await getPendingNotificationQueue();
-    let processed = 0;
-    for (const entry of entries) {
-      const claimToken = await claimNotificationQueueEntry(entry);
-      if (!claimToken) continue;
-      try {
-        await deliverNotification(entry, claimToken);
-        processed += 1;
-      } catch (error) {
-        if (error instanceof NotificationClaimLostError) {
-          continue;
-        }
-        const errorMessage = error instanceof Error ? error.message : "Notification processing failed.";
-        const now = new Date();
-        const currentMeta = {
-          attempts: Number(entry.attemptCount || 0),
-          nextAttemptAt: entry.nextAttemptAt || undefined
-        };
-        const retry = buildNotificationMeta(currentMeta, errorMessage, now, notificationMaxAttempts);
-        if (retry.nextStatus === "failed") {
-          const deadLetterPath = path.join(deadLetterDir, `${now.toISOString().replace(/[:.]/g, "-")}-${entry.id}.json`);
-          await fs.promises.writeFile(deadLetterPath, JSON.stringify({
-            id: entry.id,
-            eventType: entry.eventType,
-            recipient: entry.recipient,
-            subject: entry.subject,
-            payload: sanitizeNotificationPayloadForAdmin(entry.payload),
-            errorMessage
-          }, null, 2), "utf8");
-          await sendOpsAlert("Notification moved to dead letter", {
-            entryId: entry.id,
-            eventType: entry.eventType,
-            recipient: entry.recipient,
-            errorMessage,
-            attempts: retry.meta.attempts
-          });
-        }
-        await updateNotificationOutcome(
-          entry.id,
-          claimToken,
-          retry.nextStatus,
-          errorMessage,
-          now.toISOString(),
-          retry.meta.nextAttemptAt || now.toISOString(),
-          retry.meta.attempts
-        );
-      }
-    }
-    return processed;
-  } finally {
-    notificationProcessingInFlight = false;
-  }
-};
+const {
+  getUserBidRecords,
+  validateBid,
+  placeBidAtomically,
+  queueBidActivityNotifications,
+  backfillLegacyBidAuditAttribution,
+} = createBidService({
+  supabase,
+  handleSupabase,
+  parseAuditDetails,
+  sessionTtlMs,
+  appBaseUrl,
+  getItems,
+  getUserById,
+  getUserByDisplayName,
+  queueNotification,
+});
 
 const runMaintenanceTasks = async () => {
   if (maintenanceInFlight) return;
@@ -1820,370 +1067,10 @@ const startNotificationWorkerLoop = async () => {
   }, notificationPollMs);
 };
 
-const validateNewItem = (body: Record<string, string>) => {
-  const title = (body.title || "").trim();
-  const category = (body.category || "").trim();
-  const lot = (body.lot || "").trim();
-  const sku = (body.sku || "").trim();
-  const condition = (body.condition || "").trim();
-  const location = (body.location || "").trim();
-  const description = (body.description || "").trim();
-  const startBid = Number(body.startBid);
-  const rawReserve = (body.reserve || "").trim();
-  const reserve = rawReserve ? Number(rawReserve) : 0;
-  const increment = Number(body.increment || Math.max(500, Math.round(startBid * 0.02)));
-  const startTime = toIso(body.startTime || "");
-  const endTime = toIso(body.endTime || "");
-  if (!title || !category || !lot || !sku || !condition || !location) return { ok: false as const, error: "Missing required item fields." };
-  if (!startTime || !endTime) return { ok: false as const, error: "Invalid start or end time." };
-  if (new Date(endTime).getTime() <= new Date(startTime).getTime()) return { ok: false as const, error: "Auction end time must be after start time." };
-  if (!Number.isFinite(startBid) || startBid <= 0) return { ok: false as const, error: "Starting bid must be greater than zero." };
-  if (!Number.isFinite(reserve) || reserve < 0) return { ok: false as const, error: "Reserve price cannot be negative." };
-  if (reserve > 0 && reserve < startBid) return { ok: false as const, error: "Reserve price must be at least the starting bid when provided." };
-  if (!Number.isFinite(increment) || increment <= 0) return { ok: false as const, error: "Bid increment must be greater than zero." };
-  return {
-    ok: true as const,
-    value: { title, category, lot, sku, condition, location, description, startBid, reserve, increment, startTime, endTime }
-  };
-};
-
-const validateCategoryName = (value: string) => {
-  const name = value.trim();
-  if (!name) return { ok: false as const, error: "Category name is required." };
-  if (name.length > 60) return { ok: false as const, error: "Category name must be 60 characters or fewer." };
-  return { ok: true as const, value: name };
-};
-
-const parseCsv = (content: string) => {
-  const rows: string[][] = [];
-  let current = "";
-  let row: string[] = [];
-  let inQuotes = false;
-  for (let index = 0; index < content.length; index += 1) {
-    const char = content[index];
-    const next = content[index + 1];
-    if (char === "\"") {
-      if (inQuotes && next === "\"") {
-        current += "\"";
-        index += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-    if (char === "," && !inQuotes) {
-      row.push(current);
-      current = "";
-      continue;
-    }
-    if ((char === "\n" || char === "\r") && !inQuotes) {
-      if (char === "\r" && next === "\n") index += 1;
-      row.push(current);
-      current = "";
-      if (row.some((cell) => cell.trim() !== "")) rows.push(row);
-      row = [];
-      continue;
-    }
-    current += char;
-  }
-  if (current.length || row.length) {
-    row.push(current);
-    if (row.some((cell) => cell.trim() !== "")) rows.push(row);
-  }
-  if (!rows.length) return [];
-  const headers = rows[0].map((value) => value.trim());
-  return rows.slice(1).map((values) =>
-    headers.reduce<Record<string, string>>((acc, header, index) => {
-      acc[header] = (values[index] || "").trim();
-      return acc;
-    }, {})
-  );
-};
-
-const normalizeImportKey = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
-
-const inspectImportArchive = async (zipPath: string) => {
-  const zip = new AdmZip(zipPath);
-  const entries = zip
-    .getEntries()
-    .filter((entry) => !entry.isDirectory)
-    .map((entry) => entry.entryName.trim())
-    .filter(Boolean);
-  validateArchiveEntries(entries, maxImportArchiveEntries);
-};
-
-const extractImportArchive = async (zipPath: string, targetDir: string) => {
-  const zip = new AdmZip(zipPath);
-  let totalBytes = 0;
-  let totalFiles = 0;
-  const map = new Map<string, string>();
-
-  for (const entry of zip.getEntries()) {
-    if (entry.isDirectory) continue;
-    const normalizedEntryName = entry.entryName.replace(/\\/g, "/").trim();
-    validateArchiveEntries([normalizedEntryName], maxImportArchiveEntries);
-    totalFiles += 1;
-    if (totalFiles > maxImportArchiveEntries) {
-      throw new Error(`The ZIP bundle contains too many extracted files. Maximum allowed is ${maxImportArchiveEntries}.`);
-    }
-
-    const data = entry.getData();
-    totalBytes += data.length;
-    if (totalBytes > maxImportExtractedBytes) {
-      throw new Error(`The extracted ZIP bundle exceeds the ${Math.round(maxImportExtractedBytes / (1024 * 1024))} MB safety limit.`);
-    }
-
-    const fileName = path.basename(normalizedEntryName);
-    const outputPath = path.join(targetDir, `${randomUUID()}-${fileName}`);
-    await fs.promises.writeFile(outputPath, data);
-    map.set(fileName.toLowerCase(), outputPath);
-  }
-
-  return map;
-};
-
-const getImportValue = (row: Record<string, string>, candidates: string[]) => {
-  const normalized = Object.entries(row).reduce<Record<string, string>>((acc, [key, value]) => {
-    acc[normalizeImportKey(key)] = value;
-    return acc;
-  }, {});
-  for (const candidate of candidates) {
-    const value = normalized[normalizeImportKey(candidate)];
-    if (typeof value === "string") return value;
-  }
-  return "";
-};
-
-const splitImportList = (value: string) =>
-  value
-    .split(/[;,|]/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
-const documentExtensions = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx"]);
-const normalizeDocumentVisibility = (value: string | undefined): DocumentVisibility => {
-  const normalized = (value || "").trim().toLowerCase();
-  if (normalized === "bidder_visible" || normalized === "winner_only") return normalized;
-  return "admin_only";
-};
-
-const prepareManagedFile = async (
-  sourcePath: string,
-  kind: "image" | "document",
-  originalName = path.basename(sourcePath),
-  visibility: DocumentVisibility = "bidder_visible"
-) => {
-  const extension = path.extname(sourcePath).toLowerCase();
-  if (kind === "image" && !imageExtensions.has(extension)) {
-    throw new Error(`Unsupported image file type for ${path.basename(sourcePath)}.`);
-  }
-  if (kind === "document" && !documentExtensions.has(extension)) {
-    throw new Error(`Unsupported document file type for ${path.basename(sourcePath)}.`);
-  }
-  await validateManagedFileContent(sourcePath, originalName, kind);
-  let workingPath = sourcePath;
-  let workingName = originalName;
-  let normalizedPath = "";
-
-  if (kind === "image") {
-    const normalized = await normalizeImageForUpload(sourcePath, originalName);
-    workingPath = normalized.path;
-    workingName = normalized.originalName;
-    normalizedPath = normalized.path;
-  }
-
-  const scannedPath = await runMalwareScan(workingPath);
-  try {
-    const stored = await uploadFileToManagedStorage(scannedPath, kind, workingName);
-    return {
-      id: randomUUID(),
-      kind,
-      name: kind === "document" ? encodeDocumentNameWithVisibility(originalName, visibility) : workingName,
-      url: stored.url
-    };
-  } finally {
-    await removeFileIfExists(scannedPath);
-    if (normalizedPath) await removeFileIfExists(normalizedPath);
-  }
-};
-
-const copyImportedFile = async (sourcePath: string, kind: "image" | "document", visibility: DocumentVisibility = "bidder_visible") => {
-  return prepareManagedFile(sourcePath, kind, path.basename(sourcePath), visibility);
-};
-
-const prepareUploadedMulterFile = async (
-  file: Express.Multer.File,
-  kind: "image" | "document",
-  visibility: DocumentVisibility = "bidder_visible"
-) => {
-  try {
-    return await prepareManagedFile(file.path, kind, file.originalname, visibility);
-  } finally {
-    await removeFileIfExists(file.path);
-  }
-};
-
-const createItemRecord = async (
-  req: express.Request,
-  validation: Extract<ReturnType<typeof validateNewItem>, { ok: true }>["value"],
-  auth: AuthContext,
-  extra?: { images?: Array<{ id: string; kind: "image" | "document"; name: string; url: string }>; documents?: Array<{ id: string; kind: "image" | "document"; name: string; url: string }>; currentBid?: number }
-) => {
-  const itemId = randomUUID();
-  const createdAt = new Date().toISOString();
-  const images = extra?.images || [];
-  const documents = extra?.documents || [];
-  await handleSupabase(await supabase.from("categories").upsert({ name: validation.category }, { onConflict: "name" }));
-  await handleSupabase(await supabase.from("items").insert({
-    id: itemId,
-    title: validation.title,
-    category: validation.category,
-    lot: validation.lot,
-    sku: validation.sku,
-    condition: validation.condition,
-    location: validation.location,
-    start_bid: validation.startBid,
-    reserve: validation.reserve,
-    increment_amount: validation.increment,
-    current_bid: extra?.currentBid || 0,
-    start_time: validation.startTime,
-    end_time: validation.endTime,
-    description: validation.description,
-    created_at: createdAt
-  }));
-  if (images.length) {
-    await handleSupabase(await supabase.from("item_files").insert(
-      images.map((image) => ({
-        id: image.id,
-        item_id: itemId,
-        kind: image.kind,
-        name: image.name,
-        url: image.url
-      }))
-    ));
-  }
-  if (documents.length) {
-    await handleSupabase(await supabase.from("item_files").insert(
-      documents.map((document) => ({
-        id: document.id,
-        item_id: itemId,
-        kind: document.kind,
-        name: document.name,
-        url: document.url
-      }))
-    ));
-  }
-  await appendAudit(req, {
-    eventType: "ITEM_CREATED",
-    entityType: "item",
-    entityId: itemId,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { title: validation.title, category: validation.category, lot: validation.lot, sku: validation.sku }
-  });
-  await queueNotification("ITEM_CREATED", `Auction item created: ${validation.title}`, { itemId, title: validation.title });
-  return itemId;
-};
-
-const cleanupManagedFiles = async (files: Array<{ url: string }>) => {
-  for (const file of files) {
-    await removeManagedStoredFile(file.url).catch(() => undefined);
-  }
-};
-
-const rollbackCreatedItem = async (itemId: string) => {
-  const files = handleSupabase(
-    await supabase.from("item_files").select("url").eq("item_id", itemId)
-  ) as Array<{ url: string }>;
-  await cleanupManagedFiles(files);
-  await handleSupabase(await supabase.from("item_files").delete().eq("item_id", itemId));
-  await handleSupabase(await supabase.from("audits").delete().eq("entity_type", "item").eq("entity_id", itemId));
-  await supabase.from("notification_queue").delete().contains("payload_json", { itemId });
-  await handleSupabase(await supabase.from("items").delete().eq("id", itemId));
-};
-
-const findExistingItemByLotOrSku = async (lot: string, sku: string) => {
-  const rows = handleSupabase(
-    await supabase
-      .from("items")
-      .select("id,title,lot,sku")
-      .or(`lot.eq.${lot},sku.eq.${sku}`)
-      .limit(10)
-  ) as Array<{ id: string; title: string; lot: string; sku: string }>;
-  return rows.find((row) => row.lot === lot || row.sku === sku) || null;
-};
-
-const validateBid = (item: StoredItem, amount: number) => {
-  return validateBidAmount(item, amount, Date.now());
-};
-
-const placeBidAtomically = async (
-  item: StoredItem,
-  amount: number,
-  expectedCurrentBid: number,
-  bidderAlias: string,
-  bidderUserId: string,
-  idempotencyKey: string
-) => {
-  const bidId = randomUUID();
-  const createdAt = new Date().toISOString();
-  const idempotencyExpiresAt = new Date(Date.now() + sessionTtlMs).toISOString();
-  const result = await supabase.rpc("place_auction_bid", {
-    p_item_id: item.id,
-    p_bid_id: bidId,
-    p_bidder_alias: bidderAlias,
-    p_bidder_user_id: bidderUserId,
-    p_amount: amount,
-    p_expected_current_bid: expectedCurrentBid,
-    p_idempotency_key: idempotencyKey || null,
-    p_created_at: createdAt,
-    p_idempotency_expires_at: idempotencyExpiresAt
-  });
-  if (result.error) {
-    const message = result.error.message || "Unable to place bid.";
-    if (message.includes("ITEM_NOT_FOUND")) {
-      return { ok: false as const, status: 404, error: "Item not found." };
-    }
-    if (message.includes("IDEMPOTENCY_KEY_CONFLICT")) {
-      return { ok: false as const, status: 409, error: "Duplicate bid submission detected." };
-    }
-    if (message.includes("BID_STATE_CHANGED")) {
-      return { ok: false as const, status: 409, error: "Item bid state changed. Refresh and try again." };
-    }
-    if (message.includes("BIDDING_CLOSED")) {
-      return { ok: false as const, status: 400, error: "Bidding is closed or not yet open for this item." };
-    }
-    if (message.includes("BID_TOO_LOW:")) {
-      const requiredBid = message.split("BID_TOO_LOW:")[1]?.trim() || "";
-      return { ok: false as const, status: 400, error: `Bid must be at least ${requiredBid}.` };
-    }
-    if (message.includes("INVALID_INCREMENT:")) {
-      const increment = message.split("INVALID_INCREMENT:")[1]?.trim() || "";
-      return { ok: false as const, status: 400, error: `Bid must increase by ${increment}.` };
-    }
-    throw new Error(message);
-  }
-
-  const row = Array.isArray(result.data) ? result.data[0] : result.data;
-  return {
-    ok: true as const,
-    bidId: String(row?.bid_id || bidId),
-    bidSequence: Number(row?.bid_sequence || 0),
-    currentBid: Number(row?.current_bid || amount),
-    previousBidderUserId: row?.previous_bidder_user_id ? String(row.previous_bidder_user_id) : null,
-    duplicate: Boolean(row?.duplicate)
-  };
-};
-
 const checkBidRateLimit = async (req: express.Request, actor: string, itemId: string) =>
   recordSharedRateLimitAttempt(req, "BID_ATTEMPT", `${actor}:${itemId}`, bidRateWindowMs, bidRateLimit, { itemId });
 
-const asyncHandler = (
-  fn: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<void>
-) => (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  void fn(req, res, next).catch(next);
-};
+const asyncHandler = createAsyncHandler;
 
 const requireAdminToken = asyncHandler(async (req, res, next) => {
   const auth = await getAuthContext(req);
@@ -2198,7 +1085,7 @@ const requireAdminToken = asyncHandler(async (req, res, next) => {
 
 const requireItemOperationsViewerToken = asyncHandler(async (req, res, next) => {
   const auth = await getAuthContext(req);
-  if (!(auth.adminAuthorized || auth.role === "ShopOwner")) {
+  if (!(auth.adminAuthorized || canViewItemOperationsWithRole(auth.role))) {
     res.status(403).json({
       error: "Item operations access requires an authenticated ShopOwner or Admin account."
     });
@@ -2209,1592 +1096,166 @@ const requireItemOperationsViewerToken = asyncHandler(async (req, res, next) => 
 
 const requireSuperAdminToken = asyncHandler(async (req, res, next) => {
   const auth = await getAuthContext(req);
-  if (!auth.signedIn || auth.role !== "SuperAdmin") {
+  if (!auth.signedIn || !isSuperAdminRole(auth.role)) {
     res.status(403).json({ error: "Super admin access is required." });
     return;
   }
   next();
 });
 
-const seedRoles = async () => {
-  for (const role of ["SuperAdmin", "Admin", "Bidder", "ShopOwner"]) {
-    await handleSupabase(await supabase.from("roles").upsert({ name: role }, { onConflict: "name" }));
-  }
-};
-
-const seedCategoriesIfEmpty = async () => {
-  const rows = handleSupabase(await supabase.from("categories").select("name").limit(1)) as Array<{ name: string }>;
-  if (rows.length > 0) return;
-  await handleSupabase(await supabase.from("categories").insert(defaultCategories.map((name) => ({ name }))));
-};
-
-const seedItemsIfEmpty = async () => {
-  const rows = handleSupabase(await supabase.from("items").select("id").limit(1)) as Array<{ id: string }>;
-  if (rows.length > 0) return;
-  for (const item of seedItems) {
-    await handleSupabase(
-      await supabase.from("items").insert({
-        id: item.id,
-        title: item.title,
-        category: item.category,
-        lot: item.lot,
-        sku: item.sku,
-        condition: item.condition,
-        location: item.location,
-        start_bid: item.startBid,
-        reserve: item.reserve,
-        increment_amount: item.increment,
-        current_bid: item.currentBid,
-        start_time: item.startTime,
-        end_time: item.endTime,
-        description: item.description,
-        created_at: item.createdAt
-      })
-    );
-    if (item.bids.length) {
-      await handleSupabase(
-        await supabase.from("bids").insert(
-          item.bids.map((bid) => ({
-            id: randomUUID(),
-            item_id: item.id,
-            bidder_alias: bid.bidder,
-            amount: bid.amount,
-            bid_time: bid.time,
-            created_at: bid.createdAt
-          }))
-        )
-      );
-    }
-  }
-  await handleSupabase(
-    await supabase.from("audits").insert({
-      id: randomUUID(),
-      event_type: "SYSTEM_SEED",
-      entity_type: "system",
-      entity_id: "seed",
-      actor: "system",
-      actor_type: "system",
-      request_id: "seed",
-      details_json: { itemCount: seedItems.length },
-      created_at: new Date().toISOString()
-    })
-  );
-};
-
 app.get("/api/health", asyncHandler(async (req, res) => {
   res.json({ status: "ok" });
 }));
 
-app.get("/api/auth/me", asyncHandler(async (req, res) => {
-  const session = await serializeSession(req);
-  res.json(session ? { signedIn: true, user: session } : { signedIn: false, user: null });
-}));
+registerAuthRoutes({
+  app,
+  supabase,
+  asyncHandler,
+  serializeSession,
+  normalizeEmail,
+  sanitizeDisplayName,
+  checkAuthRateLimit,
+  getClientKey,
+  getUserByEmail,
+  getUserById,
+  getUserByIdWithPassword,
+  getUserRoles,
+  getUserSessions,
+  getSessionRow,
+  deleteSessionRow,
+  createUserSession,
+  getAuthContext,
+  normalizeRole,
+  normalizeDisplayRoleName,
+  createEmailVerificationToken,
+  getEmailVerificationRow,
+  queueNotification,
+  queuePasswordReset,
+  appendAudit,
+  notificationTransport,
+  isStrongPassword,
+  passwordRuleMessage,
+  handleSupabase,
+  hashPassword,
+  verifyPassword,
+  buildCsrfToken,
+  parseSignedToken,
+  passwordHashFingerprint,
+  parseCookies,
+  sessionCookieName,
+  clearSessionCookie,
+  getUserBidRecords,
+  getItems,
+  getReserveState,
+  randomUUID,
+});
 
-app.post("/api/auth/resend-verification", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const email = normalizeEmail(String(req.body?.email || ""));
-  if (!email) {
-    res.status(400).json({ error: "Email is required." });
-    return;
-  }
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `resend:${email}`)))) {
-    res.status(429).json({ error: "Too many verification attempts. Please wait and try again." });
-    return;
-  }
-  const user = await getUserByEmail(email);
-  if (!user || user.status !== "pending_verification") {
-    res.json({ queued: true, message: "If a pending account exists for that email, a fresh verification link has been sent." });
-    return;
-  }
-  const verification = await createEmailVerificationToken(user.id);
-  await queueNotification(
-    "ACCOUNT_VERIFICATION",
-    "Confirm your FMDQ Auctions account",
-    { email: user.email, displayName: user.display_name, verifyUrl: verification.verifyUrl },
-    user.email
-  );
-  await appendAudit(req, {
-    eventType: "ACCOUNT_VERIFICATION_RESENT",
-    entityType: "system",
-    entityId: user.id,
-    actor: user.display_name,
-    actorType: "user",
-    details: { email: user.email }
-  });
-  res.json({ queued: true, message: "A new verification link has been sent to your email." });
-}));
+registerCatalogRoutes({
+  app,
+  supabase,
+  asyncHandler,
+  handleSupabase,
+  handleSupabaseMaybe,
+  getAuthContext,
+  requireAdminToken,
+  requireItemOperationsViewerToken,
+  appendAudit,
+  queueNotification,
+  getItems,
+  getItemSummaries,
+  getItemById,
+  sanitizeItemForAuth,
+  getCategories,
+  getLandingStats: getLandingStatsSummary,
+  validateCategoryName,
+  canAccessItemDocument,
+  fileExists,
+  safeFileName,
+  decodeStoredFilePath,
+  guessContentType,
+  imagesDir,
+  docsDir,
+  imageBucket,
+  documentBucket,
+  imageAccessPolicy,
+  getReserveState,
+  toCsv,
+  checkBidRateLimit,
+  validateBid,
+  placeBidAtomically,
+  queueBidActivityNotifications,
+  getUserById,
+  getUserBidRecords,
+});
 
-app.post("/api/auth/register", express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
-  const email = normalizeEmail(String(req.body?.email || ""));
-  const password = String(req.body?.password || "");
-  const displayName = sanitizeDisplayName(String(req.body?.displayName || ""));
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `register:${email}`)))) {
-    res.status(429).json({ error: "Too many signup attempts. Please wait and try again." });
-    return;
-  }
-  if (!email || !displayName || !password) {
-    res.status(400).json({ error: "Display name, email, and password are required." });
-    return;
-  }
-  if (!isStrongPassword(password)) {
-    res.status(400).json({ error: passwordRuleMessage });
-    return;
-  }
-  const existing = await getUserByEmail(email);
-  if (existing) {
-    res.status(409).json({ error: "An account with that email already exists." });
-    return;
-  }
-  const userId = randomUUID();
-  const createdAt = new Date().toISOString();
-  await handleSupabase(
-    await supabase.from("users").insert({
-      id: userId,
-      email,
-      password_hash: hashPassword(password),
-      display_name: displayName,
-      status: "pending_verification",
-      created_at: createdAt,
-      last_login_at: null
-    })
-  );
-  await handleSupabase(
-    await supabase.from("user_roles").insert({ user_id: userId, role_name: "Bidder", created_at: createdAt })
-  );
-  const verification = await createEmailVerificationToken(userId);
-  await queueNotification(
-    "ACCOUNT_VERIFICATION",
-    "Confirm your FMDQ Auctions account",
-    { email, displayName, verifyUrl: verification.verifyUrl },
-    email
-  );
-  await appendAudit(req, {
-    eventType: "ACCOUNT_REGISTERED",
-    entityType: "system",
-    entityId: userId,
-    actor: displayName,
-    actorType: "user",
-    details: { email, status: "pending_verification" }
-  });
-  res.status(201).json({
-    registered: true,
-    verificationRequired: true,
-    email,
-    verificationUrl: process.env.NODE_ENV === "production" || notificationTransport === "smtp" ? undefined : verification.verifyUrl,
-    message: "Account created. Check your email to verify your account, then sign in."
-  });
-}));
+registerAdminRoutes({
+  app,
+  supabase,
+  asyncHandler,
+  requireAdminToken,
+  requireSuperAdminToken,
+  bulkImportUpload,
+  handleSupabase,
+  getAuthContext,
+  appendAudit,
+  parseAuditDetails,
+  redactSensitiveAuditDetails,
+  mapNotificationRowForAdmin,
+  getRecentAudits,
+  getNotificationQueue,
+  processNotificationQueue,
+  listUsersWithRoles,
+  getAuditActorRoleLookup,
+  getItems,
+  getReserveState,
+  getRoles,
+  getUserById,
+  getUserByIdWithPassword,
+  getUserByEmail,
+  getUserRoles,
+  ensureCanManageTargetUser,
+  queuePasswordReset,
+  createEmailVerificationToken,
+  queueNotification,
+  parseCsv,
+  getImportValue,
+  splitImportList,
+  normalizeEmail,
+  sanitizeDisplayName,
+  hashPassword,
+  randomUUID,
+  toCsv,
+});
 
-app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
-  const email = normalizeEmail(String(req.body?.email || ""));
-  const password = String(req.body?.password || "");
-  const auditActor = sanitizeDisplayName(email) || "unknown";
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `login:${email}`)))) {
-    res.status(429).json({ error: "Too many sign-in attempts. Please wait and try again." });
-    return;
-  }
-  const user = await getUserByEmail(email);
-  if (!user || !verifyPassword(password, user.password_hash || "")) {
-    await appendAudit(req, {
-      eventType: "LOGIN_FAILED",
-      entityType: "auth",
-      entityId: email || "unknown",
-      actor: auditActor,
-      actorType: "user",
-      details: { email, reason: "invalid_credentials" }
-    });
-    res.status(401).json({ error: "Invalid email or password." });
-    return;
-  }
-  if (user.status === "pending_verification") {
-    await appendAudit(req, {
-      eventType: "LOGIN_BLOCKED",
-      entityType: "auth",
-      entityId: user.id,
-      actor: user.display_name,
-      actorType: "user",
-      details: { email: user.email, reason: "pending_verification" }
-    });
-    res.status(403).json({ error: "Please verify your email before signing in." });
-    return;
-  }
-  if (user.status !== "active") {
-    await appendAudit(req, {
-      eventType: "LOGIN_BLOCKED",
-      entityType: "auth",
-      entityId: user.id,
-      actor: user.display_name,
-      actorType: "user",
-      details: { email: user.email, reason: `status_${user.status}` }
-    });
-    res.status(403).json({ error: "This account is not active." });
-    return;
-  }
-  const lastLoginAt = new Date().toISOString();
-  await handleSupabase(await supabase.from("users").update({ last_login_at: lastLoginAt }).eq("id", user.id));
-  const sessionRecord = await createUserSession(res, user.id);
-  const roles = await getUserRoles(user.id);
-  const role = normalizeRole(roles.map((row) => row.role_name));
-  await appendAudit(req, {
-    eventType: "LOGIN_SUCCEEDED",
-    entityType: "auth",
-    entityId: user.id,
-    actor: user.display_name,
-    actorType: "user",
-    details: { email: user.email, role }
-  });
-  res.json({
-    signedIn: true,
-    user: {
-      id: user.id,
-      email: user.email,
-      displayName: user.display_name,
-      status: user.status,
-      createdAt: user.created_at,
-      lastLoginAt,
-      role
-    },
-    csrfToken: buildCsrfToken(sessionRecord.sessionId)
-  });
-}));
-
-app.post("/api/auth/verify-email", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const token = String(req.body?.token || "").trim();
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `verify:${token.slice(0, 12)}`)))) {
-    res.status(429).json({ error: "Too many verification attempts. Please wait and try again." });
-    return;
-  }
-  if (!token) {
-    res.status(400).json({ error: "Verification token is required." });
-    return;
-  }
-  const row = await getEmailVerificationRow(token);
-  if (!row) {
-    res.status(404).json({ error: "Verification link is invalid or has already been used." });
-    return;
-  }
-  if (new Date(row.expires_at).getTime() <= Date.now()) {
-    await handleSupabase(await supabase.from("email_verification_tokens").delete().eq("token", token));
-    res.status(410).json({ error: "Verification link has expired. Please create your account again or request a new link." });
-    return;
-  }
-  const user = await getUserById(row.user_id);
-  if (!user) {
-    await handleSupabase(await supabase.from("email_verification_tokens").delete().eq("token", token));
-    res.status(404).json({ error: "Account not found for this verification link." });
-    return;
-  }
-  await handleSupabase(await supabase.from("users").update({ status: "active" }).eq("id", user.id));
-  await handleSupabase(await supabase.from("email_verification_tokens").delete().eq("user_id", user.id));
-  await queueNotification(
-    "ACCOUNT_VERIFIED",
-    "FMDQ Auctions account verified",
-    {
-      email: user.email,
-      displayName: user.display_name
-    },
-    user.email
-  );
-  await appendAudit(req, {
-    eventType: "ACCOUNT_VERIFIED",
-    entityType: "system",
-    entityId: user.id,
-    actor: user.display_name,
-    actorType: "user",
-    details: { email: user.email, status: "active" }
-  });
-  res.json({ verified: true, message: "Your account has been verified. You can now sign in." });
-}));
-
-app.post("/api/auth/request-password-reset", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const email = normalizeEmail(String(req.body?.email || ""));
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `reset-request:${email}`)))) {
-    res.status(429).json({ error: "Too many password reset requests. Please wait and try again." });
-    return;
-  }
-  if (!email) {
-    res.status(400).json({ error: "Email is required." });
-    return;
-  }
-  const user = await getUserByEmail(email);
-  if (user && user.status === "active") {
-    await queuePasswordReset(user, "self-service");
-    await appendAudit(req, {
-      eventType: "PASSWORD_RESET_REQUESTED",
-      entityType: "system",
-      entityId: user.id,
-      actor: user.display_name,
-      actorType: "user",
-      details: { email: user.email, channel: "email" }
-    });
-  }
-  res.json({
-    requested: true,
-    message: "If an active account exists for that email, a password reset link has been sent."
-  });
-}));
-
-app.post("/api/auth/reset-password", express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const token = String(req.body?.token || "").trim();
-  const password = String(req.body?.password || "");
-  if (!(await checkAuthRateLimit(req, getClientKey(req, `reset:${token.slice(0, 12)}`)))) {
-    res.status(429).json({ error: "Too many password reset attempts. Please wait and try again." });
-    return;
-  }
-  if (!token || !password) {
-    res.status(400).json({ error: "Token and new password are required." });
-    return;
-  }
-  if (!isStrongPassword(password)) {
-    res.status(400).json({ error: passwordRuleMessage });
-    return;
-  }
-  const payload = parseSignedToken<{ type: string; sub: string; exp: string; fp: string }>(token);
-  if (!payload || payload.type !== "password-reset") {
-    res.status(400).json({ error: "Password reset link is invalid." });
-    return;
-  }
-  if (new Date(payload.exp).getTime() <= Date.now()) {
-    res.status(410).json({ error: "Password reset link has expired." });
-    return;
-  }
-  const user = await getUserByIdWithPassword(payload.sub);
-  if (!user || user.status !== "active") {
-    res.status(404).json({ error: "Account not found for this reset link." });
-    return;
-  }
-  if (passwordHashFingerprint(user.password_hash || "") !== payload.fp) {
-    res.status(409).json({ error: "This reset link is no longer valid. Request a new one." });
-    return;
-  }
-  await handleSupabase(await supabase.from("users").update({ password_hash: hashPassword(password) }).eq("id", user.id));
-  await handleSupabase(await supabase.from("sessions").delete().eq("user_id", user.id));
-  await appendAudit(req, {
-    eventType: "PASSWORD_RESET_COMPLETED",
-    entityType: "system",
-    entityId: user.id,
-    actor: user.display_name,
-    actorType: "user",
-    details: { email: user.email }
-  });
-  res.json({ reset: true, message: "Password updated successfully. You can now sign in." });
-}));
-
-app.post("/api/auth/logout", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  const sessionId = parseCookies(req)[sessionCookieName];
-  if (auth.signedIn && auth.userId) {
-    await appendAudit(req, {
-      eventType: "LOGOUT_SUCCEEDED",
-      entityType: "auth",
-      entityId: auth.userId,
-      actor: auth.actor,
-      actorType: auth.actorType,
-      details: { currentSession: Boolean(sessionId) }
-    });
-  }
-  if (sessionId) {
-    await deleteSessionRow(sessionId).catch(() => undefined);
-  }
-  clearSessionCookie(res);
-  res.json({ ok: true });
-}));
-
-app.get("/api/me/profile", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const user = await getUserById(auth.userId);
-  if (!user) {
-    res.status(404).json({ error: "User not found." });
-    return;
-  }
-  const roles = await getUserRoles(user.id);
-  res.json({
-    id: user.id,
-    email: user.email,
-    displayName: user.display_name,
-    status: user.status,
-    createdAt: user.created_at,
-    lastLoginAt: user.last_login_at,
-    role: auth.role,
-    roles: roles.map((row) => normalizeDisplayRoleName(row.role_name))
-  });
-}));
-
-app.get("/api/me/sessions", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const currentSessionId = parseCookies(req)[sessionCookieName] || "";
-  const sessions = await getUserSessions(auth.userId);
-  res.json(sessions.map((session) => ({
-    id: session.id,
-    createdAt: session.created_at,
-    expiresAt: session.expires_at,
-    current: session.id === currentSessionId
-  })));
-}));
-
-app.delete("/api/me/sessions/:id", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const session = await getSessionRow(String(req.params.id || ""));
-  if (!session || session.user_id !== auth.userId) {
-    res.status(404).json({ error: "Session not found." });
-    return;
-  }
-  await deleteSessionRow(session.id);
-  const currentSessionId = parseCookies(req)[sessionCookieName] || "";
-  if (session.id === currentSessionId) {
-    clearSessionCookie(res);
-  }
-  await appendAudit(req, {
-    eventType: "SESSION_REVOKED",
-    entityType: "user",
-    entityId: auth.userId,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { revoked: 1 }
-  });
-  res.json({ revoked: true, message: "Session revoked." });
-}));
-
-app.delete("/api/me/sessions", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const currentSessionId = parseCookies(req)[sessionCookieName] || "";
-  const sessions = await getUserSessions(auth.userId);
-  const revocable = sessions.filter((session) => session.id !== currentSessionId);
-  for (const session of revocable) {
-    await deleteSessionRow(session.id);
-  }
-  await appendAudit(req, {
-    eventType: "SESSIONS_REVOKED",
-    entityType: "user",
-    entityId: auth.userId,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { count: revocable.length }
-  });
-  res.json({ revoked: true, count: revocable.length, message: `Revoked ${revocable.length} other session(s).` });
-}));
-
-app.get("/api/me/dashboard", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const bidRecords = await getUserBidRecords(auth.userId);
-  const sessions = await getUserSessions(auth.userId);
-  const closedItems = (await getItems(true)).filter((item) => new Date(item.endTime).getTime() < Date.now());
-  res.json({
-    summary: {
-      openBidCount: bidRecords.filter((record) => ["winning", "outbid", "active"].includes(record.status)).length,
-      wonAuctionCount: bidRecords.filter((record) => record.status === "won").length,
-      activeSessionCount: sessions.length,
-      totalBidCount: bidRecords.length,
-      reserveMetClosedCount: closedItems.filter((item) => getReserveState(item) === "reserve_met").length,
-      reserveNotMetClosedCount: closedItems.filter((item) => getReserveState(item) === "reserve_not_met").length
-    },
-    recentBidActivity: bidRecords.slice(0, 8)
-  });
-}));
-
-app.get("/api/me/bids", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn || !auth.userId) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  res.json(await getUserBidRecords(auth.userId));
-}));
-
-app.get("/uploads/images/:file", asyncHandler(async (req, res) => {
-  const rawFile = String(req.params.file || "");
-  if (imageAccessPolicy !== "public") {
-    const auth = await getAuthContext(req);
-    if (!auth.signedIn) {
-      res.status(401).json({ error: "Sign in required to access item images." });
-      return;
-    }
-    if (imageAccessPolicy === "bidder_visible") {
-      const publicUrl = `/uploads/images/${rawFile}`;
-      const row = handleSupabaseMaybe<ItemFileRow>(
-        await supabase.from("item_files").select("item_id,kind,name,url").eq("kind", "image").eq("url", publicUrl).maybeSingle(),
-        true
-      );
-      const item = row ? await getItemById(row.item_id, true) : null;
-      const itemVisible = item && !item.archivedAt;
-      if (!auth.adminAuthorized && (!itemVisible || !(auth.role === "Bidder" || auth.role === "ShopOwner"))) {
-        res.status(403).json({ error: "You do not have access to this image." });
-        return;
-      }
-    }
-  }
-  const localFileName = safeFileName(rawFile);
-  const localPath = path.join(imagesDir, localFileName);
-  if (localFileName && await fileExists(localPath)) {
-    res.sendFile(localPath);
-    return;
-  }
-  const storagePath = decodeStoredFilePath(rawFile);
-  if (!storagePath) {
-    res.status(404).json({ error: "Image not found." });
-    return;
-  }
-  const result = await supabase.storage.from(imageBucket).download(storagePath);
-  if (result.error || !result.data) {
-    res.status(404).json({ error: "Image not found." });
-    return;
-  }
-  const buffer = Buffer.from(await result.data.arrayBuffer());
-  res.setHeader("Content-Type", result.data.type || guessContentType(storagePath, "image/jpeg"));
-  res.setHeader("Cache-Control", "private, max-age=300");
-  res.send(buffer);
-}));
-
-app.get("/uploads/documents/:file", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn) {
-    res.status(401).json({ error: "Sign in required to access documents." });
-    return;
-  }
-  const rawFile = String(req.params.file || "");
-  if (!rawFile) {
-    res.status(404).json({ error: "Document not found." });
-    return;
-  }
-  const publicUrl = `/uploads/documents/${rawFile}`;
-  const row = handleSupabaseMaybe<ItemFileRow>(
-    await supabase.from("item_files").select("item_id,kind,name,url").eq("kind", "document").eq("url", publicUrl).maybeSingle(),
-    true
-  );
-  if (!row) {
-    res.status(404).json({ error: "Document not found." });
-    return;
-  }
-  const item = await getItemById(row.item_id, true);
-  const parsedDocument = parseDocumentNameWithVisibility(row.name);
-  if (!item || !canAccessItemDocument(auth, item, parsedDocument.visibility)) {
-    res.status(403).json({ error: "You do not have access to this document." });
-    return;
-  }
-  const localFileName = safeFileName(rawFile);
-  const localPath = path.join(docsDir, localFileName);
-  if (localFileName && await fileExists(localPath)) {
-    res.sendFile(localPath);
-    return;
-  }
-  const storagePath = decodeStoredFilePath(rawFile);
-  if (!storagePath) {
-    res.status(404).json({ error: "Document file not found." });
-    return;
-  }
-  const result = await supabase.storage.from(documentBucket).download(storagePath);
-  if (result.error || !result.data) {
-    res.status(404).json({ error: "Document file not found." });
-    return;
-  }
-  const buffer = Buffer.from(await result.data.arrayBuffer());
-  res.setHeader("Content-Type", result.data.type || guessContentType(parsedDocument.displayName, "application/octet-stream"));
-  res.setHeader("Content-Disposition", `inline; filename="${safeFileName(parsedDocument.displayName)}"`);
-  res.send(buffer);
-}));
-
-app.get("/api/items", asyncHandler(async (req, res) => {
-  const includeArchived = String(req.query.includeArchived || "") === "1";
-  const auth = await getAuthContext(req);
-  if (includeArchived && !auth.adminAuthorized) {
-    res.status(403).json({ error: "Admin role required." });
-    return;
-  }
-  const items = await getItems(includeArchived);
-  res.json(items.map((item) => sanitizeItemForAuth(item, auth)));
-}));
-
-app.get("/api/items/:id", asyncHandler(async (req, res) => {
-  const includeArchived = String(req.query.includeArchived || "") === "1";
-  const auth = await getAuthContext(req);
-  if (includeArchived && !auth.adminAuthorized) {
-    res.status(403).json({ error: "Admin role required." });
-    return;
-  }
-  const item = await getItemById(req.params.id, includeArchived);
-  if (!item) {
-    res.status(404).json({ error: "Item not found" });
-    return;
-  }
-  res.json(sanitizeItemForAuth(item, auth));
-}));
-
-app.get("/api/categories", asyncHandler(async (req, res) => {
-  res.json(await getCategories());
-}));
-
-app.get("/api/landing-stats", asyncHandler(async (req, res) => {
-  res.json(await getLandingStats());
-}));
-
-app.post("/api/categories", express.json({ limit: "128kb" }), requireAdminToken, asyncHandler(async (req, res) => {
-  const validation = validateCategoryName(String(req.body?.name || ""));
-  if (!validation.ok) {
-    res.status(400).json({ error: validation.error });
-    return;
-  }
-  const before = new Set(await getCategories());
-  await handleSupabase(await supabase.from("categories").upsert({ name: validation.value }, { onConflict: "name" }));
-  const created = !before.has(validation.value);
-  const auth = await getAuthContext(req);
-  await appendAudit(req, {
-    eventType: created ? "CATEGORY_CREATED" : "CATEGORY_RECONFIRMED",
-    entityType: "system",
-    entityId: validation.value,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { category: validation.value, created }
-  });
-  res.status(created ? 201 : 200).json({ created });
-}));
-
-app.delete("/api/categories/:name", requireAdminToken, asyncHandler(async (req, res) => {
-  const validation = validateCategoryName(req.params.name);
-  if (!validation.ok) {
-    res.status(400).json({ error: validation.error });
-    return;
-  }
-  const rows = handleSupabase(await supabase.from("items").select("id").eq("category", validation.value).limit(1)) as Array<{ id: string }>;
-  if (rows.length > 0) {
-    res.status(409).json({ error: "Category is assigned to one or more items." });
-    return;
-  }
-  const existing = new Set(await getCategories());
-  if (!existing.has(validation.value)) {
-    res.status(404).json({ error: "Category not found." });
-    return;
-  }
-  await handleSupabase(await supabase.from("categories").delete().eq("name", validation.value));
-  const auth = await getAuthContext(req);
-  await appendAudit(req, {
-    eventType: "CATEGORY_DELETED",
-    entityType: "system",
-    entityId: validation.value,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { category: validation.value }
-  });
-  res.json({ ok: true });
-}));
-
-app.get("/api/exports/items.csv", requireItemOperationsViewerToken, asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  const items = (await getItems(auth.adminAuthorized)).map((item) => sanitizeItemForAuth(item, auth));
-  const rows = items.map((item) => ({
-    winner: (() => {
-      if (new Date(item.endTime).getTime() > Date.now() || item.currentBid <= 0) return "";
-      const winningBid = [...item.bids]
-        .sort((a, b) => new Date(b.time ?? b.createdAt ?? 0).getTime() - new Date(a.time ?? a.createdAt ?? 0).getTime())
-        .find((bid) => bid.amount === item.currentBid);
-      return winningBid?.bidder || "";
-    })(),
-    id: item.id,
-    title: item.title,
-    category: item.category,
-    lot: item.lot,
-    sku: item.sku,
-    condition: item.condition,
-    location: item.location,
-    startBid: item.startBid,
-    reserve: auth.role === "Admin" || auth.role === "SuperAdmin" ? item.reserve : "",
-    increment: item.increment,
-    currentBid: item.currentBid,
-    reserveOutcome: getReserveState(item),
-    startTime: item.startTime,
-    endTime: item.endTime,
-    bidCount: item.bids.length
-  }));
-  await appendAudit(req, {
-    eventType: "EXPORT_ITEMS",
-    entityType: "export",
-    entityId: "items.csv",
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { rowCount: rows.length }
-  });
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", 'attachment; filename="items.csv"');
-  res.send(toCsv(rows));
-}));
-
-app.get("/api/exports/audits.csv", requireAdminToken, asyncHandler(async (req, res) => {
-  const rows = handleSupabase(
-    await supabase
-      .from("audits")
-      .select("id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at")
-      .order("created_at", { ascending: false })
-  ) as AuditRow[];
-  const formatted = rows.map((row) => ({
-    id: row.id,
-    eventType: row.event_type,
-    entityType: row.entity_type,
-    entityId: row.entity_id,
-    actor: row.actor,
-    actorType: row.actor_type,
-    requestId: row.request_id,
-    details: JSON.stringify(redactSensitiveAuditDetails(parseAuditDetails(row.details_json))),
-    createdAt: row.created_at
-  }));
-  const auth = await getAuthContext(req);
-  await appendAudit(req, {
-    eventType: "EXPORT_AUDITS",
-    entityType: "export",
-    entityId: "audits.csv",
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { rowCount: formatted.length }
-  });
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", 'attachment; filename="audits.csv"');
-  res.send(toCsv(formatted));
-}));
-
-app.get("/api/me/wins", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn) {
-    res.status(401).json({ error: "Sign in required." });
-    return;
-  }
-  const bidRecords = await getUserBidRecords(auth.userId!);
-  const wins = bidRecords
-    .filter((row) => row.status === "won")
-    .map((row) => ({
-      id: row.itemId,
-      title: row.title,
-      category: row.category,
-      currentBid: row.currentBid,
-      endTime: row.endTime
-    }));
-  res.json(wins);
-}));
-
-app.get("/api/admin/operations", requireAdminToken, asyncHandler(async (req, res) => {
-  const items = await getItems(true);
-  const pendingNotifications = handleSupabase(await supabase.from("notification_queue").select("id").eq("status", "pending")) as Array<{ id: string }>;
-  const audits = handleSupabase(await supabase.from("audits").select("id")) as Array<{ id: string }>;
-  const wins = handleSupabase(await supabase.from("audits").select("id").eq("event_type", "BID_PLACED")) as Array<{ id: string }>;
-  const users = await listUsersWithRoles();
-  const summary = {
-    totalItems: items.length,
-    liveCount: items.filter((item) => new Date(item.startTime).getTime() <= Date.now() && new Date(item.endTime).getTime() >= Date.now() && !item.archivedAt).length,
-    closedCount: items.filter((item) => new Date(item.endTime).getTime() < Date.now() && !item.archivedAt).length,
-    archivedCount: items.filter((item) => Boolean(item.archivedAt)).length,
-    pendingNotifications: pendingNotifications.length,
-    auditCount: audits.length,
-    wins: wins.length,
-    totalUsers: users.length,
-    activeUsers: users.filter((user) => user.status === "active").length,
-    disabledUsers: users.filter((user) => user.status === "disabled").length,
-    adminUsers: users.filter((user) => user.roles.includes("Admin")).length,
-    superAdminUsers: users.filter((user) => user.roles.includes("SuperAdmin")).length
-  };
-  res.json({
-    summary,
-    metrics: {
-      totalItems: summary.totalItems,
-      liveItems: summary.liveCount,
-      closedItems: summary.closedCount,
-      archivedItems: summary.archivedCount,
-      pendingNotifications: summary.pendingNotifications,
-      auditEvents: summary.auditCount,
-      wins: summary.wins
-    },
-    recentAudits: await getRecentAudits(20),
-    notificationQueue: await getNotificationQueue(20)
-  });
-}));
-
-app.get("/api/admin/audits", requireAdminToken, asyncHandler(async (req, res) => {
-  const itemId = String(req.query.itemId || "").trim();
-  const from = String(req.query.from || "").trim();
-  const to = String(req.query.to || "").trim();
-  const eventType = String(req.query.eventType || "").trim();
-  const actor = String(req.query.actor || "").trim();
-  const entityType = String(req.query.entityType || "").trim();
-  const includeSecurity = String(req.query.includeSecurity || "") === "1";
-  const page = Math.max(1, Number(req.query.page || 1) || 1);
-  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
-  const offset = (page - 1) * pageSize;
-  let request = supabase
-    .from("audits")
-    .select("id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at", { count: "exact" })
-    .order("created_at", { ascending: false })
-    .range(offset, offset + pageSize - 1);
-  if (itemId) request = request.eq("entity_id", itemId);
-  if (from) request = request.gte("created_at", from);
-  if (to) request = request.lte("created_at", to);
-  if (eventType) request = request.eq("event_type", eventType);
-  if (actor) request = request.ilike("actor", `%${actor}%`);
-  if (entityType) request = request.eq("entity_type", entityType);
-  const result = await request;
-  const rows = handleSupabase(result) as AuditRow[];
-  const filteredRows = includeSecurity ? rows : rows.filter((row) => !securityTelemetryEvents.has(row.event_type));
-  const actorRoleLookup = await getAuditActorRoleLookup();
-  res.json({
-    items: filteredRows.map((row) => ({
-      ...row,
-      details_json: redactSensitiveAuditDetails(parseAuditDetails(row.details_json)),
-      actor_role:
-        (typeof row.details_json === "object" &&
-        row.details_json !== null &&
-        "actorRole" in row.details_json &&
-        typeof row.details_json.actorRole === "string"
-          ? row.details_json.actorRole
-          : null) ??
-        actorRoleLookup.get(row.actor) ??
-        null,
-    })),
-    total: result.count ?? filteredRows.length,
-    page,
-    pageSize,
-  });
-}));
-
-app.get("/api/admin/notifications", requireAdminToken, asyncHandler(async (req, res) => {
-  const page = Math.max(1, Number(req.query.page || 1) || 1);
-  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize || 20) || 20));
-  const offset = (page - 1) * pageSize;
-  const rowsResult = await supabase
-    .from("notification_queue")
-    .select("id,channel,event_type,recipient,subject,status,payload_json,created_at,processed_at,next_attempt_at,attempt_count,claim_token,claim_expires_at,error_message", { count: "exact" })
-    .order("created_at", { ascending: false })
-    .range(offset, offset + pageSize - 1);
-  const rows = handleSupabase(rowsResult) as NotificationRow[];
-  res.json({
-    items: rows.map(mapNotificationRowForAdmin),
-    total: rowsResult.count ?? rows.length,
-    page,
-    pageSize,
-  });
-}));
-
-app.post("/api/admin/notifications/process", requireAdminToken, asyncHandler(async (req, res) => {
-  const processed = await processNotificationQueue();
-  res.json({ processed, transport: notificationTransport });
-}));
-
-app.get("/api/admin/users", requireAdminToken, asyncHandler(async (req, res) => {
-  res.json(await listUsersWithRoles());
-}));
-
-app.get("/api/admin/roles", requireAdminToken, asyncHandler(async (req, res) => {
-  res.json(await getRoles());
-}));
-
-app.post("/api/admin/users/:id/roles", requireSuperAdminToken, express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const userId = String(req.params.id || "").trim();
-  const roleName = String(req.body?.roleName || "").trim();
-  if (!userId || !roleName) {
-    res.status(400).json({ error: "User ID and role name are required." });
-    return;
-  }
-  const availableRoles = await getRoles();
-  if (!availableRoles.includes(roleName)) {
-    res.status(400).json({ error: "That role does not exist." });
-    return;
-  }
-  const user = await getUserById(userId);
-  if (!user) {
-    res.status(404).json({ error: "User not found." });
-    return;
-  }
-  await handleSupabase(await supabase.from("user_roles").upsert({ user_id: user.id, role_name: roleName, created_at: new Date().toISOString() }, { onConflict: "user_id,role_name" }));
-  const auth = await getAuthContext(req);
-  await appendAudit(req, {
-    eventType: "USER_ROLE_ASSIGNED",
-    entityType: "user",
-    entityId: user.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { email: user.email, role: roleName }
-  });
-  res.json({ updated: true, message: `${roleName} assigned to ${user.display_name}.` });
-}));
-
-app.delete("/api/admin/users/:id/roles/:roleName", requireSuperAdminToken, asyncHandler(async (req, res) => {
-  const userId = String(req.params.id || "").trim();
-  const roleName = String(req.params.roleName || "").trim();
-  if (!userId || !roleName) {
-    res.status(400).json({ error: "User ID and role name are required." });
-    return;
-  }
-  const user = await getUserById(userId);
-  if (!user) {
-    res.status(404).json({ error: "User not found." });
-    return;
-  }
-  if ((await getUserRoles(user.id)).length <= 1) {
-    res.status(400).json({ error: "Every user must retain at least one role." });
-    return;
-  }
-  await handleSupabase(await supabase.from("user_roles").delete().eq("user_id", user.id).eq("role_name", roleName));
-  const auth = await getAuthContext(req);
-  await appendAudit(req, {
-    eventType: "USER_ROLE_REMOVED",
-    entityType: "user",
-    entityId: user.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { email: user.email, role: roleName }
-  });
-  res.json({ updated: true, message: `${roleName} removed from ${user.display_name}.` });
-}));
-
-app.post("/api/admin/users/:id/disable", requireAdminToken, express.json({ limit: "64kb" }), asyncHandler(async (req, res) => {
-  const userId = String(req.params.id || "").trim();
-  const auth = await getAuthContext(req);
-  const reason = sanitizeDisplayName(String(req.body?.reason || "")) || "No reason provided";
-  if (!userId) {
-    res.status(400).json({ error: "User ID is required." });
-    return;
-  }
-  if (auth.userId && auth.userId === userId) {
-    res.status(400).json({ error: "You cannot disable your own account." });
-    return;
-  }
-  const user = await getUserByIdWithPassword(userId);
-  if (!user) {
-    res.status(404).json({ error: "User not found." });
-    return;
-  }
-  const targetRoles = (await getUserRoles(user.id)).map((row) => row.role_name);
-  const targetCheck = ensureCanManageTargetUser(auth, targetRoles);
-  if (!targetCheck.ok) {
-    res.status(403).json({ error: targetCheck.error });
-    return;
-  }
-  if (user.status === "disabled") {
-    res.json({ updated: true, message: `${user.display_name} is already disabled.` });
-    return;
-  }
-  await handleSupabase(
-    await supabase
-      .from("users")
-      .update({ status: "disabled" })
-      .eq("id", user.id)
-  );
-  await handleSupabase(await supabase.from("sessions").delete().eq("user_id", user.id));
-  await appendAudit(req, {
-    eventType: "USER_DISABLED",
-    entityType: "user",
-    entityId: user.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { email: user.email, target: user.display_name, reason }
-  });
-  res.json({ updated: true, message: `${user.display_name} has been disabled and signed out everywhere.` });
-}));
-
-app.post("/api/admin/users/:id/enable", requireAdminToken, asyncHandler(async (req, res) => {
-  const userId = String(req.params.id || "").trim();
-  const auth = await getAuthContext(req);
-  if (!userId) {
-    res.status(400).json({ error: "User ID is required." });
-    return;
-  }
-  const user = await getUserByIdWithPassword(userId);
-  if (!user) {
-    res.status(404).json({ error: "User not found." });
-    return;
-  }
-  const targetRoles = (await getUserRoles(user.id)).map((row) => row.role_name);
-  const targetCheck = ensureCanManageTargetUser(auth, targetRoles);
-  if (!targetCheck.ok) {
-    res.status(403).json({ error: targetCheck.error });
-    return;
-  }
-  if (user.status === "active") {
-    res.json({ updated: true, message: `${user.display_name} is already active.` });
-    return;
-  }
-  await handleSupabase(
-    await supabase
-      .from("users")
-      .update({ status: "active" })
-      .eq("id", user.id)
-  );
-  await appendAudit(req, {
-    eventType: "USER_ENABLED",
-    entityType: "user",
-    entityId: user.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { email: user.email, target: user.display_name }
-  });
-  res.json({ updated: true, message: `${user.display_name} has been re-enabled.` });
-}));
-
-app.post("/api/admin/users/:id/password-reset", requireAdminToken, asyncHandler(async (req, res) => {
-  const user = await getUserByIdWithPassword(String(req.params.id || "").trim());
-  if (!user || user.status !== "active") {
-    res.status(404).json({ error: "Active user not found." });
-    return;
-  }
-  const auth = await getAuthContext(req);
-  const targetRoles = (await getUserRoles(user.id)).map((row) => row.role_name);
-  const targetCheck = ensureCanManageTargetUser(auth, targetRoles);
-  if (!targetCheck.ok) {
-    res.status(403).json({ error: targetCheck.error });
-    return;
-  }
-  await queuePasswordReset(user, auth.actor);
-  await appendAudit(req, {
-    eventType: "PASSWORD_RESET_FORCED",
-    entityType: "system",
-    entityId: user.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { email: user.email, target: user.display_name }
-  });
-  res.json({ queued: true, count: 1, message: `Password reset sent to ${user.email}.` });
-}));
-
-app.post("/api/admin/users/password-resets", requireAdminToken, express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
-  const scope = String(req.body?.scope || "selected");
-  const role = String(req.body?.role || "").trim();
-  const selectedIds = Array.isArray(req.body?.userIds) ? req.body.userIds.map((value: unknown) => String(value).trim()).filter(Boolean) : [];
-  const auth = await getAuthContext(req);
-  const users = (await listUsersWithRoles()).filter((user) => user.status === "active");
-  const targets = users.filter((user) => {
-    if (scope === "all") return true;
-    if (scope === "role") return role ? user.roles.includes(role) : false;
-    return selectedIds.includes(user.id);
-  }).filter((user) => auth.role === "SuperAdmin" || !user.roles.includes("SuperAdmin"));
-  if (!targets.length) {
-    res.status(400).json({ error: "No users matched the selected bulk reset criteria." });
-    return;
-  }
-  for (const target of targets) {
-    await queuePasswordReset({
-      id: target.id,
-      email: target.email,
-      display_name: target.displayName,
-      status: target.status,
-      created_at: target.createdAt,
-      last_login_at: target.lastLoginAt,
-      password_hash: (await getUserByIdWithPassword(target.id))?.password_hash
-    }, auth.actor);
-  }
-  await appendAudit(req, {
-    eventType: "PASSWORD_RESET_BULK_FORCED",
-    entityType: "system",
-    entityId: scope === "role" ? role || "bulk" : scope,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { scope, count: targets.length, role: role || "n/a" }
-  });
-  res.json({ queued: true, count: targets.length, message: `Queued password resets for ${targets.length} user(s).` });
-}));
-
-app.post("/api/admin/users/bulk-import", requireSuperAdminToken, bulkImportUpload.single("csv"), asyncHandler(async (req, res) => {
-  const csvFile = req.file;
-  if (!csvFile) {
-    res.status(400).json({ error: "Upload a CSV file first." });
-    return;
-  }
-
-  const auth = await getAuthContext(req);
-  const report: {
-    created: number;
-    skipped: number;
-    failed: number;
-    items: Array<{ row: number; status: "created" | "skipped" | "failed"; email: string; message: string }>;
-  } = { created: 0, skipped: 0, failed: 0, items: [] };
-
-  try {
-    const rows = parseCsv(await fs.promises.readFile(csvFile.path, "utf8"));
-    if (!rows.length) {
-      res.status(400).json({ error: "The uploaded CSV is empty." });
-      return;
-    }
-    const availableRoles = await getRoles();
-    for (const [index, row] of rows.entries()) {
-      const email = normalizeEmail(getImportValue(row, ["email"]));
-      const displayName = sanitizeDisplayName(getImportValue(row, ["display_name", "displayName", "full_name", "name"]));
-      const roles = splitImportList(getImportValue(row, ["roles", "role"])).filter((role) => availableRoles.includes(role));
-      const status = getImportValue(row, ["status"]).trim() || "pending_verification";
-      if (!email || !displayName) {
-        report.failed += 1;
-        report.items.push({ row: index + 2, status: "failed", email: email || `row-${index + 2}`, message: "Email and display name are required." });
-        continue;
-      }
-      if (await getUserByEmail(email)) {
-        report.skipped += 1;
-        report.items.push({ row: index + 2, status: "skipped", email, message: "Skipped because a user with that email already exists." });
-        continue;
-      }
-      const userId = randomUUID();
-      const createdAt = new Date().toISOString();
-      const assignedRoles = roles.length ? roles : ["Bidder"];
-      await handleSupabase(await supabase.from("users").insert({
-        id: userId,
-        email,
-        password_hash: hashPassword(randomUUID()),
-        display_name: displayName,
-        status: status === "active" || status === "disabled" ? status : "pending_verification",
-        created_at: createdAt,
-        last_login_at: null
-      }));
-      await handleSupabase(await supabase.from("user_roles").insert(
-        assignedRoles.map((roleName) => ({
-          user_id: userId,
-          role_name: roleName,
-          created_at: createdAt
-        }))
-      ));
-      if (status === "active") {
-        const user = await getUserByEmail(email);
-        if (user) {
-          await queuePasswordReset(user, auth.actor);
-        }
-      } else {
-        const verification = await createEmailVerificationToken(userId);
-        await queueNotification(
-          "ACCOUNT_VERIFICATION",
-          "Confirm your FMDQ Auctions account",
-          { email, displayName, verifyUrl: verification.verifyUrl },
-          email
-        );
-      }
-      report.created += 1;
-      report.items.push({ row: index + 2, status: "created", email, message: `Created with roles: ${assignedRoles.join(", ")}.` });
-    }
-    await appendAudit(req, {
-      eventType: "USER_BULK_IMPORTED",
-      entityType: "system",
-      entityId: "user-bulk-import",
-      actor: auth.actor,
-      actorType: auth.actorType,
-      details: { created: report.created, skipped: report.skipped, failed: report.failed }
-    });
-    res.json(report);
-  } finally {
-    await removeFileIfExists(csvFile.path);
-  }
-}));
-
-app.post("/api/items/bulk-import", requireAdminToken, bulkImportUpload.fields([{ name: "csv", maxCount: 1 }, { name: "bundle", maxCount: 1 }]), asyncHandler(async (req, res) => {
-  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
-  const csvFile = files?.csv?.[0];
-  const zipFile = files?.bundle?.[0];
-  if (!csvFile) {
-    res.status(400).json({ error: "Upload a CSV file first." });
-    return;
-  }
-
-  const auth = await getAuthContext(req);
-  const tempExtractDir = await fs.promises.mkdtemp(path.join(importsDir, "bulk-"));
-  const createdIds: string[] = [];
-  const pendingRows: Array<{
-    row: number;
-    title: string;
-    value: Extract<ReturnType<typeof validateNewItem>, { ok: true }>["value"];
-    imageNames: string[];
-    documentEntries: Array<{ name: string; visibility: DocumentVisibility }>;
-  }> = [];
-  const report: {
-    created: number;
-    skipped: number;
-    failed: number;
-    items: Array<{ row: number; status: "created" | "skipped" | "failed"; title: string; itemId?: string; message: string }>;
-  } = {
-    created: 0,
-    skipped: 0,
-    failed: 0,
-    items: []
-  };
-
-  try {
-    const csvRows = parseCsv(await fs.promises.readFile(csvFile.path, "utf8"));
-    if (!csvRows.length) {
-      res.status(400).json({ error: "The uploaded CSV is empty." });
-      return;
-    }
-
-    let extractedFiles = new Map<string, string>();
-    if (zipFile) {
-      await inspectImportArchive(zipFile.path);
-      extractedFiles = await extractImportArchive(zipFile.path, tempExtractDir);
-    }
-    const seenLots = new Set<string>();
-    const seenSkus = new Set<string>();
-
-    for (const [index, row] of csvRows.entries()) {
-      const title = getImportValue(row, ["title", "item_title"]);
-      try {
-        const payload = {
-          title,
-          category: getImportValue(row, ["category"]),
-          lot: getImportValue(row, ["lot", "lot_number"]),
-          sku: getImportValue(row, ["sku", "asset_code", "sku_asset_code"]),
-          condition: getImportValue(row, ["condition"]),
-          location: getImportValue(row, ["location"]),
-          startBid: getImportValue(row, ["start_bid", "starting_bid"]),
-          reserve: getImportValue(row, ["reserve", "reserve_price"]),
-          increment: getImportValue(row, ["increment", "bid_increment"]),
-          startTime: getImportValue(row, ["start_time", "auction_start", "start"]),
-          endTime: getImportValue(row, ["end_time", "auction_end", "end"]),
-          description: getImportValue(row, ["description", "item_description"])
-        };
-        const validation = validateNewItem(payload);
-        if (!validation.ok) {
-          report.failed += 1;
-          report.items.push({ row: index + 2, status: "failed", title: title || `Row ${index + 2}`, message: validation.error });
-          continue;
-        }
-        if (seenLots.has(validation.value.lot) || seenSkus.has(validation.value.sku)) {
-          report.failed += 1;
-          report.items.push({
-            row: index + 2,
-            status: "failed",
-            title: validation.value.title,
-            message: "Duplicate lot or SKU detected within the uploaded CSV."
-          });
-          continue;
-        }
-        seenLots.add(validation.value.lot);
-        seenSkus.add(validation.value.sku);
-
-        const duplicate = await findExistingItemByLotOrSku(validation.value.lot, validation.value.sku);
-        if (duplicate) {
-          report.skipped += 1;
-          report.items.push({ row: index + 2, status: "skipped", title: validation.value.title, itemId: duplicate.id, message: `Skipped because lot or SKU already exists on ${duplicate.title}.` });
-          continue;
-        }
-
-        const normalizedRow = Object.entries(row).reduce<Record<string, string>>((acc, [key, value]) => {
-          acc[normalizeImportKey(key)] = value;
-          return acc;
-        }, {});
-        const imageNames = Object.entries(normalizedRow)
-          .filter(([key, value]) => key.startsWith("image") && value.trim())
-          .flatMap(([, value]) => splitImportList(value));
-        const documentEntries = Object.entries(normalizedRow)
-          .filter(([key, value]) => (key.startsWith("document") || key.startsWith("doc")) && value.trim())
-          .flatMap(([key, value]) => splitImportList(value).map((name) => ({
-            key,
-            name,
-            visibility: normalizeDocumentVisibility(
-              normalizedRow[`${key}_visibility`] || normalizedRow.document_visibility || normalizedRow.doc_visibility
-            )
-          })));
-        for (const name of imageNames) {
-          if (!extractedFiles.get(name.toLowerCase())) {
-            throw new Error(`Image file "${name}" was not found in the ZIP.`);
-          }
-        }
-        for (const entry of documentEntries) {
-          if (!extractedFiles.get(entry.name.toLowerCase())) {
-            throw new Error(`Document file "${entry.name}" was not found in the ZIP.`);
-          }
-        }
-        pendingRows.push({
-          row: index + 2,
-          title: validation.value.title,
-          value: validation.value,
-          imageNames,
-          documentEntries: documentEntries.map((entry) => ({ name: entry.name, visibility: entry.visibility }))
-        });
-      } catch (error) {
-        report.failed += 1;
-        report.items.push({
-          row: index + 2,
-          status: "failed",
-          title: title || `Row ${index + 2}`,
-          message: error instanceof Error ? error.message : "Import failed."
-        });
-      }
-    }
-
-    if (report.failed > 0) {
-      res.status(400).json({
-        ...report,
-        message: "Bulk import validation failed. No items were created."
-      });
-      return;
-    }
-
-    try {
-      for (const row of pendingRows) {
-        const imageFiles = await Promise.all(row.imageNames.map(async (name) => {
-          const sourcePath = extractedFiles.get(name.toLowerCase());
-          if (!sourcePath) throw new Error(`Image file "${name}" was not found in the ZIP.`);
-          return copyImportedFile(sourcePath, "image");
-        }));
-        const documentFiles = await Promise.all(row.documentEntries.map(async (entry) => {
-          const sourcePath = extractedFiles.get(entry.name.toLowerCase());
-          if (!sourcePath) throw new Error(`Document file "${entry.name}" was not found in the ZIP.`);
-          return copyImportedFile(sourcePath, "document", entry.visibility);
-        }));
-
-        try {
-          const itemId = await createItemRecord(req, row.value, auth, { images: imageFiles, documents: documentFiles });
-          createdIds.push(itemId);
-          report.created += 1;
-          report.items.push({ row: row.row, status: "created", title: row.title, itemId, message: "Imported successfully." });
-        } catch (error) {
-          await cleanupManagedFiles([...imageFiles, ...documentFiles]);
-          throw error;
-        }
-      }
-    } catch (error) {
-      for (const itemId of createdIds.reverse()) {
-        await rollbackCreatedItem(itemId).catch(() => undefined);
-      }
-      res.status(500).json({
-        ...report,
-        error: error instanceof Error ? error.message : "Bulk import failed.",
-        message: "Bulk import failed during commit. Created items were rolled back."
-      });
-      return;
-    }
-
-    await appendAudit(req, {
-      eventType: "ITEM_BULK_IMPORTED",
-      entityType: "system",
-      entityId: "bulk-import",
-      actor: auth.actor,
-      actorType: auth.actorType,
-      details: { created: report.created, skipped: report.skipped, failed: report.failed }
-    });
-    res.json(report);
-  } finally {
-    await removeFileIfExists(csvFile.path);
-    if (zipFile) await removeFileIfExists(zipFile.path);
-    await fs.promises.rm(tempExtractDir, { recursive: true, force: true });
-  }
-}));
-
-app.post("/api/items", requireAdminToken, upload.fields([{ name: "images", maxCount: 8 }, { name: "documents", maxCount: 8 }]), asyncHandler(async (req, res) => {
-  const validation = validateNewItem(req.body as Record<string, string>);
-  if (!validation.ok) {
-    res.status(400).json({ error: validation.error });
-    return;
-  }
-  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
-  const images = files?.images || [];
-  const documents = files?.documents || [];
-  const auth = await getAuthContext(req);
-  const documentVisibility = normalizeDocumentVisibility(String(req.body.documentVisibility || "admin_only"));
-  const preparedImages = await Promise.all(images.map((image) => prepareUploadedMulterFile(image, "image")));
-  const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document", documentVisibility)));
-  const itemId = await createItemRecord(req, validation.value, auth, {
-    images: preparedImages,
-    documents: preparedDocuments
-  });
-  res.status(201).json(await getItemById(itemId, true));
-}));
-
-app.patch("/api/items/:id", requireAdminToken, upload.fields([{ name: "images", maxCount: 8 }, { name: "documents", maxCount: 8 }]), asyncHandler(async (req, res) => {
-  const existing = await getItemById(req.params.id, true);
-  if (!existing) {
-    res.status(404).json({ error: "Item not found." });
-    return;
-  }
-  const validation = validateNewItem(req.body as Record<string, string>);
-  if (!validation.ok) {
-    res.status(400).json({ error: validation.error });
-    return;
-  }
-  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
-  const images = files?.images || [];
-  const documents = files?.documents || [];
-  const auth = await getAuthContext(req);
-  const documentVisibility = normalizeDocumentVisibility(String(req.body.documentVisibility || "admin_only"));
-  const preparedImages = await Promise.all(images.map((image) => prepareUploadedMulterFile(image, "image")));
-  const preparedDocuments = await Promise.all(documents.map((document) => prepareUploadedMulterFile(document, "document", documentVisibility)));
-
-  await handleSupabase(await supabase.from("categories").upsert({ name: validation.value.category }, { onConflict: "name" }));
-  await handleSupabase(
-    await supabase.from("items").update({
-      title: validation.value.title,
-      category: validation.value.category,
-      lot: validation.value.lot,
-      sku: validation.value.sku,
-      condition: validation.value.condition,
-      location: validation.value.location,
-      start_bid: validation.value.startBid,
-      reserve: validation.value.reserve,
-      increment_amount: validation.value.increment,
-      start_time: validation.value.startTime,
-      end_time: validation.value.endTime,
-      description: validation.value.description
-    }).eq("id", existing.id)
-  );
-  if (images.length) {
-    await handleSupabase(await supabase.from("item_files").insert(
-      preparedImages.map((image) => ({
-        id: randomUUID(),
-        item_id: existing.id,
-        kind: "image",
-        name: image.name,
-        url: image.url
-      }))
-    ));
-  }
-  if (documents.length) {
-    await handleSupabase(await supabase.from("item_files").insert(
-      preparedDocuments.map((document) => ({
-        id: randomUUID(),
-        item_id: existing.id,
-        kind: "document",
-        name: document.name,
-        url: document.url
-      }))
-    ));
-  }
-  await appendAudit(req, {
-    eventType: "ITEM_UPDATED",
-    entityType: "item",
-    entityId: existing.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { title: validation.value.title, category: validation.value.category }
-  });
-  await queueNotification("ITEM_UPDATED", `Auction item updated: ${validation.value.title}`, { itemId: existing.id, title: validation.value.title });
-  res.json(await getItemById(existing.id, true));
-}));
-
-app.delete("/api/items/:id", requireAdminToken, asyncHandler(async (req, res) => {
-  const existing = await getItemById(req.params.id, true);
-  if (!existing) {
-    res.status(404).json({ error: "Item not found." });
-    return;
-  }
-  const auth = await getAuthContext(req);
-  await handleSupabase(await supabase.from("items").update({ archived_at: new Date().toISOString() }).eq("id", existing.id));
-  await appendAudit(req, {
-    eventType: "ITEM_ARCHIVED",
-    entityType: "item",
-    entityId: existing.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { title: existing.title }
-  });
-  await queueNotification("ITEM_ARCHIVED", `Auction item archived: ${existing.title}`, { itemId: existing.id, title: existing.title });
-  res.json({ ok: true });
-}));
-
-app.post("/api/items/:id/restore", requireAdminToken, asyncHandler(async (req, res) => {
-  const existing = await getItemById(req.params.id, true);
-  if (!existing) {
-    res.status(404).json({ error: "Item not found." });
-    return;
-  }
-  const auth = await getAuthContext(req);
-  await handleSupabase(await supabase.from("items").update({ archived_at: null }).eq("id", existing.id));
-  await appendAudit(req, {
-    eventType: "ITEM_RESTORED",
-    entityType: "item",
-    entityId: existing.id,
-    actor: auth.actor,
-    actorType: auth.actorType,
-    details: { title: existing.title }
-  });
-  await queueNotification("ITEM_RESTORED", `Auction item restored: ${existing.title}`, { itemId: existing.id, title: existing.title });
-  res.json(await getItemById(existing.id, true));
-}));
-
-app.post("/api/items/:id/bids", asyncHandler(async (req, res) => {
-  const auth = await getAuthContext(req);
-  if (!auth.signedIn) {
-    res.status(401).json({ error: "Sign in to place a bid." });
-    return;
-  }
-  if (!(auth.role === "Bidder" || auth.role === "Admin")) {
-    res.status(403).json({ error: "Your account does not have bidding permission." });
-    return;
-  }
-  const actor = auth.actor;
-  const idempotencyKey = String(req.header("x-idempotency-key") || "");
-  if (!(await checkBidRateLimit(req, actor, req.params.id))) {
-    res.status(429).json({ error: "Too many bid attempts. Please wait and try again." });
-    return;
-  }
-  const item = await getItemById(req.params.id);
-  if (!item) {
-    res.status(404).json({ error: "Item not found." });
-    return;
-  }
-  const amount = Number(req.body.amount || 0);
-  const expectedCurrentBid = Number(req.body.expectedCurrentBid || 0);
-  if (item.currentBid !== expectedCurrentBid) {
-    res.status(409).json({ error: "Item bid state changed. Refresh and try again." });
-    return;
-  }
-  const validation = validateBid(item, amount);
-  if (!validation.ok) {
-    res.status(400).json({ error: validation.error });
-    return;
-  }
-  const persistedBidderUserId = auth.userId && auth.userId !== "admin-token" ? auth.userId : "";
-  const biddingUser = auth.userId ? await getUserById(auth.userId) : null;
-  const bidResult = await placeBidAtomically(
-    item,
-    amount,
-    expectedCurrentBid,
-    "Bidder",
-    persistedBidderUserId,
-    idempotencyKey
-  );
-  if (!bidResult.ok) {
-    res.status(bidResult.status).json({ error: bidResult.error });
-    return;
-  }
-  if (bidResult.duplicate) {
-    res.status(409).json({ error: "Duplicate bid submission detected." });
-    return;
-  }
-  await appendAudit(req, {
-    eventType: "BID_PLACED",
-    entityType: "bid",
-    entityId: item.id,
-    actor,
-    actorType: auth.actorType,
-    details: {
-      amount,
-      bidSequence: bidResult.bidSequence
-    }
-  });
-  await queueBidActivityNotifications(
-    { ...item, currentBid: bidResult.currentBid },
-    {
-      userId: auth.userId,
-      email: biddingUser?.email,
-      displayName: biddingUser?.display_name || actor
-    },
-    amount,
-    item.currentBid > 0
-      ? {
-          bidder: "",
-          bidderUserId: bidResult.previousBidderUserId || undefined,
-          amount: item.currentBid,
-          time: "",
-          createdAt: ""
-        }
-      : undefined
-  );
-  res.json(await getItemById(item.id));
-}));
+registerItemMutationRoutes({
+  app,
+  asyncHandler,
+  requireAdminToken,
+  upload,
+  bulkImportUpload,
+  importsDir,
+  randomUUID,
+  getAuthContext,
+  appendAudit,
+  queueNotification,
+  getItemById,
+  handleSupabase,
+  supabase,
+  validateNewItem,
+  parseCsv,
+  normalizeImportKey,
+  inspectImportArchive,
+  extractImportArchive,
+  getImportValue,
+  splitImportList,
+  normalizeDocumentVisibility,
+  prepareUploadedMulterFile,
+  copyImportedFile,
+  createItemRecord,
+  cleanupManagedFiles,
+  rollbackCreatedItem,
+  findExistingItemByLotOrSku,
+});
 
 app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error(error);
@@ -3808,68 +1269,30 @@ app.use((error: unknown, req: express.Request, res: express.Response, next: expr
   res.status(500).json({ error: safeError });
 });
 
-const start = async () => {
-  if (runtimeEnvironment === "production" && notificationTransport === "file") {
-    throw new Error("NOTIFY_TRANSPORT=file is not allowed in production. Use smtp or noop.");
-  }
-  await handleSupabase(await supabase.from("roles").select("name").limit(1));
-  await verifyRequiredSchemaMigrations();
-  await detectSecurityEventsTable();
-  await verifyMalwareScannerHealth();
-  await ensureStorageBuckets();
-  await startMaintenanceLoop();
-  await seedRoles();
-  await seedCategoriesIfEmpty();
-  await seedItemsIfEmpty();
-  await backfillLegacyBidAuditAttribution();
-  await handleSupabase(await supabase.from("sessions").delete().lte("expires_at", new Date().toISOString()));
-  await handleSupabase(await supabase.from("email_verification_tokens").delete().lte("expires_at", new Date().toISOString()));
-  if (notificationTransport === "smtp") {
-    if (!smtpTransporter) {
-      throw new Error("SMTP transport is enabled but SMTP_HOST, SMTP_USER, or SMTP_PASS is missing.");
-    }
-    try {
-      await Promise.race([
-        smtpTransporter.verify(),
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error(`SMTP verification timed out after ${smtpVerifyTimeoutMs}ms.`)), smtpVerifyTimeoutMs);
-        })
-      ]);
-    } catch (error) {
-      if (runtimeEnvironment === "production") {
-        throw error;
-      }
-      console.warn("SMTP verification failed. Continuing startup because NODE_ENV is not production.");
-      console.warn(error);
-    }
-  }
-  await startNotificationWorkerLoop();
-  if (!shouldRunApiServer) {
-    console.log(`Notification worker running in ${notificationWorkerMode} mode.`);
-    console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const server = app.listen(port, () => {
-      console.log(`Auction API running at http://localhost:${port}`);
-      console.log("Storage backend: supabase-js");
-      console.log(`Notification worker mode: ${notificationWorkerMode}`);
-      console.log(`Notification transport: ${notificationTransport} (${outboxDir})`);
-      resolve();
-    });
-    server.once("error", (error: NodeJS.ErrnoException) => {
-      if (error.code === "EADDRINUSE") {
-        reject(
-          new Error(
-            `Port ${port} is already in use. Stop the existing backend process or change PORT in .env before starting another server instance.`
-          )
-        );
-        return;
-      }
-      reject(error);
-    });
-  });
-};
+const { start } = createBootstrapService({
+  app,
+  port,
+  runtimeEnvironment,
+  allowDemoSeeding,
+  notificationTransport,
+  outboxDir,
+  smtpTransporter,
+  smtpVerifyTimeoutMs,
+  notificationWorkerMode,
+  shouldRunApiServer,
+  verifyRequiredSchemaMigrations,
+  detectSecurityEventsTable,
+  verifyMalwareScannerHealth,
+  ensureStorageBuckets,
+  startMaintenanceLoop,
+  backfillLegacyBidAuditAttribution,
+  startNotificationWorkerLoop,
+  handleSupabase,
+  supabase,
+  defaultCategories,
+  seedItems,
+  randomUUID,
+});
 
 const shouldAutoStart = process.argv[1] ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) : false;
 

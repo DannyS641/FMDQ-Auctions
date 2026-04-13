@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseDocumentNameWithVisibility, type DocumentVisibility } from "./security-logic.js";
 
-type StoredFileRef = { name: string; url: string; visibility?: DocumentVisibility };
+export type StoredFileRef = { name: string; url: string; visibility?: DocumentVisibility };
 type StoredBid = { bidder: string; amount: number; time: string; createdAt: string; bidderUserId?: string };
 export type StoredItem = {
   id: string;
@@ -150,6 +150,40 @@ export const createItemReadModel = ({
     return rows.map((row) => mapItem(row, files, bids, bidAuditLookup, bidUserLookup));
   };
 
+  const mapItemSummary = (row: ItemRow, files: ItemFileRow[]): StoredItem => ({
+    id: row.id,
+    title: row.title,
+    category: row.category,
+    lot: row.lot,
+    sku: row.sku,
+    condition: row.condition,
+    location: row.location,
+    startBid: Number(row.start_bid),
+    reserve: Number(row.reserve),
+    increment: Number(row.increment_amount),
+    currentBid: Number(row.current_bid),
+    startTime: new Date(row.start_time).toISOString(),
+    endTime: new Date(row.end_time).toISOString(),
+    description: row.description || "",
+    images: files
+      .filter((file) => file.item_id === row.id && file.kind === "image")
+      .slice(0, 1)
+      .map((file) => ({ name: file.name, url: file.url })),
+    documents: [],
+    bids: [],
+    createdAt: row.created_at,
+    archivedAt: row.archived_at,
+  });
+
+  const hydrateItemSummaries = async (rows: ItemRow[]) => {
+    if (!rows.length) return [] as StoredItem[];
+    const ids = rows.map((row) => row.id);
+    const files = handleSupabase(
+      await supabase.from("item_files").select("item_id,kind,name,url").in("item_id", ids).eq("kind", "image")
+    ) as ItemFileRow[];
+    return rows.map((row) => mapItemSummary(row, files));
+  };
+
   const getItems = async (includeArchived = false) => {
     let request = supabase
       .from("items")
@@ -159,6 +193,17 @@ export const createItemReadModel = ({
     if (!includeArchived) request = request.is("archived_at", null);
     const rows = handleSupabase(await request) as ItemRow[];
     return hydrateItems(rows);
+  };
+
+  const getItemSummaries = async (includeArchived = false) => {
+    let request = supabase
+      .from("items")
+      .select("id,title,category,lot,sku,condition,location,start_bid,reserve,increment_amount,current_bid,start_time,end_time,description,created_at,archived_at")
+      .order("archived_at", { ascending: true, nullsFirst: true })
+      .order("created_at", { ascending: false });
+    if (!includeArchived) request = request.is("archived_at", null);
+    const rows = handleSupabase(await request) as ItemRow[];
+    return hydrateItemSummaries(rows);
   };
 
   const getItemById = async (id: string, includeArchived = false) => {
@@ -177,6 +222,7 @@ export const createItemReadModel = ({
 
   return {
     getItems,
+    getItemSummaries,
     getItemById,
   };
 };

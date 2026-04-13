@@ -1,3 +1,6 @@
+import type { Role } from "../shared/permissions.js";
+export type { Role };
+
 export type AuditEntry = {
   eventType: string;
   entityType: "item" | "bid" | "user" | "system" | "export" | "auth";
@@ -15,8 +18,6 @@ export type StoredUser = {
   createdAt: string;
   lastLoginAt: string | null;
 };
-
-export type Role = "Guest" | "Bidder" | "ShopOwner" | "Admin" | "SuperAdmin";
 
 export type AuthContext = {
   userId?: string;

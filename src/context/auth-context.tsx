@@ -11,6 +11,14 @@ import { clearAuthSession } from "@/lib/auth-session";
 import { queryKeys } from "@/lib/query-keys";
 import type { AuthSession, Role } from "@/types";
 import { DEFAULT_SESSION } from "@/types";
+import {
+  canAccessOperationsWithRole,
+  canBidWithRole,
+  canViewItemOperationsWithRole,
+  canViewReserveWithRole,
+  isAdminRole,
+  isSuperAdminRole,
+} from "../../shared/permissions";
 
 type AuthContextValue = {
   session: AuthSession;
@@ -58,12 +66,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       isSignedIn: session.signedIn,
       role: session.role,
-      isAdmin: session.role === "Admin" || session.role === "SuperAdmin",
+      isAdmin: isAdminRole(session.role),
       isShopOwner: session.role === "ShopOwner",
-      isSuperAdmin: session.role === "SuperAdmin",
-      canBid: session.role === "Bidder" || session.role === "Admin",
-      canViewReserve: session.role === "Admin" || session.role === "SuperAdmin",
-      canViewItemOperations: session.role === "ShopOwner" || session.role === "Admin" || session.role === "SuperAdmin",
+      isSuperAdmin: isSuperAdminRole(session.role),
+      canBid: canBidWithRole(session.role),
+      canViewReserve: canViewReserveWithRole(session.role),
+      canViewItemOperations: canViewItemOperationsWithRole(session.role) || canAccessOperationsWithRole(session.role),
       signOut,
       invalidateSession,
     }),

@@ -2,6 +2,7 @@ import type express from "express";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 import type { AuthContext, Role, SessionRow, StoredUser, UserRow } from "./server-types.js";
+import { isAdminRole } from "../shared/permissions.js";
 
 type RoleRow = { role_name: string };
 type HandleSupabase = <T>(result: { data: T; error: { message: string } | null }) => T;
@@ -99,7 +100,7 @@ export const createAuthService = ({
       actorType: "user",
       role,
       trusted: true,
-      adminAuthorized: role === "Admin" || role === "SuperAdmin",
+      adminAuthorized: isAdminRole(role),
       signedIn: true,
     };
   };

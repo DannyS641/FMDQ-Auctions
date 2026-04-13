@@ -1,5 +1,5 @@
 import { apiClient } from "@/lib/api-client";
-import type { AdminUser, AuditEntry, NotificationEntry, OperationsPayload, BulkImportReport, PaginatedResult } from "@/types";
+import type { AdminUser, AuditEntry, NotificationEntry, OperationsPayload, BulkImportReport, PaginatedResult, ReportsPayload } from "@/types";
 
 type AuditEntryApiRow = {
   id: string;
@@ -75,6 +75,9 @@ export const bulkImportUsers = async (file: File): Promise<BulkImportReport> => 
 
 export const getOperations = async (): Promise<OperationsPayload> =>
   apiClient<OperationsPayload>("/api/admin/operations");
+
+export const getReports = async (): Promise<ReportsPayload> =>
+  apiClient<ReportsPayload>("/api/admin/reports");
 
 export const getAudits = async (
   filters: Record<string, string | number> = {}
