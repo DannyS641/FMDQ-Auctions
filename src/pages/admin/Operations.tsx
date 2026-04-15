@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { RefreshCw, KeyRound, Download, Trophy, Gavel, AlertTriangle, BarChart3, Users, Activity } from "lucide-react";
+import { RefreshCw, KeyRound, Download, Trophy, BarChart3, Users, Activity } from "lucide-react";
 import type { Workbook, Worksheet, Cell, Row } from "exceljs";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
@@ -358,10 +358,10 @@ function OverviewTab() {
   const comparisonMax = Math.max(...comparisonRows.map((row) => row.value), 1);
   const overviewCards = [
     {
-      label: "Active users",
-      value: summary.activeUsers,
-      note: `${summary.totalUsers} total registered users`,
-      icon: Users,
+      label: "Wins recorded",
+      value: summary.wins,
+      note: summary.wins > 0 ? "Successful bid outcomes recorded" : "No wins recorded yet",
+      icon: Trophy,
       accent: "from-[#ff8458] to-[#ff6b2c]",
       text: "text-white",
       muted: "text-white/80",
@@ -378,10 +378,10 @@ function OverviewTab() {
       iconClassName: "bg-[#eef3ff] text-neon",
     },
     {
-      label: "Wins recorded",
-      value: summary.wins,
-      note: summary.wins > 0 ? "Successful bid outcomes recorded" : "No wins recorded yet",
-      icon: Trophy,
+      label: "Active users",
+      value: summary.activeUsers,
+      note: `${summary.totalUsers} total registered users`,
+      icon: Users,
       accent: "from-white to-[#f8fafc]",
       text: "text-ink",
       muted: "text-slate",

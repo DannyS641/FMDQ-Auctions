@@ -24,9 +24,14 @@ export function AuctionCard({ item, onMouseEnter }: Props) {
   return (
     <article
       onMouseEnter={onMouseEnter}
-      className="rounded-3xl border border-ink/10 bg-white p-5 transition duration-200 hover:border-neon/20 hover:shadow-[0_8px_30px_rgba(29,50,108,0.1)]"
+      className="flex h-full flex-col rounded-3xl border border-ink/10 bg-white p-5 transition duration-200 hover:border-neon/20 hover:shadow-[0_8px_30px_rgba(29,50,108,0.1)]"
     >
       {/* Image */}
+      <div className="relative pt-5">
+        <span className="absolute right-3 top-0 z-10 inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-ink shadow-[0_8px_20px_rgba(15,23,42,0.08)]">
+          <span className={`h-2 w-2 rounded-full ${statusDot[status] ?? "bg-slate"}`} />
+          {status}
+        </span>
       <div className="flex aspect-[4/3] w-full items-center justify-center overflow-hidden rounded-2xl border border-ink/10 bg-white p-2">
         {thumb ? (
           <img
@@ -38,18 +43,19 @@ export function AuctionCard({ item, onMouseEnter }: Props) {
           <div className="h-full w-full rounded-xl bg-ash" />
         )}
       </div>
-
-      {/* Header */}
-      <div className="mt-4 flex items-center justify-between gap-3">
-        <p className="text-xs uppercase tracking-[0.3em] text-slate">{item.category}</p>
-        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink">
-          <span className={`h-2 w-2 rounded-full ${statusDot[status] ?? "bg-slate"}`} />
-          {status}
-        </span>
       </div>
 
-      <h2 className="mt-2 line-clamp-2 text-base font-semibold text-ink">{item.title}</h2>
-      <p className="mt-1 text-xs text-slate">Lot {item.lot} · {item.condition}</p>
+      {/* Header */}
+      <div className="mt-4 min-h-[4rem]">
+        <div className="flex items-start justify-between gap-3">
+        <p className="line-clamp-2 min-h-[1rem] text-xs uppercase tracking-[0.3em] text-slate">
+          {item.category}
+        </p>
+        </div>
+
+        <h2 className="mt-2 min-h-[1rem] line-clamp-2 text-base font-semibold text-ink">{item.title}</h2>
+        <p className="mt-1 text-xs text-slate">Lot {item.lot} · {item.condition}</p>
+      </div>
 
       {/* Stats */}
       <div className="mt-4 space-y-2 rounded-2xl border border-ink/10 bg-ink/5 px-4 py-3 text-sm">
