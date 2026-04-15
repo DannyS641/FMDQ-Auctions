@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { RefreshCw, KeyRound, Download, Trophy, Gavel, PackageSearch, AlertTriangle, BarChart3 } from "lucide-react";
+import { RefreshCw, KeyRound, Download, Trophy, Gavel, AlertTriangle, BarChart3, Users, Activity } from "lucide-react";
 import type { Workbook, Worksheet, Cell, Row } from "exceljs";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
@@ -223,6 +223,15 @@ const downloadWorkbook = async (filename: string, workbook: Workbook) => {
   URL.revokeObjectURL(url);
 };
 
+const yieldToBrowser = () =>
+  new Promise<void>((resolve) => {
+    if (typeof window !== "undefined" && "requestAnimationFrame" in window) {
+      window.requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+
 const BRAND_BLUE = "1D326C";
 const SUCCESS_FILL = "E8F7EE";
 const SUCCESS_TEXT = "0F8A5F";
@@ -327,59 +336,214 @@ const stylePillCell = (cell: Cell, fill: string, text: string) => {
 // ─── Overview ────────────────────────────────────────────────────────────────
 
 function OverviewTab() {
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, isFetching, dataUpdatedAt, refetch } = useQuery({
     queryKey: queryKeys.admin.operations(),
     queryFn: getOperations,
-    staleTime: 30_000,
+    staleTime: 10_000,
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
   });
 
   if (isLoading) return <PageSpinner />;
   if (isError || !data) return <ErrorMessage title="Could not load overview" />;
 
   const { summary } = data;
-
-  const stats = [
-    { label: "Total items", value: summary.totalItems },
-    { label: "Live", value: summary.liveCount },
-    { label: "Closed", value: summary.closedCount },
-    { label: "Archived", value: summary.archivedCount },
-    { label: "Total users", value: summary.totalUsers },
-    { label: "Active users", value: summary.activeUsers },
-    { label: "Admins", value: summary.adminUsers },
-    { label: "Wins", value: summary.wins },
-    { label: "Pending notifications", value: summary.pendingNotifications },
-    { label: "Activity entries", value: summary.auditCount },
+  const recentActivity = data.recentAudits.slice(0, 6).map(buildActivityView);
+  const comparisonRows = [
+    { label: "Total items", value: summary.totalItems, tone: "bg-neon" },
+    { label: "Live", value: summary.liveCount, tone: "bg-emerald-500" },
+    { label: "Closed", value: summary.closedCount, tone: "bg-amber-500" },
+    { label: "Archived", value: summary.archivedCount, tone: "bg-rose-500" },
+  ];
+  const comparisonMax = Math.max(...comparisonRows.map((row) => row.value), 1);
+  const overviewCards = [
+    {
+      label: "Active users",
+      value: summary.activeUsers,
+      note: `${summary.totalUsers} total registered users`,
+      icon: Users,
+      accent: "from-[#ff8458] to-[#ff6b2c]",
+      text: "text-white",
+      muted: "text-white/80",
+      iconClassName: "bg-white/20 text-white",
+    },
+    {
+      label: "Admin accounts",
+      value: summary.adminUsers + summary.superAdminUsers,
+      note: `${summary.superAdminUsers} super admin · ${summary.adminUsers} admin`,
+      icon: KeyRound,
+      accent: "from-white to-[#f8fafc]",
+      text: "text-ink",
+      muted: "text-slate",
+      iconClassName: "bg-[#eef3ff] text-neon",
+    },
+    {
+      label: "Wins recorded",
+      value: summary.wins,
+      note: summary.wins > 0 ? "Successful bid outcomes recorded" : "No wins recorded yet",
+      icon: Trophy,
+      accent: "from-white to-[#f8fafc]",
+      text: "text-ink",
+      muted: "text-slate",
+      iconClassName: "bg-[#eef3ff] text-neon",
+    },
+    {
+      label: "Activity entries",
+      value: summary.auditCount,
+      note: summary.pendingNotifications > 0 ? `${summary.pendingNotifications} notifications pending` : "Notification queue is clear",
+      icon: Activity,
+      accent: "from-white to-[#f8fafc]",
+      text: "text-ink",
+      muted: "text-slate",
+      iconClassName: "bg-[#eef3ff] text-neon",
+    },
   ];
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        {stats.map(({ label, value }) => (
-          <Card key={label} padding="sm" className="flex flex-col gap-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate">{label}</p>
-            <p className="text-2xl font-bold text-ink">{value}</p>
+      <div className="rounded-[2rem] border border-ink/10 bg-white p-5 shadow-[0_18px_45px_rgba(15,23,42,0.05)]">
+        <div className="flex flex-col gap-5 xl:grid xl:grid-cols-[1.2fr_0.8fr]">
+          <div className="space-y-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.28em] text-slate">Auction intelligence</p>
+                <h2 className="mt-2 text-[28px] font-semibold text-neon sm:text-[32px]">Overview dashboard</h2>
+                <p className="mt-1.5 max-w-2xl text-sm text-slate">
+                  Track platform health, operator activity, and live auction movement from one dashboard.
+                </p>
+                <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs text-slate">
+                  <span className={cn("inline-flex items-center gap-2 rounded-full px-2.5 py-1 font-medium", isFetching ? "bg-[#eef3ff] text-neon" : "bg-[#f8fafc] text-slate")}>
+                    <span className={cn("h-2 w-2 rounded-full", isFetching ? "bg-neon animate-pulse" : "bg-emerald-500")} />
+                    {isFetching ? "Refreshing live data" : "Live data"}
+                  </span>
+                  <span>Last updated {formatTimeAgo(new Date(dataUpdatedAt).toISOString())}</span>
+                </div>
+              </div>
+              <Button variant="ghost" size="sm" disabled={isFetching} onClick={() => void refetch()}>
+                <RefreshCw size={14} className={cn(isFetching && "animate-spin")} />
+                Refresh overview
+              </Button>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-2">
+              {overviewCards.map(({ label, value, note, icon: Icon, accent, text, muted, iconClassName }) => (
+                <div
+                  key={label}
+                  className={`rounded-[1.6rem] bg-gradient-to-br ${accent} p-4 shadow-[0_16px_35px_rgba(15,23,42,0.06)]`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className={`text-xs font-semibold uppercase tracking-[0.18em] ${muted}`}>{label}</p>
+                      <p className={`mt-3 text-[2rem] font-semibold leading-none ${text}`}>{value}</p>
+                      <p className={`mt-2.5 text-sm ${muted}`}>{note}</p>
+                    </div>
+                    <span className={cn("inline-flex h-11 w-11 items-center justify-center rounded-2xl", iconClassName)}>
+                      <Icon size={20} />
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <Card className="border-none bg-[#fbfcff] shadow-none">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-[#eef3ff] text-neon">
+                <BarChart3 size={20} />
+              </span>
+              <div>
+                <p className="text-lg font-semibold text-ink">Platform comparison</p>
+                <p className="text-sm text-slate">How the major platform states compare right now.</p>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-4">
+              {comparisonRows.map((row) => (
+                <div key={row.label} className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium text-ink">{row.label}</p>
+                    <p className="text-sm font-semibold text-ink">{row.value}</p>
+                  </div>
+                  <div className="h-3 overflow-hidden rounded-full bg-[#edf1f7]">
+                    <div
+                      className={`h-full rounded-full ${row.tone}`}
+                      style={{ width: `${Math.max((row.value / comparisonMax) * 100, row.value > 0 ? 10 : 0)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-6 rounded-[1.4rem] border border-ink/10 bg-white p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Queue snapshot</p>
+              <div className="mt-3 space-y-2">
+                <p className="text-xl font-semibold text-neon">{summary.pendingNotifications}</p>
+                <p className="text-sm text-slate">Pending notification(s)</p>
+                <p className="text-xs text-slate">
+                  {summary.pendingNotifications > 0
+                    ? "There are queued notifications waiting for delivery or retry."
+                    : "The notification queue is currently clear."}
+                </p>
+              </div>
+            </div>
           </Card>
-        ))}
+        </div>
       </div>
 
-      {data.recentAudits.length > 0 && (
-        <Card>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.15em] text-slate">
-            Recent activity
-          </h2>
-          <div className="flex flex-col divide-y divide-ink/5">
-            {data.recentAudits.slice(0, 8).map((entry) => (
-              <div key={entry.id} className="flex items-start justify-between py-3">
-                <div>
-                  <p className="text-sm font-semibold text-ink">{entry.eventType}</p>
-                  <p className="text-xs text-slate">{entry.actor} · {entry.entityType} {entry.entityId}</p>
+      <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+        <Card className="overflow-hidden">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Recent activity</p>
+              <h3 className="mt-2 text-xl font-semibold text-ink">Latest audit events</h3>
+            </div>
+            <p className="text-sm text-slate">{recentActivity.length} visible event(s)</p>
+          </div>
+          <div className="space-y-3">
+            {recentActivity.length === 0 ? (
+              <p className="text-sm text-slate">No recent activity recorded.</p>
+            ) : recentActivity.map((entry) => (
+              <div key={entry.id} className="rounded-2xl border border-ink/10 px-4 py-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="font-semibold text-ink">{entry.action}</p>
+                    <p className="mt-1 text-xs text-slate">{entry.userLabel} · {entry.topic} · {entry.context}</p>
+                    <p className="mt-2 text-xs text-slate">{entry.meta}</p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="text-sm font-semibold text-neon">{entry.dateLabel}</p>
+                    <p className="text-xs text-slate">{entry.dateValue}</p>
+                  </div>
                 </div>
-                <p className="shrink-0 text-xs text-slate">{formatTimeAgo(entry.createdAt)}</p>
               </div>
             ))}
           </div>
         </Card>
-      )}
+
+        <Card className="overflow-hidden">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Operations summary</p>
+              <h3 className="mt-2 text-xl font-semibold text-ink">Core numbers</h3>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {[
+              { label: "Total users", value: summary.totalUsers },
+              { label: "Disabled users", value: summary.disabledUsers },
+              { label: "Super admins", value: summary.superAdminUsers },
+              { label: "Closed auctions", value: summary.closedCount },
+              { label: "Live auctions", value: summary.liveCount },
+              { label: "Archived lots", value: summary.archivedCount },
+            ].map(({ label, value }) => (
+              <div key={label} className="rounded-2xl border border-ink/10 bg-[#fbfcff] px-4 py-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate">{label}</p>
+                <p className="mt-3 text-2xl font-semibold text-neon">{value}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
     </div>
   );
 }
@@ -922,16 +1086,30 @@ function AuditsTab() {
 }
 
 function ReportsTab() {
-  const { data, isLoading, isError } = useQuery({
+  const queryClient = useQueryClient();
+  const [exportStage, setExportStage] = useState<string>("");
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: queryKeys.admin.reports(),
     queryFn: getReports,
-    staleTime: 30_000,
+    staleTime: 10_000,
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
   });
 
   const { mutate: exportReportsCsv, isPending: exportingReports } = useMutation({
     mutationFn: async () => {
-      if (!data) return;
+      setExportStage("Refreshing report data…");
+      const latestData = await queryClient.fetchQuery({
+        queryKey: queryKeys.admin.reports(),
+        queryFn: getReports,
+        staleTime: 0,
+      });
+
+      await yieldToBrowser();
+      setExportStage("Preparing workbook…");
       const ExcelJS = await import("exceljs");
+      await yieldToBrowser();
+
       const workbook = new ExcelJS.Workbook();
       workbook.creator = "FMDQ Auctions Portal";
       workbook.created = new Date();
@@ -944,10 +1122,10 @@ function ReportsTab() {
         { header: "Graph", key: "graph", width: 18 },
       ];
       const summaryRows = [
-        { metric: "Winning bidders", value: data.summary.winners },
-        { metric: "Won items", value: data.summary.wonItems },
-        { metric: "No-bid items", value: data.summary.noBidItems },
-        { metric: "Reserve not met", value: data.summary.reserveNotMetItems },
+        { metric: "Winning bidders", value: latestData.summary.winners },
+        { metric: "Won items", value: latestData.summary.wonItems },
+        { metric: "No-bid items", value: latestData.summary.noBidItems },
+        { metric: "Reserve not met", value: latestData.summary.reserveNotMetItems },
       ];
       const summaryMax = Math.max(...summaryRows.map((row) => row.value), 1);
       summaryRows.forEach((row) => {
@@ -982,9 +1160,9 @@ function ReportsTab() {
         { header: "Amount graph", key: "amountGraph", width: 18 },
         { header: "Items", key: "itemTitles", width: 40 },
       ];
-      const maxItemsWon = Math.max(...data.winners.map((winner) => winner.itemsWon), 1);
-      const maxWonAmount = Math.max(...data.winners.map((winner) => winner.totalWonAmount), 1);
-      data.winners.forEach((winner) => {
+      const maxItemsWon = Math.max(...latestData.winners.map((winner) => winner.itemsWon), 1);
+      const maxWonAmount = Math.max(...latestData.winners.map((winner) => winner.totalWonAmount), 1);
+      latestData.winners.forEach((winner) => {
         winnersSheet.addRow({
           bidder: winner.bidder,
           itemsWon: winner.itemsWon,
@@ -1019,7 +1197,7 @@ function ReportsTab() {
         { header: "Closed", key: "endTime", width: 22 },
         { header: "Reserve outcome", key: "reserveOutcome", width: 18 },
       ];
-      data.wonItems.forEach((item) => {
+      latestData.wonItems.forEach((item) => {
         wonItemsSheet.addRow({
           ...item,
           endTime: formatDate(item.endTime),
@@ -1054,7 +1232,7 @@ function ReportsTab() {
         { header: "Archived", key: "archived", width: 12 },
         { header: "End time", key: "endTime", width: 22 },
       ];
-      data.noBidItems.forEach((item) => {
+      latestData.noBidItems.forEach((item) => {
         noBidSheet.addRow({
           ...item,
           archived: item.archived ? "Yes" : "No",
@@ -1092,7 +1270,7 @@ function ReportsTab() {
         { header: "Current bid", key: "currentBid", width: 18 },
         { header: "Closed", key: "endTime", width: 22 },
       ];
-      data.reserveNotMetItems.forEach((item) => {
+      latestData.reserveNotMetItems.forEach((item) => {
         reserveNotMetSheet.addRow({
           ...item,
           endTime: formatDate(item.endTime),
@@ -1106,150 +1284,46 @@ function ReportsTab() {
         row.getCell(4).font = { bold: true, color: { argb: WARNING_TEXT } };
       });
 
+      setExportStage("Downloading workbook…");
+      await yieldToBrowser();
       await downloadWorkbook(`auction-reports-${new Date().toISOString().slice(0, 10)}.xlsx`, workbook);
     },
     onSuccess: () => toast.success("Reports workbook exported."),
     onError: () => toast.error("Could not export reports workbook."),
+    onSettled: () => setExportStage(""),
   });
 
   if (isLoading) return <PageSpinner />;
   if (isError || !data) return <ErrorMessage title="Could not load reports" />;
 
-  const topWinner = data.winners[0] ?? null;
-  const chartRows = [
-    { label: "Listed items", value: data.summary.wonItems + data.summary.noBidItems + data.summary.reserveNotMetItems, tone: "bg-neon" },
-    { label: "Won items", value: data.summary.wonItems, tone: "bg-emerald-500" },
-    { label: "No-bid items", value: data.summary.noBidItems, tone: "bg-amber-500" },
-    { label: "Reserve not met", value: data.summary.reserveNotMetItems, tone: "bg-rose-500" },
-  ];
-  const chartMax = Math.max(...chartRows.map((row) => row.value), 1);
-  const summaryCards = [
-    {
-      label: "Winning bidders",
-      value: data.summary.winners,
-      note: topWinner ? `Top performer: ${topWinner.bidder}` : "No winning bidder yet",
-      icon: Trophy,
-      accent: "from-[#ff8458] to-[#ff6b2c]",
-      text: "text-white",
-      muted: "text-white/80",
-    },
-    {
-      label: "Won items",
-      value: data.summary.wonItems,
-      note: data.wonItems[0] ? `${data.wonItems[0].title} closed successfully` : "No closed wins yet",
-      icon: Gavel,
-      accent: "from-white to-[#f8fafc]",
-      text: "text-ink",
-      muted: "text-slate",
-    },
-    {
-      label: "No-bid items",
-      value: data.summary.noBidItems,
-      note: data.noBidItems.length > 0 ? "Lots needing attention" : "Every tracked lot has bids",
-      icon: PackageSearch,
-      accent: "from-white to-[#f8fafc]",
-      text: "text-ink",
-      muted: "text-slate",
-    },
-    {
-      label: "Reserve not met",
-      value: data.summary.reserveNotMetItems,
-      note: data.reserveNotMetItems.length > 0 ? "Closed below reserve" : "No reserve misses recorded",
-      icon: AlertTriangle,
-      accent: "from-white to-[#f8fafc]",
-      text: "text-ink",
-      muted: "text-slate",
-    },
-  ];
-
   return (
     <div className="flex flex-col gap-6">
-      <div className="rounded-[2rem] border border-ink/10 bg-white p-5 shadow-[0_18px_45px_rgba(15,23,42,0.05)] sm:p-6">
-        <div className="flex flex-col gap-6 xl:grid xl:grid-cols-[1.2fr_0.8fr]">
-          <div className="space-y-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-slate">Auction intelligence</p>
-                <h2 className="mt-3 text-[28px] font-semibold text-neon sm:text-[32px]">Reports dashboard</h2>
-                <p className="mt-2 max-w-2xl text-sm text-slate">
-                  Review auction outcomes, compare lot performance, and export the full reporting workbook for finance and operations.
-                </p>
-              </div>
-              <Button variant="secondary" size="sm" isLoading={exportingReports} onClick={() => exportReportsCsv()}>
-                <Download size={14} />
-                Export reports workbook
-              </Button>
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-2">
-              {summaryCards.map(({ label, value, note, icon: Icon, accent, text, muted }) => (
-                <div
-                  key={label}
-                  className={`rounded-[1.6rem] bg-gradient-to-br ${accent} p-5 shadow-[0_16px_35px_rgba(15,23,42,0.06)]`}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className={`text-xs font-semibold uppercase tracking-[0.18em] ${muted}`}>{label}</p>
-                      <p className={`mt-4 text-[2rem] font-semibold leading-none ${text}`}>{value}</p>
-                      <p className={`mt-3 text-sm ${muted}`}>{note}</p>
-                    </div>
-                    <span className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl ${label === "Winning bidders" ? "bg-white/20 text-white" : "bg-[#eef3ff] text-neon"}`}>
-                      <Icon size={20} />
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-end">
+        <div className="flex flex-col items-stretch gap-2 sm:items-end">
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="ghost" size="sm" disabled={isFetching} onClick={() => void refetch()}>
+              <RefreshCw size={14} className={cn(isFetching && "animate-spin")} />
+              Refresh reports
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="min-w-[12.5rem] shadow-[0_12px_24px_rgba(15,23,42,0.06)]"
+              isLoading={exportingReports}
+              onClick={() => exportReportsCsv()}
+            >
+              <Download size={14} />
+              {exportingReports ? "Exporting workbook" : "Export reports workbook"}
+            </Button>
           </div>
-
-          <Card className="border-none bg-[#fbfcff] shadow-none">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-[#eef3ff] text-neon">
-                <BarChart3 size={20} />
-              </span>
-              <div>
-                <p className="text-lg font-semibold text-ink">Auction comparison</p>
-                <p className="text-sm text-slate">How the major auction outcomes compare right now.</p>
-              </div>
-            </div>
-
-            <div className="mt-6 space-y-4">
-              {chartRows.map((row) => (
-                <div key={row.label} className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-medium text-ink">{row.label}</p>
-                    <p className="text-sm font-semibold text-ink">{row.value}</p>
-                  </div>
-                  <div className="h-3 overflow-hidden rounded-full bg-[#edf1f7]">
-                    <div
-                      className={`h-full rounded-full ${row.tone}`}
-                      style={{ width: `${Math.max((row.value / chartMax) * 100, row.value > 0 ? 10 : 0)}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-8 rounded-[1.4rem] border border-ink/10 bg-white p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Top winner snapshot</p>
-              {topWinner ? (
-                <div className="mt-3">
-                  <p className="text-xl font-semibold text-neon">{topWinner.bidder}</p>
-                  <p className="mt-1 text-sm text-slate">
-                    {topWinner.itemsWon} item(s) won · {formatMoney(topWinner.totalWonAmount)}
-                  </p>
-                  <p className="mt-3 text-xs text-slate">{topWinner.itemTitles.join(", ")}</p>
-                </div>
-              ) : (
-                <p className="mt-3 text-sm text-slate">No winning bidder has been recorded yet.</p>
-              )}
-            </div>
-          </Card>
+          <p className="min-h-[1.25rem] text-right text-xs text-slate">
+            {exportStage || " "}
+          </p>
         </div>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-        <Card className="overflow-hidden">
+        <Card className="overflow-hidden border-none bg-[#fbfcff] shadow-[0_18px_45px_rgba(15,23,42,0.05)]">
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Leaderboard</p>
@@ -1258,6 +1332,7 @@ function ReportsTab() {
             <p className="text-sm text-slate">{data.winners.length} bidder(s)</p>
           </div>
 
+          <div className="overflow-hidden rounded-[1.4rem] border border-ink/10 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
           <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1282,9 +1357,10 @@ function ReportsTab() {
             </tbody>
           </table>
         </div>
+        </div>
         </Card>
 
-        <Card className="overflow-hidden">
+        <Card className="overflow-hidden border-none bg-[#fbfcff] shadow-[0_18px_45px_rgba(15,23,42,0.05)]">
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Outcome ledger</p>
@@ -1293,6 +1369,7 @@ function ReportsTab() {
             <p className="text-sm text-slate">{data.wonItems.length} successful lot(s)</p>
           </div>
 
+          <div className="overflow-hidden rounded-[1.4rem] border border-ink/10 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
           <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1320,11 +1397,12 @@ function ReportsTab() {
             </tbody>
           </table>
         </div>
+        </div>
         </Card>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
+        <Card className="border-none bg-[#fbfcff] shadow-[0_18px_45px_rgba(15,23,42,0.05)]">
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Attention needed</p>
@@ -1336,7 +1414,7 @@ function ReportsTab() {
             {data.noBidItems.length === 0 ? (
               <p className="text-sm text-slate">Every tracked item has at least one bid.</p>
             ) : data.noBidItems.map((item) => (
-              <div key={item.itemId} className="rounded-2xl border border-ink/10 px-4 py-3">
+              <div key={item.itemId} className="rounded-2xl border border-ink/10 bg-white px-4 py-3 shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
                 <p className="font-semibold text-ink">{item.title}</p>
                 <p className="text-xs text-slate">Lot {item.lot} · {item.category}</p>
                 <p className="mt-1 text-xs text-slate">{item.status} · {formatDate(item.endTime)}</p>
@@ -1345,7 +1423,7 @@ function ReportsTab() {
           </div>
         </Card>
 
-        <Card>
+        <Card className="border-none bg-[#fbfcff] shadow-[0_18px_45px_rgba(15,23,42,0.05)]">
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Reserve pressure</p>
@@ -1357,7 +1435,7 @@ function ReportsTab() {
             {data.reserveNotMetItems.length === 0 ? (
               <p className="text-sm text-slate">No closed items are currently below reserve.</p>
             ) : data.reserveNotMetItems.map((item) => (
-              <div key={item.itemId} className="rounded-2xl border border-ink/10 px-4 py-3">
+              <div key={item.itemId} className="rounded-2xl border border-ink/10 bg-white px-4 py-3 shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
                 <p className="font-semibold text-ink">{item.title}</p>
                 <p className="text-xs text-slate">Lot {item.lot} · {item.category}</p>
                 <p className="mt-1 text-xs text-slate">Current bid {formatMoney(item.currentBid)} · {formatDate(item.endTime)}</p>
