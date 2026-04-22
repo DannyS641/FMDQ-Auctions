@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, Upload } from "lucide-react";
+import { Download, Plus, Upload } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -13,11 +13,99 @@ import { getItems, archiveItem, restoreItem, bulkImportItems, exportItemsCsv } f
 import { queryKeys } from "@/lib/query-keys";
 import { formatDate, formatMoney } from "@/lib/formatters";
 import { getAuctionStatus, getReserveOutcome } from "@/lib/auction-utils";
+import { ApiError } from "@/lib/api-client";
 import type { BulkImportReport } from "@/types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 type ListingFilter = "all" | "live" | "upcoming" | "closed" | "archived";
 type OutcomeFilter = "all" | "no-bids" | "has-bids" | "wins" | "reserve-met" | "reserve-pending" | "reserve-not-met";
+
+const escapeCsvCell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
+
+const downloadBulkImportTemplate = () => {
+  const headers = [
+    "title",
+    "category",
+    "lot",
+    "sku",
+    "condition",
+    "location",
+    "start_bid",
+    "reserve",
+    "increment",
+    "start_time",
+    "end_time",
+    "description",
+    "image1",
+    "image2",
+    "document1",
+    "document1_visibility",
+  ];
+
+  const rows = [
+    [
+      "Toyota Corolla 2018",
+      "Cars",
+      "CAR-018",
+      "FMDQ-CAR-018",
+      "New",
+      "Lagos Warehouse",
+      100000,
+      120000,
+      5000,
+      "2026-04-20T09:00",
+      "2026-04-22T17:00",
+      "Clean 2018 Toyota Corolla with low mileage.",
+      "",
+      "",
+      "",
+      "bidder_visible",
+    ],
+    [
+      "Samsung 65 inch UHD Smart TV",
+      "Household Appliances",
+      "HAP-210",
+      "FMDQ-HAP-210",
+      "Used",
+      "Abuja Hub",
+      180000,
+      0,
+      10000,
+      "2026-04-21T10:30",
+      "2026-04-23T16:00",
+      "65-inch UHD smart television with remote and wall mount.",
+      "",
+      "",
+      "",
+      "admin_only",
+    ],
+  ];
+
+  const csv = [headers, ...rows]
+    .map((row) => row.map((value) => escapeCsvCell(value)).join(","))
+    .join("\n");
+
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "items-bulk-import-template.csv";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+};
+
+const isBulkImportReport = (value: unknown): value is BulkImportReport => {
+  if (!value || typeof value !== "object") return false;
+  const report = value as Partial<BulkImportReport>;
+  return (
+    typeof report.created === "number" &&
+    typeof report.skipped === "number" &&
+    typeof report.failed === "number" &&
+    Array.isArray(report.items)
+  );
+};
 
 export default function AdminItems() {
   const { isAdmin, isShopOwner } = useAuth();
@@ -125,6 +213,12 @@ export default function AdminItems() {
       refreshItems();
     },
     onError: (error) => {
+      if (error instanceof ApiError && isBulkImportReport(error.payload)) {
+        setImportReport(error.payload);
+        const firstFailure = error.payload.items.find((entry) => entry.status === "failed")?.message;
+        toast.error(firstFailure ?? error.message);
+        return;
+      }
       toast.error(error instanceof Error ? error.message : "Bulk import failed.");
     },
   });
@@ -154,6 +248,12 @@ export default function AdminItems() {
             <Button variant="secondary" onClick={() => void handleExportAuctionDetails()}>
               Export auction details
             </Button>
+            {isAdmin && (
+              <Button variant="secondary" onClick={downloadBulkImportTemplate}>
+                <Download size={16} />
+                Bulk import template
+              </Button>
+            )}
             {isAdmin && (
               <Link to="/admin/items/new">
                 <Button>

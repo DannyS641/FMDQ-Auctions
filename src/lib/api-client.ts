@@ -6,7 +6,8 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
-    message: string
+    message: string,
+    public readonly payload?: unknown
   ) {
     super(message);
     this.name = "ApiError";
@@ -50,7 +51,11 @@ const performFetch = (path: string, init?: RequestInit, csrfToken?: string): Pro
 const parseResponse = async <T>(response: Response): Promise<T> => {
   const data = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
   if (!response.ok || data === null) {
-    throw new ApiError(response.status, data?.error ?? "An unexpected error occurred.");
+    const message =
+      (typeof data === "object" && data !== null && "message" in data && typeof data.message === "string" && data.message) ||
+      data?.error ||
+      "An unexpected error occurred.";
+    throw new ApiError(response.status, message, data);
   }
   return data;
 };

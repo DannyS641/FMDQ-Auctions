@@ -179,7 +179,11 @@ export const registerItemMutationRoutes = ({
             .filter(([key, value]) => key.startsWith("image") && value.trim())
             .flatMap(([, value]) => splitImportList(value));
           const documentEntries = Object.entries(normalizedRow)
-            .filter(([key, value]) => (key.startsWith("document") || key.startsWith("doc")) && value.trim())
+            .filter(([key, value]) =>
+              (key.startsWith("document") || key.startsWith("doc")) &&
+              !key.endsWith("_visibility") &&
+              value.trim()
+            )
             .flatMap(([key, value]) => splitImportList(value).map((name) => ({
               key,
               name,
