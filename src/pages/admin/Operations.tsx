@@ -31,6 +31,7 @@ import { useAuth } from "@/context/auth-context";
 type Tab = "overview" | "users" | "audits" | "reports" | "notifications";
 const ACTIVITY_PAGE_SIZE = 10;
 const NOTIFICATION_PAGE_SIZE = 10;
+const OVERVIEW_ACTIVITY_PAGE_SIZE = 6;
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -336,6 +337,7 @@ const stylePillCell = (cell: Cell, fill: string, text: string) => {
 // ─── Overview ────────────────────────────────────────────────────────────────
 
 function OverviewTab() {
+  const [activityPage, setActivityPage] = useState(1);
   const { data, isLoading, isError, isFetching, dataUpdatedAt, refetch } = useQuery({
     queryKey: queryKeys.admin.operations(),
     queryFn: getOperations,
@@ -348,7 +350,10 @@ function OverviewTab() {
   if (isError || !data) return <ErrorMessage title="Could not load overview" />;
 
   const { summary } = data;
-  const recentActivity = data.recentAudits.slice(0, 6).map(buildActivityView);
+  const totalActivityPages = Math.max(1, Math.ceil(data.recentAudits.length / OVERVIEW_ACTIVITY_PAGE_SIZE));
+  const recentActivity = data.recentAudits
+    .slice((activityPage - 1) * OVERVIEW_ACTIVITY_PAGE_SIZE, activityPage * OVERVIEW_ACTIVITY_PAGE_SIZE)
+    .map(buildActivityView);
   const comparisonRows = [
     { label: "Total items", value: summary.totalItems, tone: "bg-neon" },
     { label: "Live", value: summary.liveCount, tone: "bg-emerald-500" },
@@ -497,7 +502,9 @@ function OverviewTab() {
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Recent activity</p>
               <h3 className="mt-2 text-xl font-semibold text-ink">Latest audit events</h3>
             </div>
-            <p className="text-sm text-slate">{recentActivity.length} visible event(s)</p>
+            <p className="text-sm text-slate">
+              Page {activityPage} of {totalActivityPages}
+            </p>
           </div>
           <div className="space-y-3">
             {recentActivity.length === 0 ? (
@@ -518,9 +525,34 @@ function OverviewTab() {
               </div>
             ))}
           </div>
+          {data.recentAudits.length > OVERVIEW_ACTIVITY_PAGE_SIZE && (
+            <div className="mt-4 flex items-center justify-between border-t border-ink/10 pt-4">
+              <p className="text-sm text-slate">
+                Showing {recentActivity.length} of {data.recentAudits.length} recent event(s)
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={activityPage === 1}
+                  onClick={() => setActivityPage((current) => Math.max(1, current - 1))}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={activityPage === totalActivityPages}
+                  onClick={() => setActivityPage((current) => Math.min(totalActivityPages, current + 1))}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
 
-        <Card className="overflow-hidden">
+        <Card className="overflow-hidden xl:self-start">
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Operations summary</p>
