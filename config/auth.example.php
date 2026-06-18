@@ -47,6 +47,16 @@ return [
         // Role granted to any authenticated internal user even with no group match.
         // Set to null to deny internal users who match no mapped group.
         'default_internal_role'  => 'Observer',
+        'email_verification_ttl_seconds' => 24 * 60 * 60, // verify link lifetime (24h)
+        'password_reset_ttl_seconds'     => 60 * 60,      // reset link lifetime (1h)
+    ],
+
+    // -------------------------------------------------------------------------
+    // App URLs (used to build verification / password-reset / item links in
+    // emails). base_url is the FRONTEND origin users click through to.
+    // -------------------------------------------------------------------------
+    'app' => [
+        'base_url' => 'http://localhost:8888',
     ],
 
     // -------------------------------------------------------------------------
@@ -97,8 +107,11 @@ return [
     // (created/updated/archived). Empty = those emails are skipped.
     // -------------------------------------------------------------------------
     'notify' => [
-        'to'   => '',
-        'from' => 'no-reply@fmdq.com',
+        'to'        => '',
+        'from'      => 'no-reply@fmdq.com',
+        // 'file' (dev: no real email; verify/reset URLs returned in API responses)
+        // or 'smtp' (production: links delivered by email only).
+        'transport' => 'file',
     ],
 
     // -------------------------------------------------------------------------

@@ -63,6 +63,42 @@ final class UserRepository
         return $id;
     }
 
+    /** Create a local (external) account in pending_verification. Returns the id. */
+    public function createLocalPending(string $email, string $passwordHash, string $displayName): string
+    {
+        $id = Uuid::v4();
+        Database::pdo()->prepare(
+            'INSERT INTO users (id, email, password_hash, display_name, status, auth_source)
+             VALUES (:id, :email, :hash, :dn, :status, :src)'
+        )->execute([
+            ':id' => $id,
+            ':email' => $email,
+            ':hash' => $passwordHash,
+            ':dn' => $displayName,
+            ':status' => 'pending_verification',
+            ':src' => 'local',
+        ]);
+        return $id;
+    }
+
+    public function setStatus(string $userId, string $status): void
+    {
+        Database::pdo()->prepare('UPDATE users SET status = :s WHERE id = :id')
+            ->execute([':s' => $status, ':id' => $userId]);
+    }
+
+    public function setPasswordHash(string $userId, string $passwordHash): void
+    {
+        Database::pdo()->prepare('UPDATE users SET password_hash = :h WHERE id = :id')
+            ->execute([':h' => $passwordHash, ':id' => $userId]);
+    }
+
+    public function assignRole(string $userId, string $roleName): void
+    {
+        Database::pdo()->prepare('INSERT IGNORE INTO user_roles (user_id, role_name) VALUES (:uid, :role)')
+            ->execute([':uid' => $userId, ':role' => $roleName]);
+    }
+
     /** @return string[] */
     public function getRoles(string $userId): array
     {

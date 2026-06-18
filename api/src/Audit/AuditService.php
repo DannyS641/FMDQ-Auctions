@@ -21,12 +21,14 @@ final class AuditService
         string $eventType,
         string $entityType,
         string $entityId,
-        array $details = []
+        array $details = [],
+        ?string $actorOverride = null
     ): void {
         $details['actorRole'] = $ctx->role;
         if ($ctx->userId !== null) {
             $details['actorUserId'] = $ctx->userId;
         }
+        $actor = $actorOverride ?? $ctx->actor;
 
         $stmt = Database::pdo()->prepare(
             'INSERT INTO audits (id, event_type, entity_type, entity_id, actor, actor_type, request_id, details_json, created_at)
@@ -37,7 +39,7 @@ final class AuditService
             ':etype'   => $eventType,
             ':entype'  => $entityType,
             ':eid'     => $entityId,
-            ':actor'   => $ctx->actor,
+            ':actor'   => $actor,
             ':atype'   => $ctx->actorType,
             ':rid'     => RequestId::get(),
             ':details' => json_encode($details, JSON_UNESCAPED_SLASHES),

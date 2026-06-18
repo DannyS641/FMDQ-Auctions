@@ -15,6 +15,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 
 use App\Audit\AuditService;
+use App\Auth\AccountService;
 use App\Auth\AuthContext;
 use App\Auth\AuthService;
 use App\Auth\Permissions;
@@ -107,6 +108,15 @@ function uploadedFiles(string $field): array
     return $out;
 }
 
+/** Enforce the shared auth rate limit (10 / 60s per client+scope); 429 + stop if exceeded. */
+function authRateLimitOrStop(string $scope): void
+{
+    $clientKey = ($_SERVER['REMOTE_ADDR'] ?? 'unknown') . ':' . $scope;
+    if (!(new \App\RateLimit\RateLimiter())->attempt('AUTH_ATTEMPT', $clientKey, 60000, 10)) {
+        respond(429, ['error' => 'Too many attempts. Please wait and try again.']);
+    }
+}
+
 // --- Routing -----------------------------------------------------------------
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 // Method override: lets the browser send multipart (which PHP only parses for
@@ -151,6 +161,46 @@ try {
         }
         setSessionCookie($result['cookie']);
         respond(200, ['user' => $result['user']]);
+    }
+
+    if ($method === 'POST' && $path === '/api/auth/register') {
+        $body = jsonBody();
+        $email = (string) ($body['email'] ?? '');
+        authRateLimitOrStop('register:' . $email);
+        $result = (new AccountService())->register($email, (string) ($body['password'] ?? ''), (string) ($body['displayName'] ?? ''));
+        respond($result['status'], $result['body']);
+    }
+
+    if ($method === 'POST' && $path === '/api/auth/verify-email') {
+        $body = jsonBody();
+        $token = (string) ($body['token'] ?? '');
+        authRateLimitOrStop('verify:' . substr($token, 0, 12));
+        $result = (new AccountService())->verifyEmail($token);
+        respond($result['status'], $result['body']);
+    }
+
+    if ($method === 'POST' && $path === '/api/auth/resend-verification') {
+        $body = jsonBody();
+        $email = (string) ($body['email'] ?? '');
+        authRateLimitOrStop('resend:' . $email);
+        $result = (new AccountService())->resendVerification($email);
+        respond($result['status'], $result['body']);
+    }
+
+    if ($method === 'POST' && $path === '/api/auth/request-password-reset') {
+        $body = jsonBody();
+        $email = (string) ($body['email'] ?? '');
+        authRateLimitOrStop('reset-request:' . $email);
+        $result = (new AccountService())->requestPasswordReset($email);
+        respond($result['status'], $result['body']);
+    }
+
+    if ($method === 'POST' && $path === '/api/auth/reset-password') {
+        $body = jsonBody();
+        $token = (string) ($body['token'] ?? '');
+        authRateLimitOrStop('reset:' . substr($token, 0, 12));
+        $result = (new AccountService())->resetPassword($token, (string) ($body['password'] ?? ''));
+        respond($result['status'], $result['body']);
     }
 
     if ($method === 'POST' && $path === '/api/auth/logout') {
