@@ -14,11 +14,24 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/src/bootstrap.php';
 
+use App\Audit\AuditService;
+use App\Auth\AuthContext;
 use App\Auth\AuthService;
+use App\Auth\Permissions;
+use App\Bidding\BidService;
+use App\Catalog\DocumentVisibility;
 use App\Catalog\ItemReadModel;
 use App\Catalog\LandingStats;
+use App\Items\BulkImportService;
+use App\Items\ItemWriteService;
 use App\Middleware\AuthMiddleware;
+use App\RateLimit\RateLimiter;
 use App\Repository\CategoryRepository;
+use App\Repository\SessionRepository;
+use App\Repository\UserRepository;
+use App\Storage\FileStorage;
+use App\Support\Csv;
+use App\Support\Dates;
 
 header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
@@ -64,8 +77,46 @@ function clearSessionCookie(): void
     ]);
 }
 
+/** Send a raw (non-JSON) response, e.g. CSV, and stop. */
+function sendRaw(int $status, string $contentType, string $body, array $headers = []): never
+{
+    http_response_code($status);
+    header('Content-Type: ' . $contentType);
+    foreach ($headers as $k => $v) {
+        header("$k: $v");
+    }
+    echo $body;
+    exit;
+}
+
+/** Normalize $_FILES[$field] into a flat list of successfully-uploaded files. */
+function uploadedFiles(string $field): array
+{
+    if (empty($_FILES[$field])) return [];
+    $f = $_FILES[$field];
+    $out = [];
+    if (is_array($f['name'])) {
+        foreach ($f['name'] as $i => $name) {
+            if ((int) ($f['error'][$i] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
+                $out[] = ['name' => $name, 'tmp_name' => $f['tmp_name'][$i]];
+            }
+        }
+    } elseif ((int) ($f['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
+        $out[] = ['name' => $f['name'], 'tmp_name' => $f['tmp_name']];
+    }
+    return $out;
+}
+
 // --- Routing -----------------------------------------------------------------
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+// Method override: lets the browser send multipart (which PHP only parses for
+// POST) while semantically performing a PATCH/DELETE/PUT.
+if ($method === 'POST') {
+    $override = strtoupper((string) ($_POST['_method'] ?? $_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE'] ?? ''));
+    if (in_array($override, ['PATCH', 'PUT', 'DELETE'], true)) {
+        $method = $override;
+    }
+}
 $path   = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 $path   = rtrim($path, '/') ?: '/';
 
@@ -123,6 +174,321 @@ try {
             'auth_source'  => $auth['user']['auth_source'],
             'roles'        => $auth['roles'],
         ]]);
+    }
+
+    // Helper: require an authenticated user; returns [AuthContext, authedArray].
+    $requireUser = static function (): array {
+        $authed = (new AuthMiddleware())->authenticate();
+        if ($authed === null) {
+            respond(401, ['error' => 'Sign in required.']);
+        }
+        return [AuthContext::fromUser($authed['user'], $authed['roles']), $authed];
+    };
+
+    // --- Bidding -------------------------------------------------------------
+    if ($method === 'POST' && preg_match('#^/api/items/([^/]+)/bids$#', $path, $m)) {
+        $itemId = rawurldecode($m[1]);
+        $authed = (new AuthMiddleware())->authenticate();
+        if ($authed === null) {
+            respond(401, ['error' => 'Sign in to place a bid.']);
+        }
+        $ctx = AuthContext::fromUser($authed['user'], $authed['roles']);
+        if (!Permissions::canBid($ctx->role)) {
+            respond(403, ['error' => 'Your account does not have bidding permission.']);
+        }
+
+        $idempotencyKey = (string) ($_SERVER['HTTP_X_IDEMPOTENCY_KEY'] ?? '');
+        if (!(new RateLimiter())->attempt('BID_ATTEMPT', "{$ctx->actor}:{$itemId}", 60000, 12, ['itemId' => $itemId])) {
+            respond(429, ['error' => 'Too many bid attempts. Please wait and try again.']);
+        }
+
+        $model = new ItemReadModel();
+        $item = $model->getItemById($itemId);
+        if ($item === null) {
+            respond(404, ['error' => 'Item not found.']);
+        }
+        $body = jsonBody();
+        $amount = (float) ($body['amount'] ?? 0);
+        $expectedCurrentBid = (float) ($body['expectedCurrentBid'] ?? 0);
+        if ($item['currentBid'] !== $expectedCurrentBid) {
+            respond(409, ['error' => 'Item bid state changed. Refresh and try again.']);
+        }
+        $validation = (new BidService())->validateBid($item, $amount);
+        if ($validation['ok'] === false) {
+            respond(400, ['error' => $validation['error']]);
+        }
+
+        $bidService = new BidService();
+        $biddingUser = (new UserRepository())->findById($ctx->userId);
+        $bidResult = $bidService->placeBidAtomically($item, $amount, $expectedCurrentBid, $ctx->userId ?? '', $idempotencyKey);
+        if ($bidResult['ok'] === false) {
+            respond($bidResult['status'], ['error' => $bidResult['error']]);
+        }
+        if ($bidResult['duplicate']) {
+            respond(409, ['error' => 'Duplicate bid submission detected.']);
+        }
+
+        (new AuditService())->append($ctx, 'BID_PLACED', 'bid', $item['id'], [
+            'amount' => $amount,
+            'bidSequence' => $bidResult['bidSequence'],
+        ]);
+
+        $bidService->queueBidActivityNotifications(
+            array_merge($item, ['currentBid' => $bidResult['currentBid']]),
+            ['userId' => $ctx->userId, 'email' => $biddingUser['email'] ?? null, 'displayName' => $biddingUser['display_name'] ?? $ctx->actor],
+            $amount,
+            $item['currentBid'] > 0 ? $bidResult['previousBidderUserId'] : null
+        );
+
+        respond(200, $model->getItemById($item['id'])); // unsanitized, matching the original
+    }
+
+    // --- User self-service (/api/me/*) ---------------------------------------
+    if ($method === 'GET' && $path === '/api/me/profile') {
+        [$ctx, $authed] = $requireUser();
+        $u = $authed['user'];
+        respond(200, [
+            'id'          => $u['id'],
+            'email'       => $u['email'],
+            'displayName' => $u['display_name'],
+            'status'      => $u['status'],
+            'createdAt'   => Dates::iso($u['created_at']),
+            'lastLoginAt' => Dates::iso($u['last_login_at']),
+            'role'        => $ctx->role,
+            'roles'       => array_map([Permissions::class, 'normalizeDisplayRoleName'], $authed['roles']),
+        ]);
+    }
+
+    if ($method === 'GET' && $path === '/api/me/sessions') {
+        [$ctx, $authed] = $requireUser();
+        $rows = (new SessionRepository())->listForUser($ctx->userId);
+        respond(200, array_map(static fn ($s) => [
+            'id'        => $s['id'],
+            'createdAt' => Dates::iso($s['created_at']),
+            'expiresAt' => Dates::iso($s['expires_at']),
+            'current'   => $s['id'] === $authed['jti'],
+        ], $rows));
+    }
+
+    if ($method === 'DELETE' && preg_match('#^/api/me/sessions/([^/]+)$#', $path, $m)) {
+        [$ctx, $authed] = $requireUser();
+        $sessions = new SessionRepository();
+        $target = $sessions->find(rawurldecode($m[1]));
+        if ($target === null || (string) $target['user_id'] !== $ctx->userId) {
+            respond(404, ['error' => 'Session not found.']);
+        }
+        $sessions->delete((string) $target['id']);
+        if ((string) $target['id'] === $authed['jti']) {
+            clearSessionCookie();
+        }
+        (new AuditService())->append($ctx, 'SESSION_REVOKED', 'user', $ctx->userId, ['revoked' => 1]);
+        respond(200, ['revoked' => true, 'message' => 'Session revoked.']);
+    }
+
+    if ($method === 'DELETE' && $path === '/api/me/sessions') {
+        [$ctx, $authed] = $requireUser();
+        $sessions = new SessionRepository();
+        $count = 0;
+        foreach ($sessions->listForUser($ctx->userId) as $s) {
+            if ((string) $s['id'] !== $authed['jti']) {
+                $sessions->delete((string) $s['id']);
+                $count++;
+            }
+        }
+        (new AuditService())->append($ctx, 'SESSIONS_REVOKED', 'user', $ctx->userId, ['count' => $count]);
+        respond(200, ['revoked' => true, 'count' => $count, 'message' => "Revoked {$count} other session(s)."]);
+    }
+
+    if ($method === 'GET' && $path === '/api/me/dashboard') {
+        [$ctx] = $requireUser();
+        $bidService = new BidService();
+        $model = new ItemReadModel();
+        $bidRecords = $bidService->getUserBidRecords($ctx->userId);
+        $sessions = (new SessionRepository())->listForUser($ctx->userId);
+        $nowMs = (int) (microtime(true) * 1000);
+        $closed = array_filter($model->getItems(true), static fn ($it) => (new DateTimeImmutable($it['endTime']))->format('Uv') < $nowMs);
+        $reserveMet = 0; $reserveNotMet = 0;
+        foreach ($closed as $it) {
+            $state = $model->reserveState($it);
+            if ($state === 'reserve_met') $reserveMet++;
+            elseif ($state === 'reserve_not_met') $reserveNotMet++;
+        }
+        respond(200, [
+            'summary' => [
+                'openBidCount'             => count(array_filter($bidRecords, static fn ($r) => in_array($r['status'], ['winning', 'outbid', 'active'], true))),
+                'wonAuctionCount'          => count(array_filter($bidRecords, static fn ($r) => $r['status'] === 'won')),
+                'activeSessionCount'       => count($sessions),
+                'totalBidCount'            => count($bidRecords),
+                'reserveMetClosedCount'    => $reserveMet,
+                'reserveNotMetClosedCount' => $reserveNotMet,
+            ],
+            'recentBidActivity' => array_slice($bidRecords, 0, 8),
+        ]);
+    }
+
+    if ($method === 'GET' && $path === '/api/me/bids') {
+        [$ctx] = $requireUser();
+        respond(200, (new BidService())->getUserBidRecords($ctx->userId));
+    }
+
+    if ($method === 'GET' && $path === '/api/me/wins') {
+        [$ctx] = $requireUser();
+        $wins = array_values(array_filter(
+            (new BidService())->getUserBidRecords($ctx->userId),
+            static fn ($r) => $r['status'] === 'won'
+        ));
+        respond(200, array_map(static fn ($r) => [
+            'id'         => $r['itemId'],
+            'title'      => $r['title'],
+            'category'   => $r['category'],
+            'currentBid' => $r['currentBid'],
+            'endTime'    => $r['endTime'],
+        ], $wins));
+    }
+
+    // Helper: require an admin (Admin/SuperAdmin) user. Returns AuthContext.
+    $requireAdmin = static function () use ($requireUser) {
+        [$ctx] = $requireUser();
+        if (!Permissions::isAdmin($ctx->role)) {
+            respond(403, ['error' => 'Admin role required.']);
+        }
+        return $ctx;
+    };
+
+    // --- Admin: bulk import (CSV + optional ZIP bundle) ----------------------
+    if ($method === 'POST' && $path === '/api/items/bulk-import') {
+        $ctx = $requireAdmin();
+        $csv = $_FILES['csv'] ?? null;
+        if (!$csv || (int) ($csv['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            respond(400, ['error' => 'Upload a CSV file first.']);
+        }
+        $csvContent = (string) file_get_contents($csv['tmp_name']);
+        $bundle = $_FILES['bundle'] ?? null;
+        $zipPath = ($bundle && (int) ($bundle['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) ? $bundle['tmp_name'] : null;
+        $result = (new BulkImportService())->import($ctx, $csvContent, $zipPath);
+        respond($result['status'], $result['body']);
+    }
+
+    // --- Admin: item create / update / archive / restore ---------------------
+    if ($method === 'POST' && $path === '/api/items') {
+        $ctx = $requireAdmin();
+        $writer = new ItemWriteService();
+        $validation = $writer->validateNewItem($_POST);
+        if ($validation['ok'] === false) {
+            respond(400, ['error' => $validation['error']]);
+        }
+        $visibility = DocumentVisibility::normalize($_POST['documentVisibility'] ?? 'admin_only');
+        $storage = new FileStorage();
+        $images = array_map(fn ($f) => $storage->store($f['tmp_name'], $f['name'], 'image', 'bidder_visible', true), uploadedFiles('images'));
+        $documents = array_map(fn ($f) => $storage->store($f['tmp_name'], $f['name'], 'document', $visibility, true), uploadedFiles('documents'));
+        $itemId = $writer->createItemRecord($ctx, $validation['value'], $images, $documents);
+        respond(201, (new ItemReadModel())->getItemById($itemId, true));
+    }
+
+    if ($method === 'PATCH' && preg_match('#^/api/items/([^/]+)$#', $path, $m)) {
+        $ctx = $requireAdmin();
+        $itemId = rawurldecode($m[1]);
+        $model = new ItemReadModel();
+        if ($model->getItemById($itemId, true) === null) {
+            respond(404, ['error' => 'Item not found.']);
+        }
+        $writer = new ItemWriteService();
+        $validation = $writer->validateNewItem($_POST);
+        if ($validation['ok'] === false) {
+            respond(400, ['error' => $validation['error']]);
+        }
+        $visibility = DocumentVisibility::normalize($_POST['documentVisibility'] ?? 'admin_only');
+        $storage = new FileStorage();
+        $images = array_map(fn ($f) => $storage->store($f['tmp_name'], $f['name'], 'image', 'bidder_visible', true), uploadedFiles('images'));
+        $documents = array_map(fn ($f) => $storage->store($f['tmp_name'], $f['name'], 'document', $visibility, true), uploadedFiles('documents'));
+        $writer->updateItem($ctx, $itemId, $validation['value'], $images, $documents);
+        respond(200, $model->getItemById($itemId, true));
+    }
+
+    if ($method === 'DELETE' && preg_match('#^/api/items/([^/]+)$#', $path, $m)) {
+        $ctx = $requireAdmin();
+        $itemId = rawurldecode($m[1]);
+        $existing = (new ItemReadModel())->getItemById($itemId, true);
+        if ($existing === null) {
+            respond(404, ['error' => 'Item not found.']);
+        }
+        (new ItemWriteService())->archive($ctx, $itemId, $existing['title']);
+        respond(200, ['ok' => true]);
+    }
+
+    if ($method === 'POST' && preg_match('#^/api/items/([^/]+)/restore$#', $path, $m)) {
+        $ctx = $requireAdmin();
+        $itemId = rawurldecode($m[1]);
+        $model = new ItemReadModel();
+        $existing = $model->getItemById($itemId, true);
+        if ($existing === null) {
+            respond(404, ['error' => 'Item not found.']);
+        }
+        (new ItemWriteService())->restore($ctx, $itemId, $existing['title']);
+        respond(200, $model->getItemById($itemId, true));
+    }
+
+    // --- Admin: categories ---------------------------------------------------
+    if ($method === 'POST' && $path === '/api/categories') {
+        $ctx = $requireAdmin();
+        $body = $_POST ?: jsonBody();
+        $writer = new ItemWriteService();
+        $validation = $writer->validateCategoryName((string) ($body['name'] ?? ''));
+        if ($validation['ok'] === false) {
+            respond(400, ['error' => $validation['error']]);
+        }
+        $created = (new CategoryRepository())->upsert($validation['value']);
+        (new AuditService())->append($ctx, $created ? 'CATEGORY_CREATED' : 'CATEGORY_RECONFIRMED', 'system', $validation['value'], [
+            'category' => $validation['value'], 'created' => $created,
+        ]);
+        respond($created ? 201 : 200, ['created' => $created]);
+    }
+
+    if ($method === 'DELETE' && preg_match('#^/api/categories/([^/]+)$#', $path, $m)) {
+        $ctx = $requireAdmin();
+        $writer = new ItemWriteService();
+        $validation = $writer->validateCategoryName(rawurldecode($m[1]));
+        if ($validation['ok'] === false) {
+            respond(400, ['error' => $validation['error']]);
+        }
+        $categories = new CategoryRepository();
+        if ($categories->isAssignedToItem($validation['value'])) {
+            respond(409, ['error' => 'Category is assigned to one or more items.']);
+        }
+        if (!$categories->exists($validation['value'])) {
+            respond(404, ['error' => 'Category not found.']);
+        }
+        $categories->delete($validation['value']);
+        (new AuditService())->append($ctx, 'CATEGORY_DELETED', 'system', $validation['value'], ['category' => $validation['value']]);
+        respond(200, ['ok' => true]);
+    }
+
+    // --- Admin/ShopOwner: items CSV export -----------------------------------
+    if ($method === 'GET' && $path === '/api/exports/items.csv') {
+        [$ctx] = $requireUser();
+        if (!Permissions::canViewItemOperations($ctx->role)) {
+            respond(403, ['error' => 'Item operations access required.']);
+        }
+        $model = new ItemReadModel();
+        $nowMs = (int) (microtime(true) * 1000);
+        $items = array_map(fn ($it) => $model->sanitizeForAuth($it, $ctx), $model->getItems($ctx->adminAuthorized));
+        $rows = array_map(function ($item) use ($ctx, $model, $nowMs) {
+            $winner = '';
+            if ((int) (new DateTimeImmutable($item['endTime']))->format('Uv') <= $nowMs && $item['currentBid'] > 0) {
+                foreach ($item['bids'] as $bid) {
+                    if ($bid['amount'] === $item['currentBid']) { $winner = $bid['bidder']; break; }
+                }
+            }
+            return [
+                'winner' => $winner, 'id' => $item['id'], 'title' => $item['title'], 'category' => $item['category'],
+                'lot' => $item['lot'], 'sku' => $item['sku'], 'condition' => $item['condition'], 'location' => $item['location'],
+                'startBid' => $item['startBid'], 'reserve' => Permissions::canViewReserve($ctx->role) ? ($item['reserve'] ?? '') : '',
+                'increment' => $item['increment'], 'currentBid' => $item['currentBid'], 'reserveOutcome' => $model->reserveState($item),
+                'startTime' => $item['startTime'], 'endTime' => $item['endTime'], 'bidCount' => count($item['bids']),
+            ];
+        }, $items);
+        (new AuditService())->append($ctx, 'EXPORT_ITEMS', 'export', 'items.csv', ['rowCount' => count($rows)]);
+        sendRaw(200, 'text/csv', Csv::build($rows), ['Content-Disposition' => 'attachment; filename="items.csv"']);
     }
 
     // --- Catalog (public reads, sanitized per role) --------------------------

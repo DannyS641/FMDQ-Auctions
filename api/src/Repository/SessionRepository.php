@@ -36,6 +36,25 @@ final class SessionRepository
         return $row === false ? null : $row;
     }
 
+    /** @return array<string,mixed>|null any session row (regardless of expiry) */
+    public function find(string $id): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sessions WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $id]);
+        $row = $stmt->fetch();
+        return $row === false ? null : $row;
+    }
+
+    /** @return array<int,array<string,mixed>> the user's sessions, newest first */
+    public function listForUser(string $userId): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT id, created_at, expires_at FROM sessions WHERE user_id = :uid ORDER BY created_at DESC'
+        );
+        $stmt->execute([':uid' => $userId]);
+        return $stmt->fetchAll();
+    }
+
     public function delete(string $id): void
     {
         $stmt = Database::pdo()->prepare('DELETE FROM sessions WHERE id = :id');

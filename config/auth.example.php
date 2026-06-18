@@ -77,6 +77,31 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // File storage (item images/documents). Lives OUTSIDE the web root; Apache
+    // serves it through access-controlled routes (Phase 5). Leave uploads_dir
+    // empty to default to <project>/storage/uploads.
+    // -------------------------------------------------------------------------
+    'storage' => [
+        'uploads_dir'    => '',
+        'max_file_bytes' => 15 * 1024 * 1024,
+    ],
+
+    // Bulk-import (CSV + optional ZIP bundle) safety limits.
+    'import' => [
+        'max_archive_entries' => 200,
+        'max_extracted_bytes' => 50 * 1024 * 1024,
+    ],
+
+    // -------------------------------------------------------------------------
+    // Notifications. 'to' is the ops recipient for item lifecycle emails
+    // (created/updated/archived). Empty = those emails are skipped.
+    // -------------------------------------------------------------------------
+    'notify' => [
+        'to'   => '',
+        'from' => 'no-reply@fmdq.com',
+    ],
+
+    // -------------------------------------------------------------------------
     // AD group (DN) -> application role. Keys are AD group distinguished names
     // (compared case-insensitively). Values must exist in the `roles` table
     // (Admin | Bidder | Observer). A user gets the UNION of all matches.

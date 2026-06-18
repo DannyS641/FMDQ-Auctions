@@ -18,6 +18,20 @@ final class DocumentVisibility
 
     private const PREFIX = 'vis:';
 
+    /** Encode a document's display name with its visibility (port of encodeDocumentNameWithVisibility). */
+    public static function encode(string $name, string $visibility): string
+    {
+        return self::PREFIX . $visibility . '::' . $name;
+    }
+
+    /** Normalize a free-form visibility value; default admin_only (port of normalizeDocumentVisibility). */
+    public static function normalize(?string $value): string
+    {
+        $v = strtolower(trim((string) $value));
+        if ($v === self::BIDDER_VISIBLE || $v === self::WINNER_ONLY) return $v;
+        return self::ADMIN_ONLY;
+    }
+
     /** @return array{displayName:string,visibility:string} */
     public static function parse(string $storedName): array
     {

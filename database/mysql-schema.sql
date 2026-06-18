@@ -241,9 +241,11 @@ CREATE TABLE IF NOT EXISTS notification_queue (
 
 -- -----------------------------------------------------------------------------
 -- security_events  (was: deny-all RLS; jsonb -> JSON)
+--   id is NOT a UUID here: the rate limiter stores a 64-char HMAC-SHA256 hex as
+--   the PK (slot key). Widened to VARCHAR(64). (Postgres used unbounded text.)
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS security_events (
-  id            CHAR(36)     NOT NULL,
+  id            VARCHAR(64)  NOT NULL,
   event_type    VARCHAR(64)  NOT NULL,
   actor         VARCHAR(255) NOT NULL,
   request_id    VARCHAR(255) NOT NULL,

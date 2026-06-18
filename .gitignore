@@ -19,3 +19,6 @@ server/data/quarantine/
 # Phase 2 auth — local secrets (never commit)
 config/auth.php
 config/test.php
+
+# Phase 3c — locally stored item uploads
+storage/uploads/
