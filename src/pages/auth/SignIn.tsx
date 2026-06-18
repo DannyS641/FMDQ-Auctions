@@ -14,7 +14,7 @@ import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/context/auth-context";
 
 const schema = z.object({
-  email: z.string().email("Enter a valid email address"),
+  email: z.string().trim().min(1, "Username or email is required"),
   password: z.string().min(1, "Password is required"),
 });
 
@@ -46,9 +46,9 @@ export default function SignIn() {
     },
     onError: (err) => {
       if (err instanceof ApiError && err.status === 401) {
-        setError("password", { message: "Invalid email or password" });
+        setError("password", { message: err.message || "Invalid username or password" });
       } else if (err instanceof ApiError && err.status === 403) {
-        toast.error("Your account is not yet verified. Check your email for the verification link.");
+        toast.error(err.message);
       } else {
         toast.error(err instanceof Error ? err.message : "Sign in failed. Please try again.");
       }
@@ -64,10 +64,10 @@ export default function SignIn() {
         <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate">Sign in</p>
         <Input
           id="email"
-          type="email"
-          label="Email address"
+          type="text"
+          label="Username or email"
           placeholder="you@example.com"
-          autoComplete="email"
+          autoComplete="username"
           error={errors.email?.message}
           {...register("email")}
         />
