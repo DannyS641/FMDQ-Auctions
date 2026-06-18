@@ -12,6 +12,31 @@ type AuthRoleRow = { role_name: string };
 type StoredBidRecord = { status: string };
 type StoredItemSummary = { endTime: string; currentBid: number; reserve?: number };
 type EmailVerificationRow = { id: string; user_id: string; token: string; created_at: string; expires_at: string };
+type AdAuthRoleMap = Partial<Record<Exclude<Role, "Guest">, string[]>>;
+type AdAuthConfig = {
+  enabled: boolean;
+  endpoint: string;
+  apiKey?: string;
+  apiKeyHeader: string;
+  usernameField: string;
+  passwordField: string;
+  authenticatedPath: string;
+  usernamePath: string;
+  emailPath: string;
+  emailDomain: string;
+  displayNamePath: string;
+  groupsPath: string;
+  timeoutMs: number;
+  defaultRole?: Exclude<Role, "Guest">;
+  roleMap: AdAuthRoleMap;
+};
+type AdAuthResult = {
+  authenticated: boolean;
+  username: string;
+  email: string;
+  displayName: string;
+  groups: string[];
+};
 
 type RegisterAuthRoutesOptions = {
   app: express.Express;
@@ -54,6 +79,89 @@ type RegisterAuthRoutesOptions = {
   getItems: (includeArchived?: boolean) => Promise<StoredItemSummary[]>;
   getReserveState: (item: StoredItemSummary) => string;
   randomUUID: () => string;
+  adAuthConfig: AdAuthConfig;
+};
+
+const getPathValue = (value: unknown, path: string): unknown => {
+  if (!path) return undefined;
+  return path.split(".").reduce<unknown>((current, key) => {
+    if (current && typeof current === "object" && key in current) {
+      return (current as Record<string, unknown>)[key];
+    }
+    return undefined;
+  }, value);
+};
+
+const stringFromPath = (value: unknown, path: string) => {
+  const rawValue = getPathValue(value, path);
+  return typeof rawValue === "string" ? rawValue.trim() : "";
+};
+
+const stringListFromPath = (value: unknown, path: string) => {
+  const rawValue = getPathValue(value, path);
+  if (Array.isArray(rawValue)) {
+    return rawValue.map((entry) => String(entry).trim()).filter(Boolean);
+  }
+  if (typeof rawValue === "string") {
+    return rawValue.split(",").map((entry) => entry.trim()).filter(Boolean);
+  }
+  return [];
+};
+
+const includesAnyGroup = (groups: string[], configuredGroups = []) => {
+  const normalizedGroups = groups.map((group) => group.toLowerCase());
+  return configuredGroups.some((configuredGroup) => {
+    const normalizedConfiguredGroup = configuredGroup.toLowerCase();
+    return normalizedGroups.some((group) => group === normalizedConfiguredGroup || group.includes(normalizedConfiguredGroup));
+  });
+};
+
+const mapAdRole = (groups: string[], config: AdAuthConfig): Exclude<Role, "Guest"> | null => {
+  if (includesAnyGroup(groups, config.roleMap.SuperAdmin)) return "SuperAdmin";
+  if (includesAnyGroup(groups, config.roleMap.Admin)) return "Admin";
+  if (includesAnyGroup(groups, config.roleMap.ShopOwner)) return "ShopOwner";
+  if (includesAnyGroup(groups, config.roleMap.Bidder)) return "Bidder";
+  return config.defaultRole || null;
+};
+
+const authenticateWithAdEndpoint = async (
+  identifier: string,
+  password: string,
+  config: AdAuthConfig
+): Promise<AdAuthResult> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (config.apiKey) {
+      headers[config.apiKeyHeader] = config.apiKey;
+    }
+    const response = await fetch(config.endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        [config.usernameField]: identifier,
+        [config.passwordField]: password,
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null) as unknown;
+    if (!response.ok) {
+      return { authenticated: false, username: identifier, email: "", displayName: "", groups: [] };
+    }
+    const authenticatedValue = getPathValue(payload, config.authenticatedPath);
+    const authenticated =
+      config.authenticatedPath ? authenticatedValue === true || authenticatedValue === "true" || authenticatedValue === "success" : true;
+    return {
+      authenticated,
+      username: stringFromPath(payload, config.usernamePath) || identifier,
+      email: stringFromPath(payload, config.emailPath),
+      displayName: stringFromPath(payload, config.displayNamePath),
+      groups: stringListFromPath(payload, config.groupsPath),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 };
 
 export const registerAuthRoutes = ({
@@ -97,6 +205,7 @@ export const registerAuthRoutes = ({
   getItems,
   getReserveState,
   randomUUID,
+  adAuthConfig,
 }: RegisterAuthRoutesOptions) => {
   app.get("/api/auth/me", asyncHandler(async (req, res) => {
     const session = await serializeSession(req);
@@ -198,11 +307,124 @@ export const registerAuthRoutes = ({
   }));
 
   app.post("/api/auth/login", express.json({ limit: "128kb" }), asyncHandler(async (req, res) => {
-    const email = normalizeEmail(String(req.body?.email || ""));
+    const loginIdentifier = String(req.body?.email || "").trim();
+    const email = normalizeEmail(loginIdentifier);
     const password = String(req.body?.password || "");
-    const auditActor = sanitizeDisplayName(email) || "unknown";
-    if (!(await checkAuthRateLimit(req, getClientKey(req, `login:${email}`)))) {
+    const auditActor = sanitizeDisplayName(loginIdentifier) || "unknown";
+    if (!(await checkAuthRateLimit(req, getClientKey(req, `login:${loginIdentifier}`)))) {
       res.status(429).json({ error: "Too many sign-in attempts. Please wait and try again." });
+      return;
+    }
+    if (adAuthConfig.enabled) {
+      if (!loginIdentifier || !password) {
+        res.status(400).json({ error: "Username and password are required." });
+        return;
+      }
+      let adResult: AdAuthResult;
+      try {
+        adResult = await authenticateWithAdEndpoint(loginIdentifier, password, adAuthConfig);
+      } catch (error) {
+        console.error("AD endpoint authentication failed", error);
+        res.status(502).json({ error: "Could not reach the AD authentication endpoint. Check the endpoint URL, auth header, network, or SSL certificate." });
+        return;
+      }
+      if (!adResult.authenticated) {
+        await appendAudit(req, {
+          eventType: "LOGIN_FAILED",
+          entityType: "auth",
+          entityId: loginIdentifier || "unknown",
+          actor: auditActor,
+          actorType: "user",
+          details: { loginIdentifier, reason: "ad_invalid_credentials" },
+        });
+        res.status(401).json({ error: "Invalid username or password." });
+        return;
+      }
+      const mappedRole = mapAdRole(adResult.groups, adAuthConfig);
+      if (!mappedRole) {
+        await appendAudit(req, {
+          eventType: "LOGIN_BLOCKED",
+          entityType: "auth",
+          entityId: adResult.email || adResult.username,
+          actor: sanitizeDisplayName(adResult.displayName || adResult.username) || "unknown",
+          actorType: "user",
+          details: { loginIdentifier, reason: "ad_group_not_authorized" },
+        });
+        res.status(403).json({ error: "Your AD account is not authorized for the auctions portal." });
+        return;
+      }
+      const derivedEmail =
+        adResult.email
+        || (loginIdentifier.includes("@") ? loginIdentifier : "")
+        || (adAuthConfig.emailDomain ? `${adResult.username}@${adAuthConfig.emailDomain}` : "");
+      const userEmail = normalizeEmail(derivedEmail);
+      if (!userEmail) {
+        res.status(502).json({ error: "AD authentication succeeded, but the response did not include an email address." });
+        return;
+      }
+      const displayName = sanitizeDisplayName(adResult.displayName || adResult.username || userEmail.split("@")[0]);
+      const existingUser = await getUserByEmail(userEmail);
+      const now = new Date().toISOString();
+      let user = existingUser;
+      if (!user) {
+        const userId = randomUUID();
+        await handleSupabase(
+          await supabase.from("users").insert({
+            id: userId,
+            email: userEmail,
+            password_hash: hashPassword(randomUUID()),
+            display_name: displayName,
+            status: "active",
+            created_at: now,
+            last_login_at: now,
+          })
+        );
+        user = await getUserByEmail(userEmail);
+      } else if (user.status === "disabled") {
+        await appendAudit(req, {
+          eventType: "LOGIN_BLOCKED",
+          entityType: "auth",
+          entityId: user.id,
+          actor: user.display_name,
+          actorType: "user",
+          details: { email: user.email, reason: "status_disabled" },
+        });
+        res.status(403).json({ error: "This account is not active." });
+        return;
+      } else {
+        await handleSupabase(
+          await supabase.from("users").update({ display_name: displayName, status: "active", last_login_at: now }).eq("id", user.id)
+        );
+        user = await getUserByEmail(userEmail);
+      }
+      if (!user) {
+        res.status(500).json({ error: "Could not create or load the authenticated user." });
+        return;
+      }
+      await handleSupabase(await supabase.from("user_roles").delete().eq("user_id", user.id));
+      await handleSupabase(await supabase.from("user_roles").insert({ user_id: user.id, role_name: mappedRole, created_at: now }));
+      const sessionRecord = await createUserSession(res, user.id);
+      await appendAudit(req, {
+        eventType: "LOGIN_SUCCEEDED",
+        entityType: "auth",
+        entityId: user.id,
+        actor: user.display_name,
+        actorType: "user",
+        details: { email: user.email, role: mappedRole, authProvider: "ad_endpoint" },
+      });
+      res.json({
+        signedIn: true,
+        user: {
+          id: user.id,
+          email: user.email,
+          displayName: user.display_name,
+          status: user.status,
+          createdAt: user.created_at,
+          lastLoginAt: now,
+          role: mappedRole,
+        },
+        csrfToken: buildCsrfToken(sessionRecord.sessionId),
+      });
       return;
     }
     const user = await getUserByEmail(email);
