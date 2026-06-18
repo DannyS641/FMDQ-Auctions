@@ -70,6 +70,49 @@ const configuredAdminApiToken = process.env.ADMIN_API_TOKEN || "";
 const adminApiTokenEnabled =
   runtimeEnvironment === "development" && String(process.env.ENABLE_ADMIN_API_TOKEN || "").toLowerCase() === "true";
 const adminApiToken = adminApiTokenEnabled ? configuredAdminApiToken : "";
+const parseCsvSetting = (value: string) =>
+  value.split(",").map((entry) => entry.trim()).filter(Boolean);
+const parseAuthHeaderSetting = (value: string) => {
+  const trimmedValue = value.trim().replace(/^VITE_API_AUTH_HEADER=/, "").trim();
+  if (!trimmedValue) return { header: "", value: "" };
+  const separatorAt = trimmedValue.indexOf(":");
+  if (separatorAt > 0) {
+    return {
+      header: trimmedValue.slice(0, separatorAt).trim(),
+      value: trimmedValue.slice(separatorAt + 1).trim(),
+    };
+  }
+  if (/^(Bearer|Basic)\s+/i.test(trimmedValue)) {
+    return { header: "Authorization", value: trimmedValue };
+  }
+  return { header: "Authorization", value: trimmedValue };
+};
+const validAdDefaultRoles = new Set(["Bidder", "ShopOwner", "Admin", "SuperAdmin"]);
+const adAuthDefaultRoleValue = process.env.AD_AUTH_DEFAULT_ROLE || "";
+const viteApiAuthHeader = parseAuthHeaderSetting(process.env.VITE_API_AUTH_HEADER || "");
+const adAuthEndpoint = process.env.AD_AUTH_ENDPOINT || process.env.VITE_API_AUTH_ENDPOINT || "";
+const adAuthConfig = {
+  enabled: String(process.env.AD_AUTH_ENABLED || "").toLowerCase() === "true" || Boolean(adAuthEndpoint),
+  endpoint: adAuthEndpoint,
+  apiKey: process.env.AD_AUTH_API_KEY || viteApiAuthHeader.value,
+  apiKeyHeader: process.env.AD_AUTH_API_KEY_HEADER || viteApiAuthHeader.header || "Authorization",
+  usernameField: process.env.AD_AUTH_USERNAME_FIELD || "username",
+  passwordField: process.env.AD_AUTH_PASSWORD_FIELD || "password",
+  authenticatedPath: process.env.AD_AUTH_AUTHENTICATED_PATH || "authenticated",
+  usernamePath: process.env.AD_AUTH_USERNAME_PATH || "username",
+  emailPath: process.env.AD_AUTH_EMAIL_PATH || "email",
+  emailDomain: process.env.AD_AUTH_EMAIL_DOMAIN || "",
+  displayNamePath: process.env.AD_AUTH_DISPLAY_NAME_PATH || "displayName",
+  groupsPath: process.env.AD_AUTH_GROUPS_PATH || "groups",
+  timeoutMs: Math.max(Number(process.env.AD_AUTH_TIMEOUT_MS || 10000), 1000),
+  defaultRole: validAdDefaultRoles.has(adAuthDefaultRoleValue) ? adAuthDefaultRoleValue as "Bidder" | "ShopOwner" | "Admin" | "SuperAdmin" : "Bidder",
+  roleMap: {
+    SuperAdmin: parseCsvSetting(process.env.AD_AUTH_SUPER_ADMIN_GROUPS || ""),
+    Admin: parseCsvSetting(process.env.AD_AUTH_ADMIN_GROUPS || ""),
+    ShopOwner: parseCsvSetting(process.env.AD_AUTH_SHOP_OWNER_GROUPS || ""),
+    Bidder: parseCsvSetting(process.env.AD_AUTH_BIDDER_GROUPS || ""),
+  },
+};
 const notificationRecipient = process.env.NOTIFY_TO || "operations@fmdq.example";
 const notificationTransport = (process.env.NOTIFY_TRANSPORT || "file").toLowerCase();
 const notificationPollMs = Math.max(Number(process.env.NOTIFY_POLL_MS || 5000), 1000);
@@ -143,6 +186,9 @@ if (configuredAdminApiToken && !adminApiTokenEnabled) {
   throw new Error(
     "ADMIN_API_TOKEN is only allowed when NODE_ENV=development and ENABLE_ADMIN_API_TOKEN=true. Remove it from shared/staging/production environments."
   );
+}
+if (adAuthConfig.enabled && !adAuthConfig.endpoint) {
+  throw new Error("AD_AUTH_ENDPOINT is required when AD_AUTH_ENABLED=true.");
 }
 const malwareConfigCheck = validateMalwareScanConfiguration(process.env.NODE_ENV, malwareScanMode, malwareScanCommand);
 if (!malwareConfigCheck.ok) {
@@ -1148,6 +1194,7 @@ registerAuthRoutes({
   getItems,
   getReserveState,
   randomUUID,
+  adAuthConfig,
 });
 
 registerCatalogRoutes({
