@@ -57,6 +57,17 @@ final class ItemRepository
         return $stmt->fetchAll();
     }
 
+    /** @return array<string,mixed>|null the item_files row for a public url + kind */
+    public function findFileByUrl(string $url, string $kind): ?array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT item_id, kind, name, url FROM item_files WHERE url = :url AND kind = :kind LIMIT 1'
+        );
+        $stmt->execute([':url' => $url, ':kind' => $kind]);
+        $row = $stmt->fetch();
+        return $row === false ? null : $row;
+    }
+
     /**
      * @param string[] $itemIds
      * @return array<int,array<string,mixed>>

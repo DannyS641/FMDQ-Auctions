@@ -191,6 +191,21 @@ final class ItemReadModel
     }
 
     /**
+     * Whether the caller can download a document of the given visibility on this
+     * item (port of canAccessItemDocument). Builds the doc context from item state.
+     * @param array<string,mixed> $item
+     */
+    public function canAccessDocument(AuthContext $ctx, array $item, string $visibility): bool
+    {
+        return DocumentVisibility::canAccess($ctx, [
+            'itemArchived' => !empty($item['archivedAt']),
+            'itemEnded'    => self::ms($item['endTime']) <= self::nowMs(),
+            'reserveState' => $this->reserveState($item),
+            'isWinner'     => $this->isUserWinning($ctx, $item),
+        ], $visibility);
+    }
+
+    /**
      * Port of sanitizeItemForAuth: hide reserve from non-admins, anonymize bidder
      * identities from non-operators, and drop documents the caller cannot access.
      * @param array<string,mixed> $item

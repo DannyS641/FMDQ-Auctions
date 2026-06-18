@@ -31,12 +31,14 @@ use App\Middleware\AuthMiddleware;
 use App\Notifications\NotificationProcessor;
 use App\RateLimit\RateLimiter;
 use App\Repository\CategoryRepository;
+use App\Repository\ItemRepository;
 use App\Repository\RoleRepository;
 use App\Repository\SessionRepository;
 use App\Repository\UserRepository;
 use App\Storage\FileStorage;
 use App\Support\Csv;
 use App\Support\Dates;
+use App\Support\Mime;
 
 header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
@@ -110,6 +112,20 @@ function sendRaw(int $status, string $contentType, string $body, array $headers 
     exit;
 }
 
+/** Stream a file from disk and stop. */
+function sendFile(string $path, string $contentType, string $disposition = ''): never
+{
+    http_response_code(200);
+    header('Content-Type: ' . $contentType);
+    header('Cache-Control: private, max-age=300');
+    header('Content-Length: ' . (string) filesize($path));
+    if ($disposition !== '') {
+        header('Content-Disposition: ' . $disposition);
+    }
+    readfile($path);
+    exit;
+}
+
 /** Normalize $_FILES[$field] into a flat list of successfully-uploaded files. */
 function uploadedFiles(string $field): array
 {
@@ -168,6 +184,61 @@ try {
 
     if ($method === 'GET' && $path === '/api/health') {
         respond(200, ['ok' => true, 'service' => 'fmdq-auctions-api', 'phase' => 2]);
+    }
+
+    // --- Storage: access-controlled file serving (Phase 5) -------------------
+    if ($method === 'GET' && preg_match('#^/uploads/images/(.+)$#', $path, $m)) {
+        $file = Mime::safeStoredName(rawurldecode($m[1]));
+        if ($file === null) {
+            respond(404, ['error' => 'Image not found.']);
+        }
+        $policy = (string) (\App\Config::load()['storage']['image_access_policy'] ?? 'public');
+        if ($policy !== 'public') {
+            $ctx = (new AuthMiddleware())->context();
+            if (!$ctx->signedIn) {
+                respond(401, ['error' => 'Sign in required to access item images.']);
+            }
+            if ($policy === 'bidder_visible') {
+                $row = (new ItemRepository())->findFileByUrl('/uploads/images/' . $file, 'image');
+                $item = $row ? (new ItemReadModel())->getItemById((string) $row['item_id'], true) : null;
+                $visible = $item !== null && empty($item['archivedAt']);
+                if (!$ctx->adminAuthorized && (!$visible || !($ctx->role === 'Bidder' || Permissions::canViewItemOperations($ctx->role)))) {
+                    respond(403, ['error' => 'You do not have access to this image.']);
+                }
+            }
+        }
+        $abs = (new FileStorage())->resolve('images', $file);
+        if ($abs === null) {
+            respond(404, ['error' => 'Image not found.']);
+        }
+        sendFile($abs, Mime::forFile($file, 'image/jpeg'));
+    }
+
+    if ($method === 'GET' && preg_match('#^/uploads/documents/(.+)$#', $path, $m)) {
+        $ctx = (new AuthMiddleware())->context();
+        if (!$ctx->signedIn) {
+            respond(401, ['error' => 'Sign in required to access documents.']);
+        }
+        $file = Mime::safeStoredName(rawurldecode($m[1]));
+        if ($file === null) {
+            respond(404, ['error' => 'Document not found.']);
+        }
+        $row = (new ItemRepository())->findFileByUrl('/uploads/documents/' . $file, 'document');
+        if ($row === null) {
+            respond(404, ['error' => 'Document not found.']);
+        }
+        $model = new ItemReadModel();
+        $item = $model->getItemById((string) $row['item_id'], true);
+        $parsed = DocumentVisibility::parse((string) $row['name']);
+        if ($item === null || !$model->canAccessDocument($ctx, $item, $parsed['visibility'])) {
+            respond(403, ['error' => 'You do not have access to this document.']);
+        }
+        $abs = (new FileStorage())->resolve('documents', $file);
+        if ($abs === null) {
+            respond(404, ['error' => 'Document file not found.']);
+        }
+        sendFile($abs, Mime::forFile($parsed['displayName'], 'application/octet-stream'),
+            'inline; filename="' . addslashes($parsed['displayName']) . '"');
     }
 
     if ($method === 'POST' && $path === '/api/auth/login') {

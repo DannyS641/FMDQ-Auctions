@@ -104,6 +104,9 @@ return [
     'storage' => [
         'uploads_dir'    => '',
         'max_file_bytes' => 15 * 1024 * 1024,
+        // Image access: 'public' (anyone can view item photos) or 'bidder_visible'
+        // (signed-in bidders/operators only). Documents are ALWAYS access-gated.
+        'image_access_policy' => 'public',
     ],
 
     // Bulk-import (CSV + optional ZIP bundle) safety limits.
@@ -117,11 +120,24 @@ return [
     // (created/updated/archived). Empty = those emails are skipped.
     // -------------------------------------------------------------------------
     'notify' => [
-        'to'        => '',
-        'from'      => 'no-reply@fmdq.com',
+        'to'           => '',
+        'from'         => 'no-reply@fmdq.com',
         // 'file' (dev: no real email; verify/reset URLs returned in API responses)
         // or 'smtp' (production: links delivered by email only).
-        'transport' => 'file',
+        'transport'    => 'file',
+        'outbox_dir'   => '',  // default <project>/storage/outbox
+        'deadletter_dir' => '', // default <project>/storage/deadletter
+        'max_attempts' => 5,
+    ],
+
+    // SMTP delivery (used only when notify.transport = 'smtp').
+    'smtp' => [
+        'host'   => '',
+        'port'   => 587,
+        'secure' => 'starttls', // 'starttls' (587) | 'ssl' (465) | 'none'
+        'user'   => '',
+        'pass'   => '',
+        'timeout' => 15,
     ],
 
     // -------------------------------------------------------------------------

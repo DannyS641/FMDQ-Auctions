@@ -208,7 +208,7 @@ final class BidService
         float $amount,
         ?string $previousLeaderUserId
     ): void {
-        $appBaseUrl = rtrim((string) (Config::load()['jwt']['issuer_url'] ?? ''), '/');
+        $appBaseUrl = rtrim((string) (Config::load()['app']['base_url'] ?? ''), '/');
         $imageUrl = isset($item['images'][0]['url']) ? $appBaseUrl . $item['images'][0]['url'] : '';
         $itemUrl = $appBaseUrl . '/items/' . $item['id'];
 

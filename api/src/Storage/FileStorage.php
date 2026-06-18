@@ -73,6 +73,16 @@ final class FileStorage
         ];
     }
 
+    /** Absolute path to a stored file if it exists on disk, else null. */
+    public function resolve(string $subdir, string $storedName): ?string
+    {
+        if (!in_array($subdir, ['images', 'documents'], true)) {
+            return null;
+        }
+        $path = $this->uploadsDir . '/' . $subdir . '/' . $storedName;
+        return is_file($path) ? $path : null;
+    }
+
     /** Delete a managed file by its public url (best-effort). */
     public function deleteByUrl(string $url): void
     {

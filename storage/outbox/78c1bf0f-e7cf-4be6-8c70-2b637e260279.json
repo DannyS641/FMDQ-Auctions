@@ -1,0 +1,8 @@
+{
+    "id": "78c1bf0f-e7cf-4be6-8c70-2b637e260279",
+    "eventType": "PASSWORD_RESET",
+    "recipient": "alice@gmail.com",
+    "subject": "Reset your FMDQ Auctions password",
+    "text": "Hello Alice A,\n\nUse the link below to reset your FMDQ Auctions password:\nhttp://localhost:8888/reset-password?token=eyJ0eXBlIjoicGFzc3dvcmQtcmVzZXQiLCJzdWIiOiJmOTlmZDdhMS02NTA5LTRhOGEtYjcwZC1jMDAwZjM4Y2RlOTUiLCJlbWFpbCI6ImFsaWNlQGdtYWlsLmNvbSIsImV4cCI6IjIwMjYtMDYtMThUMTY6NTA6MjguNjA2WiIsImZwIjoiOWZkMmE2Zjk3NTgxNTZiZmQyZmM2YzU2In0.8xiTIsRZNEWU6U_7zKDjNUX7ax9g67zsiw0vbCMXTCk\n\nThis link expires in 1 hour.",
+    "html": "<div style=\"font-family:Arial,sans-serif;line-height:1.6;color:#111827;\"><p>Hello Alice A,</p><p>Use the link below to reset your FMDQ Auctions password:</p><p><a href=\"http://localhost:8888/reset-password?token=eyJ0eXBlIjoicGFzc3dvcmQtcmVzZXQiLCJzdWIiOiJmOTlmZDdhMS02NTA5LTRhOGEtYjcwZC1jMDAwZjM4Y2RlOTUiLCJlbWFpbCI6ImFsaWNlQGdtYWlsLmNvbSIsImV4cCI6IjIwMjYtMDYtMThUMTY6NTA6MjguNjA2WiIsImZwIjoiOWZkMmE2Zjk3NTgxNTZiZmQyZmM2YzU2In0.8xiTIsRZNEWU6U_7zKDjNUX7ax9g67zsiw0vbCMXTCk\">http://localhost:8888/reset-password?token=eyJ0eXBlIjoicGFzc3dvcmQtcmVzZXQiLCJzdWIiOiJmOTlmZDdhMS02NTA5LTRhOGEtYjcwZC1jMDAwZjM4Y2RlOTUiLCJlbWFpbCI6ImFsaWNlQGdtYWlsLmNvbSIsImV4cCI6IjIwMjYtMDYtMThUMTY6NTA6MjguNjA2WiIsImZwIjoiOWZkMmE2Zjk3NTgxNTZiZmQyZmM2YzU2In0.8xiTIsRZNEWU6U_7zKDjNUX7ax9g67zsiw0vbCMXTCk</a></p><p>This link expires in 1 hour.</p></div>"
+}
