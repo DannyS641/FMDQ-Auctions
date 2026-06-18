@@ -47,7 +47,9 @@
     "zustand": "^5.0.12"
   },
   "overrides": {
-    "path-to-regexp": "0.1.13"
+    "path-to-regexp": "0.1.13",
+    "esbuild": "^0.28.1",
+    "uuid": "^11.1.1"
   },
   "devDependencies": {
     "@tanstack/react-query-devtools": "^5.96.2",
