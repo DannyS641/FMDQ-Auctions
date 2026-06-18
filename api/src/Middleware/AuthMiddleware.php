@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace App\Middleware;
 
+use App\Auth\AuthContext;
 use App\Auth\Jwt;
 use App\Config;
 use App\Repository\SessionRepository;
@@ -54,6 +55,18 @@ final class AuthMiddleware
         $roles = $this->users->getRoles($userId);
 
         return ['user' => $user, 'roles' => $roles, 'jti' => $jti];
+    }
+
+    /**
+     * Build the per-request AuthContext (anonymous guest if no valid session).
+     */
+    public function context(): AuthContext
+    {
+        $auth = $this->authenticate();
+        if ($auth === null) {
+            return AuthContext::guest();
+        }
+        return AuthContext::fromUser($auth['user'], $auth['roles']);
     }
 
     private function extractToken(): ?string

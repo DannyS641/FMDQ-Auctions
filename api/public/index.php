@@ -15,7 +15,10 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 
 use App\Auth\AuthService;
+use App\Catalog\ItemReadModel;
+use App\Catalog\LandingStats;
 use App\Middleware\AuthMiddleware;
+use App\Repository\CategoryRepository;
 
 header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
@@ -120,6 +123,43 @@ try {
             'auth_source'  => $auth['user']['auth_source'],
             'roles'        => $auth['roles'],
         ]]);
+    }
+
+    // --- Catalog (public reads, sanitized per role) --------------------------
+    if ($method === 'GET' && $path === '/api/items') {
+        $ctx = (new AuthMiddleware())->context();
+        $includeArchived = ($_GET['includeArchived'] ?? '') === '1';
+        if ($includeArchived && !$ctx->adminAuthorized) {
+            respond(403, ['error' => 'Admin role required.']);
+        }
+        $model = new ItemReadModel();
+        $items = array_map(
+            fn (array $it) => $model->sanitizeForAuth($it, $ctx),
+            $model->getItemSummaries($includeArchived)
+        );
+        respond(200, $items);
+    }
+
+    if ($method === 'GET' && preg_match('#^/api/items/([^/]+)$#', $path, $m)) {
+        $ctx = (new AuthMiddleware())->context();
+        $includeArchived = ($_GET['includeArchived'] ?? '') === '1';
+        if ($includeArchived && !$ctx->adminAuthorized) {
+            respond(403, ['error' => 'Admin role required.']);
+        }
+        $model = new ItemReadModel();
+        $item = $model->getItemById(rawurldecode($m[1]), $includeArchived);
+        if ($item === null) {
+            respond(404, ['error' => 'Item not found']);
+        }
+        respond(200, $model->sanitizeForAuth($item, $ctx));
+    }
+
+    if ($method === 'GET' && $path === '/api/categories') {
+        respond(200, (new CategoryRepository())->all());
+    }
+
+    if ($method === 'GET' && $path === '/api/landing-stats') {
+        respond(200, (new LandingStats())->get());
     }
 
     respond(404, ['error' => 'Not found.']);
