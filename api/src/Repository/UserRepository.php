@@ -81,6 +81,20 @@ final class UserRepository
         return $id;
     }
 
+    /** Create a local account with an explicit status (used by user bulk-import). */
+    public function createWithStatus(string $email, string $passwordHash, string $displayName, string $status): string
+    {
+        $id = Uuid::v4();
+        Database::pdo()->prepare(
+            'INSERT INTO users (id, email, password_hash, display_name, status, auth_source)
+             VALUES (:id, :email, :hash, :dn, :status, :src)'
+        )->execute([
+            ':id' => $id, ':email' => $email, ':hash' => $passwordHash, ':dn' => $displayName,
+            ':status' => $status, ':src' => 'local',
+        ]);
+        return $id;
+    }
+
     public function setStatus(string $userId, string $status): void
     {
         Database::pdo()->prepare('UPDATE users SET status = :s WHERE id = :id')
@@ -97,6 +111,29 @@ final class UserRepository
     {
         Database::pdo()->prepare('INSERT IGNORE INTO user_roles (user_id, role_name) VALUES (:uid, :role)')
             ->execute([':uid' => $userId, ':role' => $roleName]);
+    }
+
+    public function removeRole(string $userId, string $roleName): void
+    {
+        Database::pdo()->prepare('DELETE FROM user_roles WHERE user_id = :uid AND role_name = :role')
+            ->execute([':uid' => $userId, ':role' => $roleName]);
+    }
+
+    /** @return array<int,array<string,mixed>> all users (no password), newest first, with roles aggregated */
+    public function listAllWithRoles(): array
+    {
+        $pdo = Database::pdo();
+        $users = $pdo->query(
+            'SELECT id,email,display_name,status,created_at,last_login_at FROM users ORDER BY created_at DESC'
+        )->fetchAll();
+        $rolesByUser = [];
+        foreach ($pdo->query('SELECT user_id, role_name FROM user_roles')->fetchAll() as $r) {
+            $rolesByUser[(string) $r['user_id']][] = (string) $r['role_name'];
+        }
+        foreach ($users as &$u) {
+            $u['roles'] = $rolesByUser[(string) $u['id']] ?? [];
+        }
+        return $users;
     }
 
     /** @return string[] */

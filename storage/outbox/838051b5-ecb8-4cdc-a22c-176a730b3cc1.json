@@ -1,0 +1,12 @@
+{
+    "id": "838051b5-ecb8-4cdc-a22c-176a730b3cc1",
+    "channel": "email",
+    "eventType": "ACCOUNT_VERIFICATION",
+    "recipient": "newuser1781797259@gmail.com",
+    "subject": "Confirm your FMDQ Auctions account",
+    "payload": {
+        "email": "newuser1781797259@gmail.com",
+        "verifyUrl": "http://localhost:8888/verify?token=1a47933d749a1231c030d5a2398f7659a41eed70734eebfca17c427e1c99bacd",
+        "displayName": "New User"
+    }
+}

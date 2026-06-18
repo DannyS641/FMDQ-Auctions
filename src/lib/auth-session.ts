@@ -17,7 +17,6 @@ export const readAuthSession = (): AuthSession => {
       role: parsed.role,
       email: parsed.email,
       userId: parsed.userId,
-      csrfToken: parsed.csrfToken,
     };
   } catch {
     return DEFAULT_SESSION;

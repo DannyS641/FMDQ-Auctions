@@ -1,0 +1,14 @@
+{
+    "id": "7973e6e4-b00f-4f48-8370-73f202fbe794",
+    "channel": "email",
+    "eventType": "PASSWORD_RESET",
+    "recipient": "newuser1781797259@gmail.com",
+    "subject": "Reset your FMDQ Auctions password",
+    "payload": {
+        "email": "newuser1781797259@gmail.com",
+        "resetUrl": "http://localhost:8888/reset-password?token=eyJ0eXBlIjoicGFzc3dvcmQtcmVzZXQiLCJzdWIiOiJiN2ZmNzhlZi00NTVjLTQxOTAtYWIxNy04NDEyM2MyN2RiM2MiLCJlbWFpbCI6Im5ld3VzZXIxNzgxNzk3MjU5QGdtYWlsLmNvbSIsImV4cCI6IjIwMjYtMDYtMThUMTY6NDE6MDAuMjU1WiIsImZwIjoiODVjZWYyODY2N2MzYmM2YjdlMzMyNjI5In0.r85UHYA9T12euvXEqEuAYit78qX_t0MPP0yVui4fRwU",
+        "expiresAt": "2026-06-18T16:41:00.255Z",
+        "displayName": "New User",
+        "triggeredBy": "self-service"
+    }
+}

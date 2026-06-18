@@ -14,6 +14,8 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/src/bootstrap.php';
 
+use App\Admin\AdminService;
+use App\Admin\AdminUserService;
 use App\Audit\AuditService;
 use App\Auth\AccountService;
 use App\Auth\AuthContext;
@@ -26,8 +28,10 @@ use App\Catalog\LandingStats;
 use App\Items\BulkImportService;
 use App\Items\ItemWriteService;
 use App\Middleware\AuthMiddleware;
+use App\Notifications\NotificationProcessor;
 use App\RateLimit\RateLimiter;
 use App\Repository\CategoryRepository;
+use App\Repository\RoleRepository;
 use App\Repository\SessionRepository;
 use App\Repository\UserRepository;
 use App\Storage\FileStorage;
@@ -52,6 +56,22 @@ function jsonBody(): array
     $raw = file_get_contents('php://input') ?: '';
     $data = json_decode($raw, true);
     return is_array($data) ? $data : [];
+}
+
+/**
+ * Shape a user row + roles into the session-user payload the frontend expects:
+ * { id, email, displayName, role } where role is the single normalized role.
+ * @param array<string,mixed> $user
+ * @param string[] $roles
+ */
+function sessionUserPayload(array $user, array $roles): array
+{
+    return [
+        'id'          => $user['id'],
+        'email'       => $user['email'],
+        'displayName' => $user['display_name'] ?? ($user['displayName'] ?? ''),
+        'role'        => \App\Auth\Permissions::normalizeRole($roles),
+    ];
 }
 
 /** Set the session cookie from AuthService cookie params. */
@@ -160,7 +180,7 @@ try {
             respond(401, ['error' => 'Invalid email or password.']);
         }
         setSessionCookie($result['cookie']);
-        respond(200, ['user' => $result['user']]);
+        respond(200, ['signedIn' => true, 'user' => sessionUserPayload($result['user'], $result['user']['roles'])]);
     }
 
     if ($method === 'POST' && $path === '/api/auth/register') {
@@ -215,15 +235,9 @@ try {
     if ($method === 'GET' && $path === '/api/auth/me') {
         $auth = (new AuthMiddleware())->authenticate();
         if ($auth === null) {
-            respond(200, ['user' => null]); // anonymous, not an error
+            respond(200, ['signedIn' => false, 'user' => null]); // anonymous, not an error
         }
-        respond(200, ['user' => [
-            'id'           => $auth['user']['id'],
-            'email'        => $auth['user']['email'],
-            'display_name' => $auth['user']['display_name'],
-            'auth_source'  => $auth['user']['auth_source'],
-            'roles'        => $auth['roles'],
-        ]]);
+        respond(200, ['signedIn' => true, 'user' => sessionUserPayload($auth['user'], $auth['roles'])]);
     }
 
     // Helper: require an authenticated user; returns [AuthContext, authedArray].
@@ -396,11 +410,19 @@ try {
         ], $wins));
     }
 
-    // Helper: require an admin (Admin/SuperAdmin) user. Returns AuthContext.
-    $requireAdmin = static function () use ($requireUser) {
-        [$ctx] = $requireUser();
-        if (!Permissions::isAdmin($ctx->role)) {
-            respond(403, ['error' => 'Admin role required.']);
+    // Helper: require an admin (Admin/SuperAdmin OR the x-admin-token integration).
+    $requireAdmin = static function () {
+        $ctx = (new AuthMiddleware())->context();
+        if (!$ctx->adminAuthorized) {
+            respond(403, ['error' => 'Admin access requires an authenticated account with the Admin role.']);
+        }
+        return $ctx;
+    };
+    // Helper: require a real SuperAdmin (the admin token does NOT satisfy this).
+    $requireSuperAdmin = static function () {
+        $ctx = (new AuthMiddleware())->context();
+        if (!$ctx->signedIn || !Permissions::isSuperAdmin($ctx->role)) {
+            respond(403, ['error' => 'Super admin access is required.']);
         }
         return $ctx;
     };
@@ -539,6 +561,108 @@ try {
         }, $items);
         (new AuditService())->append($ctx, 'EXPORT_ITEMS', 'export', 'items.csv', ['rowCount' => count($rows)]);
         sendRaw(200, 'text/csv', Csv::build($rows), ['Content-Disposition' => 'attachment; filename="items.csv"']);
+    }
+
+    // --- Admin: ops / audits / notifications / users -------------------------
+    if ($method === 'GET' && $path === '/api/exports/audits.csv') {
+        $ctx = $requireAdmin();
+        $rows = (new AdminService())->auditsCsvRows();
+        (new AuditService())->append($ctx, 'EXPORT_AUDITS', 'export', 'audits.csv', ['rowCount' => count($rows)]);
+        sendRaw(200, 'text/csv', Csv::build($rows), ['Content-Disposition' => 'attachment; filename="audits.csv"']);
+    }
+
+    if ($method === 'GET' && $path === '/api/admin/operations') {
+        $requireAdmin();
+        respond(200, (new AdminService())->operations());
+    }
+
+    if ($method === 'GET' && $path === '/api/admin/reports') {
+        $requireAdmin();
+        respond(200, (new AdminService())->reports());
+    }
+
+    if ($method === 'GET' && $path === '/api/admin/audits') {
+        $requireAdmin();
+        $result = (new AdminService())->adminAudits([
+            'itemId' => (string) ($_GET['itemId'] ?? ''), 'from' => (string) ($_GET['from'] ?? ''),
+            'to' => (string) ($_GET['to'] ?? ''), 'eventType' => (string) ($_GET['eventType'] ?? ''),
+            'actor' => (string) ($_GET['actor'] ?? ''), 'entityType' => (string) ($_GET['entityType'] ?? ''),
+            'includeSecurity' => (string) ($_GET['includeSecurity'] ?? ''),
+        ], (int) ($_GET['page'] ?? 1), (int) ($_GET['pageSize'] ?? 20));
+        respond(200, $result);
+    }
+
+    if ($method === 'GET' && $path === '/api/admin/notifications') {
+        $requireSuperAdmin();
+        respond(200, (new AdminService())->notifications((int) ($_GET['page'] ?? 1), (int) ($_GET['pageSize'] ?? 20)));
+    }
+
+    if ($method === 'POST' && $path === '/api/admin/notifications/process') {
+        $requireSuperAdmin();
+        respond(200, ['processed' => (new NotificationProcessor())->process()]);
+    }
+
+    if ($method === 'GET' && $path === '/api/admin/users') {
+        $requireAdmin();
+        respond(200, (new AdminService())->listUsersWithRoles());
+    }
+
+    if ($method === 'GET' && $path === '/api/admin/roles') {
+        $requireAdmin();
+        respond(200, (new RoleRepository())->all());
+    }
+
+    if ($method === 'POST' && $path === '/api/admin/users/bulk-import') {
+        $ctx = $requireSuperAdmin();
+        $csv = $_FILES['csv'] ?? null;
+        if (!$csv || (int) ($csv['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            respond(400, ['error' => 'Upload a CSV file first.']);
+        }
+        $result = (new AdminUserService())->bulkImportUsers($ctx, (string) file_get_contents($csv['tmp_name']));
+        respond($result['status'], $result['body']);
+    }
+
+    if ($method === 'POST' && $path === '/api/admin/users/password-resets') {
+        $ctx = $requireAdmin();
+        $body = jsonBody();
+        $result = (new AdminUserService())->bulkPasswordResets(
+            $ctx,
+            (string) ($body['scope'] ?? 'selected'),
+            (string) ($body['role'] ?? ''),
+            is_array($body['userIds'] ?? null) ? $body['userIds'] : []
+        );
+        respond($result['status'], $result['body']);
+    }
+
+    if ($method === 'POST' && preg_match('#^/api/admin/users/([^/]+)/roles$#', $path, $m)) {
+        $ctx = $requireSuperAdmin();
+        $body = jsonBody();
+        $result = (new AdminUserService())->assignRole($ctx, rawurldecode($m[1]), (string) ($body['roleName'] ?? ''));
+        respond($result['status'], $result['body']);
+    }
+
+    if ($method === 'DELETE' && preg_match('#^/api/admin/users/([^/]+)/roles/([^/]+)$#', $path, $m)) {
+        $ctx = $requireSuperAdmin();
+        $result = (new AdminUserService())->removeRole($ctx, rawurldecode($m[1]), rawurldecode($m[2]));
+        respond($result['status'], $result['body']);
+    }
+
+    if ($method === 'POST' && preg_match('#^/api/admin/users/([^/]+)/disable$#', $path, $m)) {
+        $ctx = $requireAdmin();
+        $result = (new AdminUserService())->disableUser($ctx, rawurldecode($m[1]), (string) (jsonBody()['reason'] ?? ''));
+        respond($result['status'], $result['body']);
+    }
+
+    if ($method === 'POST' && preg_match('#^/api/admin/users/([^/]+)/enable$#', $path, $m)) {
+        $ctx = $requireAdmin();
+        $result = (new AdminUserService())->enableUser($ctx, rawurldecode($m[1]));
+        respond($result['status'], $result['body']);
+    }
+
+    if ($method === 'POST' && preg_match('#^/api/admin/users/([^/]+)/password-reset$#', $path, $m)) {
+        $ctx = $requireAdmin();
+        $result = (new AdminUserService())->forcePasswordReset($ctx, rawurldecode($m[1]));
+        respond($result['status'], $result['body']);
     }
 
     // --- Catalog (public reads, sanitized per role) --------------------------

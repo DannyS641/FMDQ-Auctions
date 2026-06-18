@@ -1,0 +1,16 @@
+{
+    "id": "77a949b0-8df6-4539-b177-f4aa6db50ffd",
+    "channel": "email",
+    "eventType": "BID_PLACED",
+    "recipient": "alice@gmail.com",
+    "subject": "Your bid was placed for Demo Toyota Camry",
+    "payload": {
+        "title": "Demo Toyota Camry",
+        "amount": 130000,
+        "itemId": "demo-item-0001",
+        "itemUrl": "/items/demo-item-0001",
+        "imageUrl": "/uploads/images/front.jpg",
+        "currentBid": 130000,
+        "displayName": "Alice A"
+    }
+}

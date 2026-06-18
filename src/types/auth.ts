@@ -8,7 +8,6 @@ export type AuthSession = {
   role: Role;
   email?: string;
   userId?: string;
-  csrfToken?: string;
 };
 
 export type UserProfile = {

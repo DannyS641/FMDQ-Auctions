@@ -60,6 +60,16 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Dev-only integration bypass: when enabled, requests carrying a matching
+    // 'x-admin-token' header are treated as an Admin integration (NOT SuperAdmin).
+    // Keep disabled outside local development.
+    // -------------------------------------------------------------------------
+    'admin_api' => [
+        'enabled' => false,
+        'token'   => '',
+    ],
+
+    // -------------------------------------------------------------------------
     // LDAP / Active Directory (internal users). Uses a service/bind account to
     // search for the user, then re-binds AS the user to verify the password.
     // -------------------------------------------------------------------------

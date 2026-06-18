@@ -27,6 +27,12 @@ final class AuthContext
         return new self(null, Permissions::GUEST, false, false, 'Guest', 'system', []);
     }
 
+    /** The dev-only ADMIN API token principal (integration), port of the x-admin-token context. */
+    public static function adminToken(): self
+    {
+        return new self('admin-token', Permissions::ADMIN, true, true, 'Admin API token', 'integration', ['Admin']);
+    }
+
     /**
      * @param array<string,mixed> $user  users row
      * @param string[]            $roles raw DB role names
@@ -38,8 +44,8 @@ final class AuthContext
             userId: (string) $user['id'],
             role: $role,
             signedIn: true,
-            adminAuthorized: Permissions::isAdmin($role), // admin-token bypass added in 3d
-            actor: (string) ($user['email'] ?? $user['display_name'] ?? 'user'),
+            adminAuthorized: Permissions::isAdmin($role),
+            actor: (string) ($user['display_name'] ?? $user['email'] ?? 'user'), // audits key on display name
             actorType: 'user',
             roles: $roles,
         );

@@ -61,4 +61,24 @@ final class Permissions
     {
         return self::isAdmin($role);
     }
+
+    /**
+     * Port of ensureCanManageTargetRoles (security-logic.ts): can an actor with
+     * $actorRole manage a user holding $targetRoles (raw DB role names)?
+     * @param string[] $targetRoles
+     * @return array{ok:true}|array{ok:false,error:string}
+     */
+    public static function ensureCanManageTarget(string $actorRole, array $targetRoles): array
+    {
+        if ($actorRole !== self::ADMIN && $actorRole !== self::SUPER_ADMIN) {
+            return ['ok' => false, 'error' => 'Only admin accounts can manage other users.'];
+        }
+        if (in_array('SuperAdmin', $targetRoles, true) && $actorRole !== self::SUPER_ADMIN) {
+            return ['ok' => false, 'error' => 'Only a SuperAdmin can manage another SuperAdmin account.'];
+        }
+        if (in_array('Admin', $targetRoles, true) && $actorRole !== self::SUPER_ADMIN) {
+            return ['ok' => false, 'error' => 'Only a SuperAdmin can manage another Admin account.'];
+        }
+        return ['ok' => true];
+    }
 }

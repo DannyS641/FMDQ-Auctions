@@ -62,6 +62,14 @@ final class AuthMiddleware
      */
     public function context(): AuthContext
     {
+        // Dev-only ADMIN API token bypass (x-admin-token).
+        $adminApi = Config::load()['admin_api'] ?? [];
+        if (!empty($adminApi['enabled']) && !empty($adminApi['token'])) {
+            $provided = (string) ($_SERVER['HTTP_X_ADMIN_TOKEN'] ?? '');
+            if ($provided !== '' && hash_equals((string) $adminApi['token'], $provided)) {
+                return AuthContext::adminToken();
+            }
+        }
         $auth = $this->authenticate();
         if ($auth === null) {
             return AuthContext::guest();

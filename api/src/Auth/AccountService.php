@@ -163,6 +163,12 @@ final class AccountService
 
     // --- helpers -------------------------------------------------------------
 
+    /** Public entry for admin-driven account creation (bulk import). */
+    public function sendVerification(string $userId, string $email, string $displayName): void
+    {
+        $this->issueVerification($userId, $email, $displayName);
+    }
+
     private function issueVerification(string $userId, string $email, string $displayName): string
     {
         $ttl = (int) (Config::get('auth')['email_verification_ttl_seconds'] ?? 86400);
@@ -172,6 +178,12 @@ final class AccountService
             'email' => $email, 'displayName' => $displayName, 'verifyUrl' => $verifyUrl,
         ], $email);
         return $verifyUrl;
+    }
+
+    /** Public entry for admin-triggered resets. @param array<string,mixed> $user */
+    public function queuePasswordResetFor(array $user, string $triggeredBy): void
+    {
+        $this->queuePasswordReset($user, $triggeredBy);
     }
 
     /** @param array<string,mixed> $user */

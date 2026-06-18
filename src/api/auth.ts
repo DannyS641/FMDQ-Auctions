@@ -4,8 +4,7 @@ import type { AuthSession, UserProfile, UserSession } from "@/types";
 
 type LoginResponse = {
   signedIn: boolean;
-  user: { id: string; email: string; displayName: string; role: string; csrfToken?: string } | null;
-  csrfToken?: string;
+  user: { id: string; email: string; displayName: string; role: string } | null;
 };
 
 type RegisterResponse = {

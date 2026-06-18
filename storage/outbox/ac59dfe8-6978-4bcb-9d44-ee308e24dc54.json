@@ -1,0 +1,11 @@
+{
+    "id": "ac59dfe8-6978-4bcb-9d44-ee308e24dc54",
+    "channel": "email",
+    "eventType": "PASSWORD_CHANGED",
+    "recipient": "newuser1781797259@gmail.com",
+    "subject": "Your FMDQ Auctions password was changed",
+    "payload": {
+        "email": "newuser1781797259@gmail.com",
+        "displayName": "New User"
+    }
+}
