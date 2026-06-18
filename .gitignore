@@ -15,3 +15,7 @@ server/uploads/
 server/data/notification-outbox/
 server/data/notification-dead-letter/
 server/data/quarantine/
+
+# Phase 2 auth — local secrets (never commit)
+config/auth.php
+config/test.php

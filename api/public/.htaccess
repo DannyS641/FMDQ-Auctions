@@ -1,0 +1,12 @@
+# Route every request to the front controller. Only this directory is web-exposed.
+RewriteEngine On
+
+# Serve real files/dirs directly (e.g. future static assets); otherwise -> index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]
+
+# Defense in depth: never serve dotfiles or anything outside this dir.
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
