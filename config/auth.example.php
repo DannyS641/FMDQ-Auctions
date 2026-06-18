@@ -43,7 +43,7 @@ return [
     // Otherwise -> local account path.
     // -------------------------------------------------------------------------
     'auth' => [
-        'internal_email_domains' => ['fmdq.com'],   // <-- set to your AD domain(s)
+        'internal_email_domains' => ['fmdq.com', 'fmdqgroup.com'], // AD domain(s)
         // Role granted to any authenticated internal user even with no group match.
         // Set to null to deny internal users who match no mapped group.
         'default_internal_role'  => 'Observer',

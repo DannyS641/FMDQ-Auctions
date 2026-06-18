@@ -202,8 +202,10 @@ CREATE TABLE IF NOT EXISTS email_verification_tokens (
 -- -----------------------------------------------------------------------------
 -- audits  (jsonb -> JSON; default '{}' -> JSON_OBJECT())
 -- -----------------------------------------------------------------------------
+-- NOTE: audits.id is VARCHAR(64) (not CHAR(36)): most ids are UUIDs, but some
+-- legacy rows use a 64-char HMAC hex id (same as security_events).
 CREATE TABLE IF NOT EXISTS audits (
-  id            CHAR(36)     NOT NULL,
+  id            VARCHAR(64)  NOT NULL,
   event_type    VARCHAR(64)  NOT NULL,
   entity_type   VARCHAR(64)  NOT NULL,
   entity_id     VARCHAR(255) NOT NULL,
