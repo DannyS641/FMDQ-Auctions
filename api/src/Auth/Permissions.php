@@ -21,6 +21,12 @@ final class Permissions
         return $role === 'Observer' ? 'ShopOwner' : $role;
     }
 
+    /** Reverse of the display alias: the DB role name for a (possibly display) role. */
+    public static function toDbRoleName(string $role): string
+    {
+        return $role === self::SHOP_OWNER ? 'Observer' : $role;
+    }
+
     /** @param string[] $roles */
     public static function normalizeRole(array $roles): string
     {

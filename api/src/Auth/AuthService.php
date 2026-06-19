@@ -105,22 +105,35 @@ final class AuthService
     /** @return array{0:string,1:string}|null [userId, authSource] */
     private function loginInternal(string $identifier, string $password): ?array
     {
-        $ldapCfg = Config::get('ldap');
-        if (empty($ldapCfg['enabled'])) {
-            return null; // internal login attempted but LDAP not configured
-        }
-        $profile = (new LdapAuth($ldapCfg))->authenticate($identifier, $password);
-        if ($profile === null) {
-            return null;
-        }
-        $userId = $this->users->upsertAdUser($profile['email'], $profile['display_name']);
+        $cfg = Config::load();
 
-        // Sync AD groups -> app roles on every login.
-        $auth = Config::get('auth');
-        $roles = RoleMapper::map($profile['groups'], Config::get('role_map'), $auth['default_internal_role'] ?? null);
-        $this->users->syncRoles($userId, $roles);
+        // Path A: HTTP AD endpoint (e.g. the FMDQ goldhive API).
+        $endpoint = $cfg['ad_endpoint'] ?? [];
+        if (!empty($endpoint['enabled'])) {
+            $profile = (new AdEndpointAuth($endpoint))->authenticate($identifier, $password);
+            if ($profile === null) {
+                return null;
+            }
+            $userId = $this->users->upsertAdUser($profile['email'], $profile['display_name']);
+            $this->users->syncRoles($userId, [Permissions::toDbRoleName($profile['role'])]);
+            return [$userId, 'ad'];
+        }
 
-        return [$userId, 'ad'];
+        // Path B: direct LDAPS bind.
+        $ldapCfg = $cfg['ldap'] ?? [];
+        if (!empty($ldapCfg['enabled'])) {
+            $profile = (new LdapAuth($ldapCfg))->authenticate($identifier, $password);
+            if ($profile === null) {
+                return null;
+            }
+            $userId = $this->users->upsertAdUser($profile['email'], $profile['display_name']);
+            $auth = Config::get('auth');
+            $roles = RoleMapper::map($profile['groups'], Config::get('role_map'), $auth['default_internal_role'] ?? null);
+            $this->users->syncRoles($userId, $roles);
+            return [$userId, 'ad'];
+        }
+
+        return null; // internal login attempted but no AD provider configured
     }
 
     /** @return array{0:string,1:string}|null [userId, authSource] */

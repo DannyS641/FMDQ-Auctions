@@ -70,6 +70,39 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Active Directory via an HTTP endpoint (the FMDQ "goldhive" API). Use THIS
+    // when AD is fronted by a login API rather than raw LDAPS. When enabled it
+    // takes precedence over the 'ldap' section below. The backend POSTs
+    // {username, password} and reads the JSON response by dot-path.
+    // -------------------------------------------------------------------------
+    'ad_endpoint' => [
+        'enabled'  => false,
+        'endpoint' => 'https://adgtest.fmdqgroup.com/goldhiveAPI/employees/api/external/account/login',
+        // Auth header for the endpoint itself (if it requires an API key/token):
+        'api_key'        => '',             // e.g. 'Bearer xxxxx' or a raw key
+        'api_key_header' => 'Authorization',
+        // Request field names the endpoint expects:
+        'username_field' => 'username',
+        'password_field' => 'password',
+        // Where to read values in the JSON response (dot-paths; '' = 2xx means ok):
+        'authenticated_path' => 'authenticated',
+        'username_path'      => 'username',
+        'email_path'         => 'email',
+        'display_name_path'  => 'displayName',
+        'groups_path'        => 'groups',
+        'email_domain'       => 'fmdqgroup.com', // used to build email if not returned
+        'default_role'       => 'Bidder',         // role for any authenticated AD user
+        'timeout'            => 10,
+        // AD group (name/substring) -> app role. Highest match wins.
+        'role_map' => [
+            'SuperAdmin' => [],
+            'Admin'      => [], // e.g. ['Auction-Admins']
+            'ShopOwner'  => [], // shown as ShopOwner; stored as Observer
+            'Bidder'     => [],
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
     // LDAP / Active Directory (internal users). Uses a service/bind account to
     // search for the user, then re-binds AS the user to verify the password.
     // -------------------------------------------------------------------------
