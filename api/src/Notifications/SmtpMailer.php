@@ -20,6 +20,12 @@ final class SmtpMailer
 
     public function send(string $from, string $to, string $subject, string $text, string $html): void
     {
+        // Defense-in-depth against SMTP header injection: no CR/LF/NUL in headers.
+        foreach (['from' => $from, 'to' => $to, 'subject' => $subject] as $field => $value) {
+            if (preg_match('/[\r\n\0]/', $value)) {
+                throw new \RuntimeException("Header injection blocked in '{$field}'.");
+            }
+        }
         $host = (string) $this->cfg['host'];
         $port = (int) $this->cfg['port'];
         $secure = (string) ($this->cfg['secure'] ?? 'starttls');

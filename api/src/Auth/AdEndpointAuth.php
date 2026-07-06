@@ -53,6 +53,18 @@ final class AdEndpointAuth
             CURLOPT_USERAGENT => (string) ($this->cfg['user_agent']
                 ?? 'Mozilla/5.0 (FMDQ-Auctions-Server) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36'),
         ]);
+        // TLS trust. Point cacert_file at a CA bundle in production. ssl_verify
+        // may be set false for local dev only (NEVER in production).
+        if (!empty($this->cfg['cacert_file'])) {
+            curl_setopt($ch, CURLOPT_CAINFO, (string) $this->cfg['cacert_file']);
+        }
+        // ssl_verify=false is honored ONLY outside production — it must never
+        // be possible to ship credential-bearing requests over unverified TLS.
+        $isProd = (\App\Config::load()['app']['env'] ?? 'production') === 'production';
+        if (!$isProd && ($this->cfg['ssl_verify'] ?? true) === false) {
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+        }
         $raw = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlErr = curl_error($ch);

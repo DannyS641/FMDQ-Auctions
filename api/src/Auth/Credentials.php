@@ -14,7 +14,9 @@ final class Credentials
 
     public static function normalizeEmail(string $value): string
     {
-        return strtolower(trim($value));
+        $email = strtolower(trim($value));
+        // Reject malformed addresses (also blocks CRLF/header-injection payloads).
+        return filter_var($email, FILTER_VALIDATE_EMAIL) ? $email : '';
     }
 
     public static function sanitizeDisplayName(string $value): string
