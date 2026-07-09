@@ -5,6 +5,10 @@ import { dirname, resolve } from "path";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const apiProxyTarget =
+  process.env.VITE_API_TARGET ||
+  process.env.API_PROXY_TARGET ||
+  "http://localhost:5174";
 
 export default defineConfig({
   plugins: [react()],
@@ -17,11 +21,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://localhost:8001",
+        target: apiProxyTarget,
         changeOrigin: true,
       },
       "/uploads": {
-        target: "http://localhost:8001",
+        target: apiProxyTarget,
         changeOrigin: true,
       },
     },
