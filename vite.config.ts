@@ -8,8 +8,8 @@ const __dirname = dirname(__filename);
 const apiProxyTarget =
   process.env.VITE_API_TARGET ||
   process.env.API_PROXY_TARGET ||
-  "http://localhost:5174";
-
+  "http://localhost:8080";
+// "http://localhost:5174"; For MacOS users, you may need to use this port instead of 8080 due to port conflicts with other applications.
 export default defineConfig({
   plugins: [react()],
   resolve: {
