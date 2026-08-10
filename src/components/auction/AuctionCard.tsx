@@ -24,7 +24,7 @@ export function AuctionCard({ item, onMouseEnter }: Props) {
   return (
     <article
       onMouseEnter={onMouseEnter}
-      className="flex h-full flex-col rounded-3xl border border-ink/10 bg-white p-5 transition duration-200 hover:border-neon/20 hover:shadow-[0_8px_30px_rgba(29,50,108,0.1)]"
+      className="group flex h-full flex-col rounded-3xl border border-ink/10 bg-white p-5 transition duration-200 hover:-translate-y-1 hover:border-neon/20 hover:shadow-[0_8px_30px_rgba(29,50,108,0.1)]"
     >
       {/* Image */}
       <div className="relative pt-5">
@@ -32,15 +32,15 @@ export function AuctionCard({ item, onMouseEnter }: Props) {
           <span className={`h-2 w-2 rounded-full ${statusDot[status] ?? "bg-slate"}`} />
           {status}
         </span>
-      <div className="flex aspect-[4/3] w-full items-center justify-center overflow-hidden rounded-2xl border border-ink/10 bg-white p-2">
+      <div className="aspect-[4/3] w-full overflow-hidden rounded-2xl border border-ink/10 bg-white">
         {thumb ? (
           <img
             src={`${API_BASE}${thumb}`}
             alt={item.title}
-            className="h-full w-full rounded-xl object-contain"
+            className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
           />
         ) : (
-          <div className="h-full w-full rounded-xl bg-ash" />
+          <div className="h-full w-full bg-ash" />
         )}
       </div>
       </div>
