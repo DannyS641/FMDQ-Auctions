@@ -90,6 +90,7 @@ return [
         'email_path'         => 'email',
         'display_name_path'  => 'displayName',
         'groups_path'        => 'groups',
+        'role_path'          => '', // optional trusted app role returned by the endpoint
         'email_domain'       => 'fmdqgroup.com', // used to build email if not returned
         'default_role'       => 'Bidder',         // role for any authenticated AD user
         'timeout'            => 10,

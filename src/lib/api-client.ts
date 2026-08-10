@@ -6,7 +6,7 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
-    public readonly payload?: unknown
+    public readonly payload?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
@@ -37,10 +37,16 @@ const sessionFromPayload = (payload: SessionApiPayload): AuthSession => {
 };
 
 const parseResponse = async <T>(response: Response): Promise<T> => {
-  const data = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
+  const data = (await response.json().catch(() => null)) as
+    | (T & { error?: string })
+    | null;
   if (!response.ok || data === null) {
     const message =
-      (typeof data === "object" && data !== null && "message" in data && typeof data.message === "string" && data.message) ||
+      (typeof data === "object" &&
+        data !== null &&
+        "message" in data &&
+        typeof data.message === "string" &&
+        data.message) ||
       data?.error ||
       "An unexpected error occurred.";
     throw new ApiError(response.status, message, data);
@@ -53,8 +59,14 @@ const parseResponse = async <T>(response: Response): Promise<T> => {
  * (credentials: "include"); the API uses a SameSite cookie for CSRF defense
  * on the same-origin deployment, so no CSRF token handling is needed here.
  */
-export const apiClient = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-  const response = await fetch(`${API_BASE}${path}`, { ...init, credentials: "include" });
+export const apiClient = async <T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> => {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    credentials: "include",
+  });
   return parseResponse<T>(response);
 };
 

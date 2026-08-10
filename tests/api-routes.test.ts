@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import http from "node:http";
-import test from "node:test";
+import test, { mock } from "node:test";
+import axios from "axios";
+import { authenticateWithAdEndpoint } from "../server/register-auth-routes.js";
 import { buildCsrfTokenValue } from "../server/security-logic.js";
 
 process.env.NODE_ENV ||= "development";
@@ -50,6 +52,37 @@ const stopTestServer = async (server: http.Server) =>
     }
     server.close((error) => (error ? reject(error) : resolve()));
   });
+
+test("AD authentication uses axios to call the configured endpoint", async () => {
+  const postMock = mock.method(axios, "post", async () => ({ status: 200, data: { authenticated: true, username: "ada@example.com" } }));
+  try {
+    const result = await authenticateWithAdEndpoint("ada@example.com", "secret123", {
+      enabled: true,
+      endpoint: "https://example.test/ad-auth",
+      apiKeyHeader: "x-api-key",
+      usernameField: "username",
+      passwordField: "password",
+      authenticatedPath: "authenticated",
+      usernamePath: "username",
+      emailPath: "email",
+      emailDomain: "example.com",
+      displayNamePath: "displayName",
+      groupsPath: "groups",
+      timeoutMs: 5000,
+      roleMap: {},
+    });
+    assert.equal(postMock.mock.calls.length, 1);
+    assert.deepEqual(result, {
+      authenticated: true,
+      username: "ada@example.com",
+      email: "",
+      displayName: "",
+      groups: []
+    });
+  } finally {
+    postMock.mock.restore();
+  }
+});
 
 test("GET /api/auth/me returns an anonymous session when no cookie is present", async () => {
   const server = await startTestServer();

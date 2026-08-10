@@ -1,4 +1,5 @@
 import express from "express";
+import axios from "axios";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AuditEntry, AuthContext, Role, SessionRow, UserRow } from "./server-types.js";
 
@@ -124,7 +125,7 @@ const mapAdRole = (groups: string[], config: AdAuthConfig): Exclude<Role, "Guest
   return config.defaultRole || null;
 };
 
-const authenticateWithAdEndpoint = async (
+export const authenticateWithAdEndpoint = async (
   identifier: string,
   password: string,
   config: AdAuthConfig
@@ -136,17 +137,20 @@ const authenticateWithAdEndpoint = async (
     if (config.apiKey) {
       headers[config.apiKeyHeader] = config.apiKey;
     }
-    const response = await fetch(config.endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
+    const response = await axios.post(
+      config.endpoint,
+      {
         [config.usernameField]: identifier,
         [config.passwordField]: password,
-      }),
-      signal: controller.signal,
-    });
-    const payload = await response.json().catch(() => null) as unknown;
-    if (!response.ok) {
+      },
+      {
+        headers,
+        timeout: config.timeoutMs,
+        signal: controller.signal,
+      }
+    );
+    const payload = response.data as unknown;
+    if (response.status < 200 || response.status >= 300) {
       return { authenticated: false, username: identifier, email: "", displayName: "", groups: [] };
     }
     const authenticatedValue = getPathValue(payload, config.authenticatedPath);
@@ -159,6 +163,8 @@ const authenticateWithAdEndpoint = async (
       displayName: stringFromPath(payload, config.displayNamePath),
       groups: stringListFromPath(payload, config.groupsPath),
     };
+  } catch {
+    return { authenticated: false, username: identifier, email: "", displayName: "", groups: [] };
   } finally {
     clearTimeout(timeout);
   }

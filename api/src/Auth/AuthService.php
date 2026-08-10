@@ -23,16 +23,19 @@ final class AuthService
     }
 
     /**
+     * @param bool $useAd caller explicitly asked to authenticate via AD (the
+     *        sign-in page's "Sign in with Active Directory" checkbox), so the
+     *        AD path is used regardless of the identifier's email domain.
      * @return array{ok:true,token:string,cookie:array,user:array}|array{ok:false,error:string}
      */
-    public function login(string $identifier, string $password): array
+    public function login(string $identifier, string $password, bool $useAd = false): array
     {
         $identifier = trim($identifier);
         if ($identifier === '' || $password === '') {
             return ['ok' => false, 'error' => 'INVALID_CREDENTIALS'];
         }
 
-        $isInternal = $this->isInternalIdentifier($identifier);
+        $isInternal = $useAd || $this->isInternalIdentifier($identifier);
 
         if ($isInternal) {
             $resolved = $this->loginInternal($identifier, $password);
@@ -79,6 +82,151 @@ final class AuthService
                 'display_name' => $user['display_name'] ?? '',
                 'auth_source'  => $authSource,
                 'roles'        => $roles,
+            ],
+        ];
+    }
+
+
+    public function adlogin(string $identifier, string $displayName): array
+
+    {
+
+        $identifier = trim($identifier);
+
+        if ($identifier === '') {
+
+            return ['ok' => false, 'error' => 'INVALID_CREDENTIALS'];
+
+        }
+    
+        // Find existing user, or provision one from the AD-verified identity.
+
+        $user = $this->users->findByEmail($identifier);
+    
+        if ($user === null) {
+
+            // First AD login for this person → create the account.
+
+            $userId = $this->users->upsertAdUser($identifier, trim($displayName));
+    
+            // Give them a default internal role (same idea as loginInternal path B).
+
+            $auth = Config::get('auth');
+
+            $defaultRole = $auth['default_internal_role'] ?? null;
+
+            if ($defaultRole !== null) {
+
+                $this->users->syncRoles($userId, [$defaultRole]);
+
+            }
+
+        } else {
+
+            // Guard: don't let AD sign in over a local-password account by email collision.
+
+            if (($user['auth_source'] ?? 'local') !== 'ad') {
+
+                return ['ok' => false, 'error' => 'INVALID_CREDENTIALS'];
+
+            }
+
+            $userId = (string) $user['id'];
+
+        }
+    
+        $authSource = 'ad';
+    
+        $this->users->touchLastLogin($userId);
+
+        $roles = $this->users->getRoles($userId);
+
+        $user  = $this->users->findById($userId);
+    
+        // Issue JWT + session (identical to login()).
+
+        $jwtCfg = Config::get('jwt');
+
+        $now    = time();
+
+        $exp    = $now + (int) $jwtCfg['ttl_seconds'];
+
+        $jti    = Uuid::v4();
+    
+        $this->sessions->create($jti, $userId, $exp);
+    
+        $token = Jwt::sign([
+
+            'iss'   => $jwtCfg['issuer'],
+
+            'sub'   => $userId,
+
+            'jti'   => $jti,
+
+            'src'   => $authSource,
+
+            'roles' => $roles,
+
+            'iat'   => $now,
+
+            'exp'   => $exp,
+
+        ], (string) $jwtCfg['secret']);
+    
+        return [
+
+            'ok'     => true,
+
+            'token'  => $token,
+
+            'cookie' => $this->cookieParams($token, $exp),
+
+            'user'   => [
+
+                'id'           => $userId,
+
+                'email'        => $user['email'] ?? $identifier,
+
+                'display_name' => $user['display_name'] ?? $displayName,
+
+                'auth_source'  => $authSource,
+
+                'roles'        => $roles,
+
+            ],
+
+        ];
+
+    }
+ 
+    private function issueSession(string $userId, string $authSource, string $fallbackEmail = ''): array
+    {
+        $this->users->touchLastLogin($userId);
+        $roles = $this->users->getRoles($userId);
+        $user  = $this->users->findById($userId);
+    
+        $jwtCfg = Config::get('jwt');
+        $now = time();
+        $exp = $now + (int) $jwtCfg['ttl_seconds'];
+        $jti = Uuid::v4();
+    
+        $this->sessions->create($jti, $userId, $exp);
+    
+        $token = Jwt::sign([
+            'iss' => $jwtCfg['issuer'], 'sub' => $userId, 'jti' => $jti,
+            'src' => $authSource, 'roles' => $roles, 'iat' => $now, 'exp' => $exp,
+        ], (string) $jwtCfg['secret']);
+    
+        return [
+            'ok' => true,
+            'token' => $token,
+            'cookie' => $this->cookieParams($token, $exp),
+            'user' => [
+                'id' => $userId,
+                'email' => $user['email'] ?? $fallbackEmail,
+                'display_name' => $user['display_name'] ?? '',
+                'auth_source' => $authSource,
+                'roles' => $roles,
             ],
         ];
     }

@@ -8,7 +8,7 @@ import { AuthLayout } from "@/components/layout/AuthLayout";
 import { Input } from "@/components/ui/Input";
 import { PasswordInput } from "@/components/ui/PasswordInput";
 import { Button } from "@/components/ui/Button";
-import { login } from "@/api/auth";
+import { loginWithFallback } from "@/api/auth";
 import { queryKeys } from "@/lib/query-keys";
 import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/context/auth-context";
@@ -16,6 +16,7 @@ import { useAuth } from "@/context/auth-context";
 const schema = z.object({
   email: z.string().trim().min(1, "Username or email is required"),
   password: z.string().min(1, "Password is required"),
+  useAd: z.boolean().optional(),
 });
 
 type FormData = z.infer<typeof schema>;
@@ -36,7 +37,8 @@ export default function SignIn() {
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
   const { mutate, isPending } = useMutation({
-    mutationFn: ({ email, password }: FormData) => login(email, password),
+    mutationFn: ({ email, password, useAd }: FormData) =>
+      loginWithFallback(email, password, useAd),
     onSuccess: (session) => {
       // Write the new session immediately so every subscriber sees the right user/role
       queryClient.setQueryData(queryKeys.auth.session(), session);
@@ -46,11 +48,17 @@ export default function SignIn() {
     },
     onError: (err) => {
       if (err instanceof ApiError && err.status === 401) {
-        setError("password", { message: err.message || "Invalid username or password" });
+        setError("password", {
+          message: err.message || "Invalid username or password",
+        });
       } else if (err instanceof ApiError && err.status === 403) {
         toast.error(err.message);
       } else {
-        toast.error(err instanceof Error ? err.message : "Sign in failed. Please try again.");
+        toast.error(
+          err instanceof Error
+            ? err.message
+            : "Sign in failed. Please try again.",
+        );
       }
     },
   });
@@ -60,8 +68,14 @@ export default function SignIn() {
       title="Welcome back"
       description="Sign in to continue to the bidding desk."
     >
-      <form onSubmit={handleSubmit((data) => mutate(data))} noValidate className="flex flex-col gap-4">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate">Sign in</p>
+      <form
+        onSubmit={handleSubmit((data) => mutate(data))}
+        noValidate
+        className="flex flex-col gap-4"
+      >
+        <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate">
+          Sign in
+        </p>
         <Input
           id="email"
           type="text"
@@ -79,8 +93,19 @@ export default function SignIn() {
           error={errors.password?.message}
           {...register("password")}
         />
-        <div className="flex justify-end">
-          <a href="/reset-password" className="text-xs text-slate hover:text-neon hover:underline">
+        <div className="flex items-center justify-between">
+          <label className="flex items-center gap-2 text-xs text-slate">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-ink/20 accent-neon"
+              {...register("useAd")}
+            />
+            Sign in with Active Directory
+          </label>
+          <a
+            href="/reset-password"
+            className="text-xs text-slate hover:text-neon hover:underline"
+          >
             Forgot password?
           </a>
         </div>

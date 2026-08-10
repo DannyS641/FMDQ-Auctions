@@ -245,7 +245,8 @@ try {
         $body = jsonBody();
         $result = (new AuthService())->login(
             (string) ($body['email'] ?? ''),
-            (string) ($body['password'] ?? '')
+            (string) ($body['password'] ?? ''),
+            (bool) ($body['useAd'] ?? false)
         );
         if (!$result['ok']) {
             respond(401, ['error' => 'Invalid email or password.']);
@@ -253,6 +254,22 @@ try {
         setSessionCookie($result['cookie']);
         respond(200, ['signedIn' => true, 'user' => sessionUserPayload($result['user'], $result['user']['roles'])]);
     }
+
+    
+    if ($method === 'POST' && $path === '/api/auth/adlogin') {
+        $body = jsonBody();
+        $result = (new AuthService())->adlogin(
+            (string) ($body['email'] ?? ''),
+            (string) ($body['displayName'] ?? '')
+        );
+    
+        if (!$result['ok']) {
+            respond(401, ['error' => 'Invalid email or password.']);
+        }
+        setSessionCookie($result['cookie']);
+        respond(200, ['signedIn' => true, 'user' => sessionUserPayload($result['user'], $result['user']['roles'])]);
+    }
+
 
     if ($method === 'POST' && $path === '/api/auth/register') {
         $body = jsonBody();
