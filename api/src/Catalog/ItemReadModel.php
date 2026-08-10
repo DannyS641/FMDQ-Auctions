@@ -81,7 +81,7 @@ final class ItemReadModel
         foreach ($files as $f) {
             if ((string) $f['item_id'] !== $id) continue;
             if ($f['kind'] === 'image') {
-                $images[] = ['name' => $f['name'], 'url' => $f['url']];
+                $images[] = ['name' => $f['name'], 'url' => $f['url'], 'isPrimary' => !empty($f['is_primary'])];
             } elseif ($f['kind'] === 'document') {
                 $parsed = DocumentVisibility::parse((string) $f['name']);
                 $documents[] = ['name' => $parsed['displayName'], 'url' => $f['url'], 'visibility' => $parsed['visibility']];

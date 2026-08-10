@@ -102,6 +102,9 @@ final class ItemWriteService
              VALUES (:id,:title,:cat,:lot,:sku,:cond,:loc,:sb,:res,:inc,:cur,:st,:et,:desc,:created)'
         )->execute(self::itemParams($itemId, $value, $currentBid));
 
+        if ($images) {
+            $images[0]['is_primary'] = true; // first uploaded image is the cover by default
+        }
         $this->insertFiles($itemId, array_merge($images, $documents));
 
         $this->audit->append($ctx, 'ITEM_CREATED', 'item', $itemId, [
@@ -116,9 +119,17 @@ final class ItemWriteService
      * @param array<string,mixed> $value
      * @param array<int,array<string,mixed>> $images
      * @param array<int,array<string,mixed>> $documents
+     * @param string|null $primaryImageUrl when set, marks the existing image with this
+     *        url as the item's cover image (the "select thumbnail" gallery choice).
      */
-    public function updateItem(AuthContext $ctx, string $itemId, array $value, array $images, array $documents): void
-    {
+    public function updateItem(
+        AuthContext $ctx,
+        string $itemId,
+        array $value,
+        array $images,
+        array $documents,
+        ?string $primaryImageUrl = null
+    ): void {
         $pdo = Database::pdo();
         $this->categories->upsert($value['category']);
         $pdo->prepare(
@@ -132,7 +143,25 @@ final class ItemWriteService
             ':st' => self::dbDate($value['startTime']), ':et' => self::dbDate($value['endTime']),
             ':desc' => $value['description'], ':id' => $itemId,
         ]);
+
+        if ($images && $primaryImageUrl === null) {
+            // No explicit choice this save: only default the first new image to
+            // primary if the item didn't already have a cover image.
+            $hasPrimary = $pdo->prepare(
+                "SELECT 1 FROM item_files WHERE item_id = :id AND kind = 'image' AND is_primary = 1 LIMIT 1"
+            );
+            $hasPrimary->execute([':id' => $itemId]);
+            if ($hasPrimary->fetch() === false) {
+                $images[0]['is_primary'] = true;
+            }
+        }
         $this->insertFiles($itemId, array_merge($images, $documents));
+
+        if ($primaryImageUrl !== null) {
+            $pdo->prepare(
+                "UPDATE item_files SET is_primary = (url = :url) WHERE item_id = :id AND kind = 'image'"
+            )->execute([':url' => $primaryImageUrl, ':id' => $itemId]);
+        }
 
         $this->audit->append($ctx, 'ITEM_UPDATED', 'item', $itemId, [
             'title' => $value['title'], 'category' => $value['category'],
@@ -192,11 +221,12 @@ final class ItemWriteService
     {
         if (!$files) return;
         $stmt = Database::pdo()->prepare(
-            'INSERT INTO item_files (id,item_id,kind,name,url) VALUES (:id,:item,:kind,:name,:url)'
+            'INSERT INTO item_files (id,item_id,kind,name,url,is_primary) VALUES (:id,:item,:kind,:name,:url,:primary)'
         );
         foreach ($files as $f) {
             $stmt->execute([
                 ':id' => $f['id'], ':item' => $itemId, ':kind' => $f['kind'], ':name' => $f['name'], ':url' => $f['url'],
+                ':primary' => !empty($f['is_primary']) ? 1 : 0,
             ]);
         }
     }

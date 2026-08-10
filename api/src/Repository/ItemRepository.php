@@ -47,11 +47,14 @@ final class ItemRepository
     {
         if (!$itemIds) return [];
         [$in, $params] = self::inClause($itemIds);
-        $sql = "SELECT item_id, kind, name, url FROM item_files WHERE item_id IN ($in)";
+        $sql = "SELECT item_id, kind, name, url, is_primary FROM item_files WHERE item_id IN ($in)";
         if ($kind !== null) {
             $sql .= ' AND kind = :kind';
             $params[':kind'] = $kind;
         }
+        // is_primary DESC: the chosen cover image sorts first per item, which is
+        // what mapItem()/mapSummary() rely on to pick the AuctionCard thumbnail.
+        $sql .= ' ORDER BY is_primary DESC';
         $stmt = Database::pdo()->prepare($sql);
         $stmt->execute($params);
         return $stmt->fetchAll();

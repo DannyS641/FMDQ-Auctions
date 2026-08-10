@@ -8,6 +8,7 @@ export type FileRef = {
   name: string;
   url: string;
   visibility?: DocumentVisibility;
+  isPrimary?: boolean;
 };
 
 export type Bid = {

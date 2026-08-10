@@ -19,6 +19,8 @@ import { queryKeys } from "@/lib/query-keys";
 import { formatDateTimeLocal } from "@/lib/formatters";
 import { ApiError } from "@/lib/api-client";
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+
 const schema = z.object({
   title: z.string().min(2, "Title is required"),
   category: z.string().min(1, "Category is required"),
@@ -50,6 +52,7 @@ export default function AdminItemForm() {
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [docFiles, setDocFiles] = useState<File[]>([]);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
+  const [primaryImageUrl, setPrimaryImageUrl] = useState<string | undefined>(undefined);
 
   const { data: item, isLoading: itemLoading } = useQuery({
     queryKey: queryKeys.items.detail(id ?? ""),
@@ -87,6 +90,7 @@ export default function AdminItemForm() {
         startTime: formatDateTimeLocal(item.startTime),
         endTime: formatDateTimeLocal(item.endTime),
       });
+      setPrimaryImageUrl(item.images.find((img) => img.isPrimary)?.url ?? item.images[0]?.url);
     }
   }, [item, reset]);
 
@@ -97,6 +101,7 @@ export default function AdminItemForm() {
     });
     imageFiles.forEach((f) => fd.append("images", f));
     docFiles.forEach((f) => fd.append("documents", f));
+    if (isEdit && primaryImageUrl) fd.append("primaryImageUrl", primaryImageUrl);
     return fd as unknown as FormData;
   };
 
@@ -128,6 +133,9 @@ export default function AdminItemForm() {
   });
 
   if (isEdit && itemLoading) return <PageShell><PageSpinner /></PageShell>;
+
+  const originalPrimaryUrl = item?.images.find((img) => img.isPrimary)?.url ?? item?.images[0]?.url;
+  const primaryChanged = isEdit && primaryImageUrl !== originalPrimaryUrl;
 
   return (
     <PageShell>
@@ -261,6 +269,35 @@ export default function AdminItemForm() {
                 <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate">
                   Images
                 </p>
+                {isEdit && item && item.images.length > 0 && (
+                  <div className="mb-3 grid grid-cols-4 gap-2 sm:grid-cols-5">
+                    {item.images.map((img) => {
+                      const isSelected = primaryImageUrl === img.url;
+                      return (
+                        <button
+                          key={img.url}
+                          type="button"
+                          onClick={() => setPrimaryImageUrl(img.url)}
+                          title={isSelected ? "Cover image" : "Set as cover image"}
+                          className={`relative aspect-square overflow-hidden rounded-xl border-2 transition ${
+                            isSelected ? "border-neon" : "border-ink/10 hover:border-ink/30"
+                          }`}
+                        >
+                          <img
+                            src={`${API_BASE}${img.url}`}
+                            alt={img.name}
+                            className="h-full w-full object-cover"
+                          />
+                          {isSelected && (
+                            <span className="absolute inset-x-0 bottom-0 bg-neon px-1 py-0.5 text-center text-[10px] font-semibold uppercase tracking-wide text-white">
+                              Cover
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => imageInputRef.current?.click()}
@@ -283,7 +320,7 @@ export default function AdminItemForm() {
                 />
                 {isEdit && item && item.images.length > 0 && (
                   <p className="mt-2 text-xs text-slate">
-                    {item.images.length} existing image(s). Upload new files to replace.
+                    Click an image above to set it as the cover photo. Uploaded files add more images.
                   </p>
                 )}
               </div>
@@ -326,7 +363,7 @@ export default function AdminItemForm() {
             <Link to={isEdit ? `/admin/items` : "/admin/items"}>
               <Button type="button" variant="secondary">Cancel</Button>
             </Link>
-            <Button type="submit" isLoading={saving} disabled={isEdit && !isDirty && imageFiles.length === 0 && docFiles.length === 0}>
+            <Button type="submit" isLoading={saving} disabled={isEdit && !isDirty && !primaryChanged && imageFiles.length === 0 && docFiles.length === 0}>
               {isEdit ? "Save changes" : "Create item"}
             </Button>
           </div>

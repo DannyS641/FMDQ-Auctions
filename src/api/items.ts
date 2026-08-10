@@ -43,8 +43,12 @@ export const getMyWins = async (): Promise<WonItem[]> =>
 export const createItem = async (formData: FormData): Promise<AuctionItem> =>
   apiClient<AuctionItem>("/api/items", { method: "POST", body: formData });
 
-export const updateItem = async (id: string, formData: FormData): Promise<AuctionItem> =>
-  apiClient<AuctionItem>(`/api/items/${id}`, { method: "PATCH", body: formData });
+export const updateItem = async (id: string, formData: FormData): Promise<AuctionItem> => {
+  // PHP only populates $_POST/$_FILES for multipart bodies on a real POST, so
+  // this rides the backend's _method override instead of sending a literal PATCH.
+  formData.append("_method", "PATCH");
+  return apiClient<AuctionItem>(`/api/items/${id}`, { method: "POST", body: formData });
+};
 
 export const archiveItem = async (id: string): Promise<{ ok: boolean }> =>
   apiClient(`/api/items/${id}`, { method: "DELETE" });

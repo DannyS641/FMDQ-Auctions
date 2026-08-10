@@ -100,11 +100,12 @@ CREATE TABLE IF NOT EXISTS items (
 -- item_files  (kind enum was: text + CHECK (image|document))
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS item_files (
-  id       CHAR(36)               NOT NULL,
-  item_id  CHAR(36)               NOT NULL,
-  kind     ENUM('image','document') NOT NULL,
-  name     VARCHAR(255)           NOT NULL,
-  url      VARCHAR(1024)          NOT NULL,
+  id         CHAR(36)               NOT NULL,
+  item_id    CHAR(36)               NOT NULL,
+  kind       ENUM('image','document') NOT NULL,
+  name       VARCHAR(255)           NOT NULL,
+  url        VARCHAR(1024)          NOT NULL,
+  is_primary TINYINT(1)             NOT NULL DEFAULT 0, -- cover image shown on auction cards (kind='image' only)
   PRIMARY KEY (id),
   KEY idx_item_files_item_kind (item_id, kind),
   CONSTRAINT fk_item_files_item

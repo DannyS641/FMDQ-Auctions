@@ -561,7 +561,8 @@ try {
         $storage = new FileStorage();
         $images = array_map(fn ($f) => $storage->store($f['tmp_name'], $f['name'], 'image', 'bidder_visible', true), uploadedFiles('images'));
         $documents = array_map(fn ($f) => $storage->store($f['tmp_name'], $f['name'], 'document', $visibility, true), uploadedFiles('documents'));
-        $writer->updateItem($ctx, $itemId, $validation['value'], $images, $documents);
+        $primaryImageUrl = isset($_POST['primaryImageUrl']) && $_POST['primaryImageUrl'] !== '' ? (string) $_POST['primaryImageUrl'] : null;
+        $writer->updateItem($ctx, $itemId, $validation['value'], $images, $documents, $primaryImageUrl);
         respond(200, $model->getItemById($itemId, true));
     }
 
