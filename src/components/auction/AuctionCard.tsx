@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+﻿import { Link } from "react-router-dom";
 import { formatMoney } from "@/lib/formatters";
 import { getAuctionStatus } from "@/lib/auction-utils";
 import { CountdownDisplay } from "./CountdownDisplay";
@@ -73,7 +73,7 @@ export function AuctionCard({ item, onMouseEnter }: Props) {
 
       <Link
         to={`/bidding/${item.id}`}
-        className="mt-4 inline-flex w-full items-center justify-center rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-neon"
+        className="mt-4 inline-flex w-full items-center justify-center rounded-none border border-ink/20 px-4 py-2 text-xs font-semibold text-ink transition duration-200 hover:bg-[#eef3ff] hover:text-neon"
       >
         View item
       </Link>

@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+﻿import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { PageShell } from "@/components/layout/PageShell";
 import { PageSpinner } from "@/components/ui/Spinner";
@@ -75,7 +75,7 @@ export default function MyBids() {
                 </div>
                 <Link
                   to={`/bidding/${entry.itemId}`}
-                  className="mt-6 inline-flex rounded-[0.9rem] border border-ink/20 px-4 py-2 text-xs font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200"
+                  className="mt-6 inline-flex rounded-none border border-ink/20 px-4 py-2 text-xs font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200"
                 >
                   Open listing
                 </Link>

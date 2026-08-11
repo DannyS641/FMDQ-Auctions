@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+﻿import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { motion } from "motion/react";
 import { RefreshCw, KeyRound, Download, Trophy, BarChart3, Users, Activity, X } from "lucide-react";
 import type { Workbook, Worksheet, Cell, Row } from "exceljs";
 import { PageShell } from "@/components/layout/PageShell";
@@ -29,6 +30,7 @@ import { queryKeys } from "@/lib/query-keys";
 import { formatDate, formatMoney, formatTimeAgo } from "@/lib/formatters";
 import { cn } from "@/lib/cn";
 import { ApiError } from "@/lib/api-client";
+import { buttonHover } from "@/lib/motion";
 import type { AdminUser, AuditEntry } from "@/types";
 import { useAuth } from "@/context/auth-context";
 
@@ -371,7 +373,7 @@ function OverviewTab() {
       value: summary.wins,
       note: summary.wins > 0 ? "Successful bid outcomes recorded" : "No wins recorded yet",
       icon: Trophy,
-      accent: "from-[#ff8458] to-[#ff6b2c]",
+      accent: "from-[#ddb054] to-gold",
       text: "text-white",
       muted: "text-white/80",
       iconClassName: "bg-white/20 text-white",
@@ -410,7 +412,7 @@ function OverviewTab() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="rounded-[2rem] border border-ink/10 bg-white p-5 shadow-[0_18px_45px_rgba(15,23,42,0.05)]">
+      <div className="rounded-none border border-ink/10 bg-white p-5 shadow-[0_18px_45px_rgba(15,23,42,0.05)]">
         <div className="flex flex-col gap-5 xl:grid xl:grid-cols-[1.2fr_0.8fr]">
           <div className="space-y-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -438,7 +440,7 @@ function OverviewTab() {
               {overviewCards.map(({ label, value, note, icon: Icon, accent, text, muted, iconClassName }) => (
                 <div
                   key={label}
-                  className={`rounded-[1.6rem] bg-gradient-to-br ${accent} p-4 shadow-[0_16px_35px_rgba(15,23,42,0.06)]`}
+                  className={`rounded-none bg-gradient-to-br ${accent} p-4 shadow-[0_16px_35px_rgba(15,23,42,0.06)]`}
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div>
@@ -483,7 +485,7 @@ function OverviewTab() {
               ))}
             </div>
 
-            <div className="mt-6 rounded-[1.4rem] border border-ink/10 bg-white p-4">
+            <div className="mt-6 rounded-none border border-ink/10 bg-white p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate">Queue snapshot</p>
               <div className="mt-3 space-y-2">
                 <p className="text-xl font-semibold text-neon">{summary.pendingNotifications}</p>
@@ -675,15 +677,16 @@ function UserRow({
                     className="inline-flex items-center gap-1 rounded-full bg-[#eef3ff] py-0.5 pl-2 pr-1 text-xs font-semibold text-neon"
                   >
                     {r}
-                    <button
+                    <motion.button
                       type="button"
                       aria-label={`Remove ${r} from ${user.displayName}`}
                       disabled={removingRole || user.roles.length <= 1}
                       onClick={() => dropRole(r)}
+                      {...buttonHover}
                       className="rounded-full p-0.5 text-neon/60 transition hover:bg-neon/10 hover:text-neon disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <X size={11} />
-                    </button>
+                    </motion.button>
                   </span>
                 ) : (
                   <span key={r} className="rounded-full bg-[#eef3ff] px-2 py-0.5 text-xs font-semibold text-neon">
@@ -1429,7 +1432,7 @@ function ReportsTab() {
             <p className="text-sm text-slate">{data.winners.length} bidder(s)</p>
           </div>
 
-          <div className="overflow-hidden rounded-[1.4rem] border border-ink/10 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
+          <div className="overflow-hidden rounded-none border border-ink/10 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
           <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1466,7 +1469,7 @@ function ReportsTab() {
             <p className="text-sm text-slate">{data.wonItems.length} successful lot(s)</p>
           </div>
 
-          <div className="overflow-hidden rounded-[1.4rem] border border-ink/10 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
+          <div className="overflow-hidden rounded-none border border-ink/10 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
           <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1688,10 +1691,11 @@ export default function Operations() {
         {/* Tab bar */}
         <div className="flex gap-1 overflow-x-auto">
           {visibleTabs.map(({ id, label }) => (
-            <button
+            <motion.button
               key={id}
               type="button"
               onClick={() => setTab(id)}
+              {...buttonHover}
               className={cn(
                 "rounded-xl px-5 py-2.5 text-sm font-semibold whitespace-nowrap transition",
                 activeTab === id
@@ -1700,7 +1704,7 @@ export default function Operations() {
               )}
             >
               {label}
-            </button>
+            </motion.button>
           ))}
         </div>
 

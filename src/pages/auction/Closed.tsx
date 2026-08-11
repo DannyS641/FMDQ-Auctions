@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+﻿import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { PageShell } from "@/components/layout/PageShell";
 import { PageSpinner } from "@/components/ui/Spinner";
@@ -85,7 +85,7 @@ export default function Closed() {
 
                   <Link
                     to={`/bidding/${item.id}`}
-                    className="mt-5 inline-flex rounded-[0.9rem] bg-neon px-4 py-2 text-xs font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] hover:bg-neon/90 transition duration-200"
+                    className="mt-5 inline-flex rounded-none bg-neon px-4 py-2 text-xs font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] hover:bg-neon/90 transition duration-200"
                   >
                     Open details
                   </Link>

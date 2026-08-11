@@ -1,10 +1,12 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { Link } from "react-router-dom";
+import { motion } from "motion/react";
 import { formatMoney } from "@/lib/formatters";
 import { getMinBid, canBid as canBidCheck } from "@/lib/auction-utils";
 import { usePlaceBid } from "@/hooks/use-place-bid";
 import { useAuth } from "@/context/auth-context";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { buttonHover } from "@/lib/motion";
 import type { AuctionItem } from "@/types";
 
 type Props = {
@@ -71,27 +73,29 @@ export function BidForm({ item }: Props) {
           className="no-spin w-full rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm text-ink placeholder:text-slate/60 focus:outline-none focus:ring-2 focus:ring-neon disabled:opacity-50"
           disabled={!allowed}
         />
-        <button
+        <motion.button
           type="button"
           onClick={handleStep}
           disabled={!allowed}
-          className="rounded-[0.9rem] border border-ink/20 px-4 py-3 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200 disabled:opacity-50"
+          {...buttonHover}
+          className="rounded-none border border-ink/20 px-4 py-3 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200 disabled:opacity-50"
           aria-label="Increase bid"
         >
           ▲
-        </button>
+        </motion.button>
       </div>
-      <button
+      <motion.button
         type="submit"
         disabled={!allowed || isPending}
-        className="w-full rounded-[0.9rem] bg-neon px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200 hover:bg-neon/90 disabled:opacity-60"
+        {...buttonHover}
+        className="w-full rounded-none bg-neon px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200 hover:bg-neon/90 disabled:opacity-60"
       >
         {isPending ? "Submitting…" : "Review bid"}
-      </button>
+      </motion.button>
       {!isSignedIn && (
         <Link
           to="/signin"
-          className="block w-full rounded-[0.9rem] border border-ink/20 px-5 py-3 text-center text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200"
+          className="block w-full rounded-none border border-ink/20 px-5 py-3 text-center text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200"
         >
           Sign in to bid
         </Link>

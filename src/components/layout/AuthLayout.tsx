@@ -1,6 +1,8 @@
-import { type ReactNode } from "react";
+﻿import { type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { motion } from "motion/react";
 import { useAuth } from "@/context/auth-context";
+import { buttonHover } from "@/lib/motion";
 
 type AuthLayoutProps = {
   eyebrow?: string;
@@ -32,13 +34,14 @@ export function AuthLayout({ eyebrow = "FMDQ Auctions Portal", title, descriptio
           <Link to="/">
             <img src="/slides/fmdq-logo.png" alt="FMDQ" className="h-9 w-auto" />
           </Link>
-          <button
+          <motion.button
             type="button"
             onClick={() => navigate(-1)}
-            className="rounded-[0.9rem] border border-ink/15 px-5 py-2 text-xs font-semibold uppercase tracking-[0.15em] text-ink transition hover:bg-ash"
+            {...buttonHover}
+            className="rounded-none border border-ink/15 px-5 py-2 text-xs font-semibold uppercase tracking-[0.15em] text-ink transition hover:bg-ash"
           >
             Back
-          </button>
+          </motion.button>
         </div>
 
         {/* Form area */}
@@ -75,7 +78,7 @@ export function AuthLayout({ eyebrow = "FMDQ Auctions Portal", title, descriptio
             )}
 
             {/* New users hint */}
-            <p className="mt-6 rounded-2xl bg-[#fff7e8] px-4 py-3 text-xs text-[#9a6408]">
+            <p className="mt-6 rounded-2xl bg-gold/10 px-4 py-3 text-xs text-gold">
               New users should create an account first, verify their email, then sign in.
             </p>
           </div>

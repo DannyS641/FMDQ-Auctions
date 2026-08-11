@@ -1,6 +1,8 @@
 import { forwardRef, useState, type InputHTMLAttributes } from "react";
+import { motion } from "motion/react";
 import { Eye, EyeOff } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { buttonHover } from "@/lib/motion";
 
 type PasswordInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
   error?: string;
@@ -32,14 +34,15 @@ export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
             )}
             {...rest}
           />
-          <button
+          <motion.button
             type="button"
             onClick={() => setVisible((v) => !v)}
+            {...buttonHover}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-slate hover:text-ink"
             aria-label={visible ? "Hide password" : "Show password"}
           >
             {visible ? <EyeOff size={16} /> : <Eye size={16} />}
-          </button>
+          </motion.button>
         </div>
         {error && <p className="text-xs text-red-500">{error}</p>}
       </div>

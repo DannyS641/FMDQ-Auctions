@@ -5,7 +5,9 @@ import { z } from "zod";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { motion } from "motion/react";
 import { Trash2, ChevronLeft, Upload } from "lucide-react";
+import { buttonHover } from "@/lib/motion";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
 import { PageHeaderCard } from "@/components/ui/PageHeaderCard";
@@ -270,11 +272,12 @@ export default function AdminItemForm() {
                     {item.images.map((img) => {
                       const isSelected = primaryImageUrl === img.url;
                       return (
-                        <button
+                        <motion.button
                           key={img.url}
                           type="button"
                           onClick={() => setPrimaryImageUrl(img.url)}
                           title={isSelected ? "Cover image" : "Set as cover image"}
+                          {...buttonHover}
                           className={`relative aspect-square overflow-hidden rounded-xl border-2 transition ${
                             isSelected ? "border-neon" : "border-ink/10 hover:border-ink/30"
                           }`}
@@ -289,14 +292,15 @@ export default function AdminItemForm() {
                               Cover
                             </span>
                           )}
-                        </button>
+                        </motion.button>
                       );
                     })}
                   </div>
                 )}
-                <button
+                <motion.button
                   type="button"
                   onClick={() => imageInputRef.current?.click()}
+                  {...buttonHover}
                   className="flex w-full flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-ink/10 bg-ash p-6 text-slate transition hover:border-neon/30 hover:bg-[#eef3ff] hover:text-neon"
                 >
                   <Upload size={20} />
@@ -305,7 +309,7 @@ export default function AdminItemForm() {
                       ? `${imageFiles.length} file(s) selected`
                       : "Click to upload images"}
                   </span>
-                </button>
+                </motion.button>
                 <input
                   ref={imageInputRef}
                   type="file"
@@ -326,9 +330,10 @@ export default function AdminItemForm() {
                 <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate">
                   Documents
                 </p>
-                <button
+                <motion.button
                   type="button"
                   onClick={() => docInputRef.current?.click()}
+                  {...buttonHover}
                   className="flex w-full flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-ink/10 bg-ash p-6 text-slate transition hover:border-neon/30 hover:bg-[#eef3ff] hover:text-neon"
                 >
                   <Upload size={20} />
@@ -337,7 +342,7 @@ export default function AdminItemForm() {
                       ? `${docFiles.length} file(s) selected`
                       : "Click to upload documents"}
                   </span>
-                </button>
+                </motion.button>
                 <input
                   ref={docInputRef}
                   type="file"

@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+﻿import { Link } from "react-router-dom";
 import { useAuth } from "@/context/auth-context";
 import { useLandingStats } from "@/hooks/use-auction-items";
 
@@ -22,13 +22,13 @@ export default function Landing() {
         <div className="mt-6 flex flex-wrap gap-4">
           <Link
             to={isSignedIn ? "/bidding" : "/signin"}
-            className="rounded-[0.9rem] bg-neon px-6 py-3 text-sm font-semibold text-white"
+            className="rounded-none bg-neon px-6 py-3 text-sm font-semibold text-white"
           >
             Start bidding
           </Link>
           <Link
             to="/bidding"
-            className="rounded-[0.9rem] border border-ink/20 px-6 py-3 text-sm font-semibold text-ink hover:bg-[#eef3ff]"
+            className="rounded-none border border-ink/20 px-6 py-3 text-sm font-semibold text-ink hover:bg-[#eef3ff]"
           >
             View auctions
           </Link>

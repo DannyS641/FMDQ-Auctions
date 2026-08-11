@@ -1,11 +1,13 @@
-import { useState, useMemo } from "react";
+﻿import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
+import { motion } from "motion/react";
 import { PageShell } from "@/components/layout/PageShell";
 import { AuctionCard } from "@/components/auction/AuctionCard";
 import { PageSpinner } from "@/components/ui/Spinner";
 import { useAuctionItems, useCategories, usePrefetchAuctionItem } from "@/hooks/use-auction-items";
 import { useAuth } from "@/context/auth-context";
 import { getAuctionStatus } from "@/lib/auction-utils";
+import { buttonHover } from "@/lib/motion";
 
 export default function BiddingDesk() {
   const { data: items, isLoading, isError } = useAuctionItems();
@@ -69,7 +71,7 @@ export default function BiddingDesk() {
         <aside className="space-y-4 rounded-3xl border border-ink/10 bg-white p-4 lg:self-start">
           <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.2em] text-slate">
             <span>Filters</span>
-            <button type="button" onClick={clearFilters} className="text-ink tracking-normal hover:text-neon">Clear</button>
+            <motion.button type="button" onClick={clearFilters} {...buttonHover} className="text-ink tracking-normal hover:text-neon">Clear</motion.button>
           </div>
           <div>
             <p className="text-[11px] uppercase tracking-[0.2em] text-slate">Search</p>
@@ -126,7 +128,7 @@ export default function BiddingDesk() {
               <p className="mt-2 text-sm text-slate">{filtered.length} items found</p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <div className="rounded-[0.9rem] border border-ink/10 bg-white px-4 py-2 text-xs text-slate">
+              <div className="rounded-none border border-ink/10 bg-white px-4 py-2 text-xs text-slate">
                 <span className="font-semibold text-ink">{liveCount}</span> live ·{" "}
                 <span className="font-semibold text-ink">{closingSoonCount}</span> closing soon
               </div>
@@ -136,18 +138,19 @@ export default function BiddingDesk() {
           {/* Status tabs */}
           <div className="mt-6 flex flex-wrap gap-2">
             {(["all", "Live", "Upcoming", "Closed"] as const).map((tab) => (
-              <button
+              <motion.button
                 key={tab}
                 type="button"
                 onClick={() => setActiveTab(tab)}
-                className={`rounded-[0.9rem] px-4 py-2 text-xs font-semibold capitalize transition duration-200 ${
+                {...buttonHover}
+                className={`rounded-none px-4 py-2 text-xs font-semibold capitalize transition duration-200 ${
                   activeTab === tab
                     ? "bg-neon text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)]"
                     : "border border-ink/10 bg-white text-ink hover:bg-[#eef3ff] hover:text-neon"
                 }`}
               >
                 {tab}
-              </button>
+              </motion.button>
             ))}
           </div>
 
@@ -182,10 +185,10 @@ export default function BiddingDesk() {
               <p className="mt-2 text-sm text-slate">Create new listings, edit current items, and inspect the notification queue from dedicated admin workspaces.</p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <Link to="/operations" className="rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200">
+              <Link to="/operations" className="rounded-none border border-ink/20 px-5 py-3 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200">
                 Open operations
               </Link>
-              <Link to="/admin/items" className="rounded-[0.9rem] bg-neon px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200 hover:bg-neon/90">
+              <Link to="/admin/items" className="rounded-none bg-neon px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200 hover:bg-neon/90">
                 Open item manager
               </Link>
             </div>

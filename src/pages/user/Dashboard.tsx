@@ -1,6 +1,8 @@
-import { Link } from "react-router-dom";
+﻿import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { motion } from "motion/react";
 import { Gavel, Trophy, Activity, ListChecks, CheckCircle2, XCircle } from "lucide-react";
+import { buttonHover } from "@/lib/motion";
 import { PageShell } from "@/components/layout/PageShell";
 import { PageSpinner } from "@/components/ui/Spinner";
 import { PageHeaderCard } from "@/components/ui/PageHeaderCard";
@@ -27,13 +29,14 @@ export default function Dashboard() {
         <div className="rounded-3xl border border-ink/10 bg-white p-5 text-sm text-slate sm:p-8">
           <p className="font-semibold text-ink">Unable to load your dashboard right now.</p>
           <p className="mt-3">Please refresh the page or try again in a moment.</p>
-          <button
+          <motion.button
             type="button"
             onClick={() => void refetch()}
-            className="mt-6 rounded-[0.9rem] bg-neon px-6 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)]"
+            {...buttonHover}
+            className="mt-6 rounded-none bg-neon px-6 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)]"
           >
             Try again
-          </button>
+          </motion.button>
         </div>
       </PageShell>
     );

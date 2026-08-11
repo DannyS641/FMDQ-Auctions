@@ -1,11 +1,13 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+﻿import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { motion } from "motion/react";
 import { PageShell } from "@/components/layout/PageShell";
 import { PageSpinner } from "@/components/ui/Spinner";
 import { getMyProfile, getMySessions, revokeSession, revokeOtherSessions, requestPasswordReset } from "@/api/auth";
 import { queryKeys } from "@/lib/query-keys";
 import { formatDate } from "@/lib/formatters";
 import { useAuth } from "@/context/auth-context";
+import { buttonHover } from "@/lib/motion";
 
 export default function Profile() {
   const queryClient = useQueryClient();
@@ -80,23 +82,25 @@ export default function Profile() {
             </div>
           </div>
           <div className="mt-6 flex flex-wrap gap-3">
-            <button
+            <motion.button
               type="button"
               onClick={() => resetPw()}
               disabled={resetPending}
-              className="w-full rounded-[0.9rem] bg-neon px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] disabled:opacity-60 sm:w-auto"
+              {...buttonHover}
+              className="w-full rounded-none bg-neon px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] disabled:opacity-60 sm:w-auto"
             >
               Email me a reset link
-            </button>
-            <button
+            </motion.button>
+            <motion.button
               type="button"
               onClick={() => void signOut()}
-              className="w-full rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200 sm:w-auto"
+              {...buttonHover}
+              className="w-full rounded-none border border-ink/20 px-5 py-3 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200 sm:w-auto"
             >
               Sign out
-            </button>
+            </motion.button>
           </div>
-          <p className="mt-4 rounded-2xl bg-[#fff7e8] px-4 py-3 text-sm text-[#9a6408]">
+          <p className="mt-4 rounded-2xl bg-gold/10 px-4 py-3 text-sm text-gold">
             Manage your sessions and account security from here.
           </p>
         </div>
@@ -108,13 +112,14 @@ export default function Profile() {
               <p className="text-xs uppercase tracking-[0.3em] text-slate">Session management</p>
               <h2 className="mt-2 text-xl font-semibold text-ink sm:text-2xl">Devices and active sessions</h2>
             </div>
-            <button
+            <motion.button
               type="button"
               onClick={() => revokeOthers()}
-              className="w-full rounded-[0.9rem] border border-ink/20 px-5 py-3 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200 sm:w-auto"
+              {...buttonHover}
+              className="w-full rounded-none border border-ink/20 px-5 py-3 text-sm font-semibold text-ink hover:bg-[#eef3ff] hover:text-neon transition duration-200 sm:w-auto"
             >
               Revoke other sessions
-            </button>
+            </motion.button>
           </div>
 
           <div className="mt-6 space-y-3">
@@ -137,13 +142,14 @@ export default function Profile() {
                       This browser
                     </span>
                   ) : (
-                    <button
+                    <motion.button
                       type="button"
                       onClick={() => revoke(entry.id)}
-                      className="rounded-[0.9rem] border border-rose-200 px-4 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 transition duration-200"
+                      {...buttonHover}
+                      className="rounded-none border border-rose-200 px-4 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 transition duration-200"
                     >
                       Revoke
-                    </button>
+                    </motion.button>
                   )}
                 </div>
               </div>

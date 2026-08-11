@@ -1,4 +1,6 @@
-import { Component, type ErrorInfo, type ReactNode } from "react";
+﻿import { Component, type ErrorInfo, type ReactNode } from "react";
+import { motion } from "motion/react";
+import { buttonHover } from "@/lib/motion";
 
 type AppErrorBoundaryProps = {
   children: ReactNode;
@@ -37,13 +39,14 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
             <p className="mt-3 text-sm text-slate">
               The portal hit an unexpected UI error. Refreshing usually gets you back in immediately.
             </p>
-            <button
+            <motion.button
               type="button"
               onClick={this.handleReload}
-              className="mt-6 rounded-[0.9rem] bg-neon px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200 hover:bg-neon/90"
+              {...buttonHover}
+              className="mt-6 rounded-none bg-neon px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200 hover:bg-neon/90"
             >
               Reload portal
-            </button>
+            </motion.button>
           </div>
         </div>
       );

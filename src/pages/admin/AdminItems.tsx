@@ -2,7 +2,9 @@ import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { motion } from "motion/react";
 import { Download, Plus, Upload } from "lucide-react";
+import { buttonHover } from "@/lib/motion";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -457,23 +459,25 @@ export default function AdminItems() {
                                     <>
                                       <Link to={`/admin/items/${item.id}`} className="text-neon hover:underline">Edit</Link>
                                       {isArchived ? (
-                                        <button
+                                        <motion.button
                                           type="button"
                                           onClick={() => restore(item.id)}
+                                          {...buttonHover}
                                           className="text-neon hover:underline"
                                           disabled={restoring}
                                         >
                                           Restore
-                                        </button>
+                                        </motion.button>
                                       ) : (
-                                        <button
+                                        <motion.button
                                           type="button"
                                           onClick={() => archive(item.id)}
+                                          {...buttonHover}
                                           className="text-red-600 hover:underline"
                                           disabled={archiving}
                                         >
                                           Archive
-                                        </button>
+                                        </motion.button>
                                       )}
                                     </>
                                   ) : null}

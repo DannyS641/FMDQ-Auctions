@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { motion } from "motion/react";
 import { cn } from "@/lib/cn";
+import { buttonHover } from "@/lib/motion";
 import type { FileRef } from "@/types";
 
 type Props = {
@@ -33,17 +35,18 @@ export function ItemGallery({ images, title }: Props) {
       {images.length > 1 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
           {images.map((img, i) => (
-            <button
+            <motion.button
               key={i}
               type="button"
               onClick={() => setActive(i)}
+              {...buttonHover}
               className={cn(
                 "h-16 w-16 shrink-0 overflow-hidden rounded-2xl border-2 transition",
                 i === active ? "border-neon" : "border-transparent opacity-60 hover:opacity-100"
               )}
             >
               <img src={img.url} alt={`Thumbnail ${i + 1}`} className="h-full w-full object-cover" />
-            </button>
+            </motion.button>
           ))}
         </div>
       )}
