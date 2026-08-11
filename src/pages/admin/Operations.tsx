@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { RefreshCw, KeyRound, Download, Trophy, BarChart3, Users, Activity } from "lucide-react";
+import { RefreshCw, KeyRound, Download, Trophy, BarChart3, Users, Activity, X } from "lucide-react";
 import type { Workbook, Worksheet, Cell, Row } from "exceljs";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
-import { SectionHeader } from "@/components/ui/SectionHeader";
+import { PageHeaderCard } from "@/components/ui/PageHeaderCard";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
@@ -14,6 +14,9 @@ import {
   getOperations,
   getReports,
   getAdminUsers,
+  getRoles,
+  assignRole,
+  removeRole,
   getAudits,
   getNotifications,
   processNotifications,
@@ -25,6 +28,7 @@ import {
 import { queryKeys } from "@/lib/query-keys";
 import { formatDate, formatMoney, formatTimeAgo } from "@/lib/formatters";
 import { cn } from "@/lib/cn";
+import { ApiError } from "@/lib/api-client";
 import type { AdminUser, AuditEntry } from "@/types";
 import { useAuth } from "@/context/auth-context";
 
@@ -592,6 +596,15 @@ function UserRow({
   onToggleSelected: () => void;
 }) {
   const queryClient = useQueryClient();
+  const { isSuperAdmin } = useAuth();
+
+  const { data: allRoles = [] } = useQuery({
+    queryKey: queryKeys.admin.roles(),
+    queryFn: getRoles,
+    staleTime: 5 * 60_000,
+    enabled: isSuperAdmin,
+  });
+  const assignableRoles = allRoles.filter((r) => !user.roles.includes(r));
 
   const refreshAdminViews = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.admin.users() });
@@ -618,6 +631,24 @@ function UserRow({
     onError: () => toast.error("Could not queue password reset."),
   });
 
+  const { mutate: addRole, isPending: addingRole } = useMutation({
+    mutationFn: (roleName: string) => assignRole(user.id, roleName),
+    onSuccess: (_data, roleName) => {
+      toast.success(`${roleName} assigned to ${user.displayName}.`);
+      refreshAdminViews();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not assign role."),
+  });
+
+  const { mutate: dropRole, isPending: removingRole } = useMutation({
+    mutationFn: (roleName: string) => removeRole(user.id, roleName),
+    onSuccess: (_data, roleName) => {
+      toast.success(`${roleName} removed from ${user.displayName}.`);
+      refreshAdminViews();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not remove role."),
+  });
+
   return (
     <tr className="transition hover:bg-ash/50">
       <td className="px-5 py-4">
@@ -635,14 +666,48 @@ function UserRow({
         <p className="text-xs text-slate">{user.email}</p>
       </td>
       <td className="hidden px-5 py-4 sm:table-cell">
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           {user.roles.length > 0
-            ? user.roles.map((r) => (
-                <span key={r} className="rounded-full bg-[#eef3ff] px-2 py-0.5 text-xs font-semibold text-neon">
-                  {r}
-                </span>
-              ))
+            ? user.roles.map((r) =>
+                isSuperAdmin ? (
+                  <span
+                    key={r}
+                    className="inline-flex items-center gap-1 rounded-full bg-[#eef3ff] py-0.5 pl-2 pr-1 text-xs font-semibold text-neon"
+                  >
+                    {r}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${r} from ${user.displayName}`}
+                      disabled={removingRole || user.roles.length <= 1}
+                      onClick={() => dropRole(r)}
+                      className="rounded-full p-0.5 text-neon/60 transition hover:bg-neon/10 hover:text-neon disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                ) : (
+                  <span key={r} className="rounded-full bg-[#eef3ff] px-2 py-0.5 text-xs font-semibold text-neon">
+                    {r}
+                  </span>
+                )
+              )
             : <span className="text-xs text-slate">No roles</span>}
+          {isSuperAdmin && assignableRoles.length > 0 && (
+            <select
+              aria-label={`Add a role to ${user.displayName}`}
+              value=""
+              disabled={addingRole}
+              onChange={(e) => {
+                if (e.target.value) addRole(e.target.value);
+              }}
+              className="rounded-full border border-dashed border-ink/20 bg-white px-2 py-0.5 text-xs text-slate focus:outline-none focus:ring-1 focus:ring-neon"
+            >
+              <option value="">+ Add role</option>
+              {assignableRoles.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          )}
         </div>
       </td>
       <td className="px-5 py-4">
@@ -1618,7 +1683,7 @@ export default function Operations() {
   return (
     <PageShell>
       <div className="flex flex-col gap-6">
-        <SectionHeader title="Operations" description="System overview, user management, activity log, and notification queue." />
+        <PageHeaderCard title="Operations" subtitle="System overview, user management, activity log, and notification queue." />
 
         {/* Tab bar */}
         <div className="flex gap-1 overflow-x-auto">

@@ -1,0 +1,8 @@
+{
+    "id": "baf49f16-6f31-436a-9be5-48882559985b",
+    "eventType": "PASSWORD_RESET",
+    "recipient": "demo@auction.test",
+    "subject": "Reset your FMDQ Auctions password",
+    "attempts": 5,
+    "lastError": "SMTP expected 250 but got: 501 5.1.4 Recipient address reserved by RFC 2606"
+}

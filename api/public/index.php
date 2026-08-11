@@ -407,7 +407,7 @@ try {
             'createdAt'   => Dates::iso($u['created_at']),
             'lastLoginAt' => Dates::iso($u['last_login_at']),
             'role'        => $ctx->role,
-            'roles'       => array_map([Permissions::class, 'normalizeDisplayRoleName'], $authed['roles']),
+            'roles'       => $authed['roles'],
         ]);
     }
 

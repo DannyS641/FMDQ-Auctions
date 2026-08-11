@@ -93,7 +93,6 @@ final class AdEndpointAuth
         $email = self::stringAt($payload, (string) ($this->cfg['email_path'] ?? 'email'));
         $display = self::stringAt($payload, (string) ($this->cfg['display_name_path'] ?? 'displayName'));
         $groups = self::stringListAt($payload, (string) ($this->cfg['groups_path'] ?? 'groups'));
-        $responseRole = self::stringAt($payload, (string) ($this->cfg['role_path'] ?? ''));
 
         // Derive an email if the endpoint did not return one.
         $domain = (string) ($this->cfg['email_domain'] ?? '');
@@ -108,7 +107,11 @@ final class AdEndpointAuth
             return null; // can't provision without an email
         }
 
-        $role = $this->normalizeResponseRole($responseRole) ?? $this->mapRole($groups);
+        // The endpoint's own "role" field is a generic identity claim, not an
+        // app-specific authorization decision, so it is intentionally never
+        // trusted here — the role always comes from AD group mapping (below),
+        // which falls back to default_role (Bidder) for unmapped accounts.
+        $role = $this->mapRole($groups);
         if ($role === null) {
             return null; // authenticated but not authorized for the portal
         }
@@ -118,19 +121,6 @@ final class AdEndpointAuth
             'display_name' => $display !== '' ? $display : ($username !== '' ? $username : explode('@', $email)[0]),
             'role' => $role,
         ];
-    }
-
-    /** Accept only application roles explicitly returned by the trusted AD endpoint. */
-    private function normalizeResponseRole(string $role): ?string
-    {
-        $normalized = strtolower(trim($role));
-        return match ($normalized) {
-            'superadmin', 'super_admin' => 'SuperAdmin',
-            'admin' => 'Admin',
-            'shopowner', 'shop_owner', 'observer' => 'ShopOwner',
-            'bidder' => 'Bidder',
-            default => null,
-        };
     }
 
     /** Map AD groups to a single role (SuperAdmin > Admin > ShopOwner > Bidder), else default. */

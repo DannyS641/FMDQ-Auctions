@@ -1,14 +1,14 @@
 export type Role = "Guest" | "Bidder" | "ShopOwner" | "Admin" | "SuperAdmin";
 
-export const normalizeDisplayRoleName = (role: string) =>
-  role === "Observer" ? "ShopOwner" : role;
+// Retained (as an identity mapping) only because the legacy Express server
+// still imports it; the DB stores "ShopOwner" directly now, no more alias.
+export const normalizeDisplayRoleName = (role: string) => role;
 
 export const normalizeRole = (roles: string[]): Role => {
-  const normalizedRoles = roles.map(normalizeDisplayRoleName);
-  if (normalizedRoles.includes("SuperAdmin")) return "SuperAdmin";
-  if (normalizedRoles.includes("Admin")) return "Admin";
-  if (normalizedRoles.includes("ShopOwner")) return "ShopOwner";
-  if (normalizedRoles.includes("Bidder")) return "Bidder";
+  if (roles.includes("SuperAdmin")) return "SuperAdmin";
+  if (roles.includes("Admin")) return "Admin";
+  if (roles.includes("ShopOwner")) return "ShopOwner";
+  if (roles.includes("Bidder")) return "Bidder";
   return "Guest";
 };
 

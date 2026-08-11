@@ -1,7 +1,11 @@
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { Gavel, Trophy, Activity, ListChecks, CheckCircle2, XCircle } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { PageSpinner } from "@/components/ui/Spinner";
+import { PageHeaderCard } from "@/components/ui/PageHeaderCard";
+import { StatTile } from "@/components/ui/StatTile";
+import { Card } from "@/components/ui/Card";
 import { getMyDashboard } from "@/api/items";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuth } from "@/context/auth-context";
@@ -39,34 +43,23 @@ export default function Dashboard() {
 
   return (
     <PageShell>
-      <section>
-        <p className="text-xs uppercase tracking-[0.3em] text-slate">Bidder workspace</p>
-        <h1 className="mt-2 break-words text-[21px] font-semibold text-neon sm:text-[27px]">
-          Welcome, {session.displayName}
-        </h1>
-        <p className="mt-3 text-sm text-slate">
-          Track active bids, wins, reserve outcomes, and recent activity from one view.
-        </p>
-
-        {/* Stats */}
-        <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {[
-            { label: "Open bid positions", value: summary.openBidCount },
-            { label: "Won auctions", value: summary.wonAuctionCount },
-            { label: "Active sessions", value: summary.activeSessionCount },
-            { label: "My bid records", value: summary.totalBidCount },
-            { label: "Closed reserve met", value: summary.reserveMetClosedCount },
-            { label: "Closed reserve not met", value: summary.reserveNotMetClosedCount },
-          ].map(({ label, value }) => (
-            <div key={label} className="rounded-3xl border border-ink/10 bg-white p-5">
-              <p className="text-xs uppercase tracking-[0.3em] text-slate">{label}</p>
-              <p className="mt-2 text-3xl font-semibold text-ink">{value}</p>
-            </div>
-          ))}
-        </div>
+      <div className="flex flex-col gap-6">
+        <PageHeaderCard
+          title={`Welcome, ${session.displayName}`}
+          subtitle="Track active bids, wins, reserve outcomes, and recent activity from one view."
+        >
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <StatTile icon={<Gavel size={18} />} accent="neon" label="Open bid positions" value={summary.openBidCount} />
+            <StatTile icon={<Trophy size={18} />} accent="gold" label="Won auctions" value={summary.wonAuctionCount} />
+            <StatTile icon={<Activity size={18} />} accent="violet" label="Active sessions" value={summary.activeSessionCount} />
+            <StatTile icon={<ListChecks size={18} />} accent="tide" label="My bid records" value={summary.totalBidCount} />
+            <StatTile icon={<CheckCircle2 size={18} />} accent="emerald" label="Closed reserve met" value={summary.reserveMetClosedCount} />
+            <StatTile icon={<XCircle size={18} />} accent="rose" label="Closed reserve not met" value={summary.reserveNotMetClosedCount} />
+          </div>
+        </PageHeaderCard>
 
         {/* Recent activity */}
-        <section className="mt-10 rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
+        <Card>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.3em] text-slate">Recent activity</p>
@@ -98,8 +91,8 @@ export default function Dashboard() {
               ))
             )}
           </div>
-        </section>
-      </section>
+        </Card>
+      </div>
     </PageShell>
   );
 }

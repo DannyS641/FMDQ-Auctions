@@ -46,7 +46,7 @@ return [
         'internal_email_domains' => ['fmdq.com', 'fmdqgroup.com'], // AD domain(s)
         // Role granted to any authenticated internal user even with no group match.
         // Set to null to deny internal users who match no mapped group.
-        'default_internal_role'  => 'Observer',
+        'default_internal_role'  => 'ShopOwner',
         'email_verification_ttl_seconds' => 24 * 60 * 60, // verify link lifetime (24h)
         'password_reset_ttl_seconds'     => 60 * 60,      // reset link lifetime (1h)
     ],
@@ -90,7 +90,6 @@ return [
         'email_path'         => 'email',
         'display_name_path'  => 'displayName',
         'groups_path'        => 'groups',
-        'role_path'          => '', // optional trusted app role returned by the endpoint
         'email_domain'       => 'fmdqgroup.com', // used to build email if not returned
         'default_role'       => 'Bidder',         // role for any authenticated AD user
         'timeout'            => 10,
@@ -98,7 +97,7 @@ return [
         'role_map' => [
             'SuperAdmin' => [],
             'Admin'      => [], // e.g. ['Auction-Admins']
-            'ShopOwner'  => [], // shown as ShopOwner; stored as Observer
+            'ShopOwner'  => [],
             'Bidder'     => [],
         ],
     ],
@@ -177,11 +176,11 @@ return [
     // -------------------------------------------------------------------------
     // AD group (DN) -> application role. Keys are AD group distinguished names
     // (compared case-insensitively). Values must exist in the `roles` table
-    // (Admin | Bidder | Observer). A user gets the UNION of all matches.
+    // (Admin | Bidder | ShopOwner). A user gets the UNION of all matches.
     // -------------------------------------------------------------------------
     'role_map' => [
         'CN=Auction-Admins,OU=Groups,DC=fmdq,DC=com'   => 'Admin',
         'CN=Auction-Bidders,OU=Groups,DC=fmdq,DC=com'  => 'Bidder',
-        'CN=Auction-Viewers,OU=Groups,DC=fmdq,DC=com'  => 'Observer',
+        'CN=Auction-Viewers,OU=Groups,DC=fmdq,DC=com'  => 'ShopOwner',
     ],
 ];

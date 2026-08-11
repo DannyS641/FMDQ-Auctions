@@ -264,7 +264,7 @@ CREATE TABLE IF NOT EXISTS security_events (
 -- NOTE: classic `ON DUPLICATE KEY UPDATE col = col` no-op keeps these inserts
 -- idempotent without the row-alias syntax (which needs MySQL 8.0.19+).
 INSERT INTO roles (name) VALUES
-  ('Admin'), ('Bidder'), ('Observer')
+  ('Admin'), ('Bidder'), ('ShopOwner'), ('SuperAdmin')
   ON DUPLICATE KEY UPDATE name = name;
 
 INSERT INTO categories (name) VALUES

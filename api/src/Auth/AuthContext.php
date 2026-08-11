@@ -10,7 +10,7 @@ namespace App\Auth;
  */
 final class AuthContext
 {
-    /** @param string[] $roles raw DB role names (Admin|Bidder|Observer|...) */
+    /** @param string[] $roles raw DB role names (Admin|Bidder|ShopOwner|...) */
     public function __construct(
         public readonly ?string $userId,
         public readonly string $role,        // normalized: Guest|Bidder|ShopOwner|Admin|SuperAdmin

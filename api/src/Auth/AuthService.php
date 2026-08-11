@@ -250,7 +250,14 @@ final class AuthService
         return in_array($domain, $domains, true);
     }
 
-    /** @return array{0:string,1:string}|null [userId, authSource] */
+    /**
+     * @return array{0:string,1:string}|null [userId, authSource]
+     *
+     * Role assignment only happens the FIRST time an AD/LDAP user is
+     * provisioned (defaults to Bidder unless their AD group maps to more).
+     * Once a user exists, an admin's manual role change in Operations is
+     * authoritative and is never overwritten by a later login.
+     */
     private function loginInternal(string $identifier, string $password): ?array
     {
         $cfg = Config::load();
@@ -262,8 +269,11 @@ final class AuthService
             if ($profile === null) {
                 return null;
             }
+            $isNewUser = $this->users->findByEmail($profile['email']) === null;
             $userId = $this->users->upsertAdUser($profile['email'], $profile['display_name']);
-            $this->users->syncRoles($userId, [Permissions::toDbRoleName($profile['role'])]);
+            if ($isNewUser) {
+                $this->users->syncRoles($userId, [$profile['role']]);
+            }
             return [$userId, 'ad'];
         }
 
@@ -274,10 +284,13 @@ final class AuthService
             if ($profile === null) {
                 return null;
             }
+            $isNewUser = $this->users->findByEmail($profile['email']) === null;
             $userId = $this->users->upsertAdUser($profile['email'], $profile['display_name']);
-            $auth = Config::get('auth');
-            $roles = RoleMapper::map($profile['groups'], Config::get('role_map'), $auth['default_internal_role'] ?? null);
-            $this->users->syncRoles($userId, $roles);
+            if ($isNewUser) {
+                $auth = Config::get('auth');
+                $roles = RoleMapper::map($profile['groups'], Config::get('role_map'), $auth['default_internal_role'] ?? null);
+                $this->users->syncRoles($userId, $roles);
+            }
             return [$userId, 'ad'];
         }
 

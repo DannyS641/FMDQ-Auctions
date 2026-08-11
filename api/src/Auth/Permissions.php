@@ -4,9 +4,8 @@ declare(strict_types=1);
 namespace App\Auth;
 
 /**
- * Port of shared/permissions.ts. The DB stores roles Admin | Bidder | Observer;
- * the app exposes a normalized hierarchy where Observer is displayed as
- * "ShopOwner", and an optional "SuperAdmin" role outranks Admin.
+ * Port of shared/permissions.ts. The DB stores roles Admin | Bidder | ShopOwner;
+ * an optional "SuperAdmin" role outranks Admin.
  */
 final class Permissions
 {
@@ -16,25 +15,13 @@ final class Permissions
     public const ADMIN      = 'Admin';
     public const SUPER_ADMIN = 'SuperAdmin';
 
-    public static function normalizeDisplayRoleName(string $role): string
-    {
-        return $role === 'Observer' ? 'ShopOwner' : $role;
-    }
-
-    /** Reverse of the display alias: the DB role name for a (possibly display) role. */
-    public static function toDbRoleName(string $role): string
-    {
-        return $role === self::SHOP_OWNER ? 'Observer' : $role;
-    }
-
     /** @param string[] $roles */
     public static function normalizeRole(array $roles): string
     {
-        $normalized = array_map([self::class, 'normalizeDisplayRoleName'], $roles);
-        if (in_array('SuperAdmin', $normalized, true)) return self::SUPER_ADMIN;
-        if (in_array('Admin', $normalized, true))      return self::ADMIN;
-        if (in_array('ShopOwner', $normalized, true))  return self::SHOP_OWNER;
-        if (in_array('Bidder', $normalized, true))     return self::BIDDER;
+        if (in_array('SuperAdmin', $roles, true)) return self::SUPER_ADMIN;
+        if (in_array('Admin', $roles, true))      return self::ADMIN;
+        if (in_array('ShopOwner', $roles, true))  return self::SHOP_OWNER;
+        if (in_array('Bidder', $roles, true))     return self::BIDDER;
         return self::GUEST;
     }
 

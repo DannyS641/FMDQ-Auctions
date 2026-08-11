@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { Trash2, ChevronLeft, Upload } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
-import { SectionHeader } from "@/components/ui/SectionHeader";
+import { PageHeaderCard } from "@/components/ui/PageHeaderCard";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -140,28 +140,24 @@ export default function AdminItemForm() {
   return (
     <PageShell>
       <div className="flex flex-col gap-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link
-              to="/admin/items"
-              className="inline-flex items-center gap-1 text-xs font-semibold text-slate hover:text-neon"
-            >
-              <ChevronLeft size={14} />
-              Items
-            </Link>
-            <SectionHeader title={isEdit ? "Edit item" : "New auction item"} />
-          </div>
-          {isEdit && (
-            <Button
-              variant="danger"
-              size="sm"
-              onClick={() => setShowArchiveConfirm(true)}
-            >
-              <Trash2 size={14} />
-              Archive
-            </Button>
-          )}
-        </div>
+        <Link
+          to="/admin/items"
+          className="inline-flex w-fit items-center gap-1 text-xs font-semibold text-slate hover:text-neon"
+        >
+          <ChevronLeft size={14} />
+          Items
+        </Link>
+        <PageHeaderCard
+          title={isEdit ? "Edit item" : "New auction item"}
+          actions={
+            isEdit && (
+              <Button variant="danger" size="sm" onClick={() => setShowArchiveConfirm(true)}>
+                <Trash2 size={14} />
+                Archive
+              </Button>
+            )
+          }
+        />
 
         <form onSubmit={handleSubmit((d) => save(d))} className="flex flex-col gap-6">
           <Card>

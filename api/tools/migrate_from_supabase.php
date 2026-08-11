@@ -117,7 +117,7 @@ $toDb = static fn (?string $iso): ?string => $iso ? (new \DateTimeImmutable($iso
 // roles (union of imported + the app's known roles)
 $roleNames = array_unique(array_merge(
     array_map(fn ($r) => $r['name'], $roles),
-    ['Admin', 'Bidder', 'Observer']
+    ['Admin', 'Bidder', 'ShopOwner', 'SuperAdmin']
 ));
 $rstmt = $pdo->prepare('INSERT INTO roles (name) VALUES (:n) ON DUPLICATE KEY UPDATE name = name');
 foreach ($roleNames as $n) { $rstmt->execute([':n' => $n]); }

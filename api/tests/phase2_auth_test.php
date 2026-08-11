@@ -67,10 +67,10 @@ $map = [
 $roles = RoleMapper::map(
     ['cn=auction-admins,ou=groups,dc=fmdq,dc=com'], // different case on purpose
     $map,
-    'Observer'
+    'ShopOwner'
 );
 check('case-insensitive group match -> Admin', in_array('Admin', $roles, true));
-check('default role applied -> Observer', in_array('Observer', $roles, true));
+check('default role applied -> ShopOwner', in_array('ShopOwner', $roles, true));
 check('unmatched group ignored (no Bidder)', !in_array('Bidder', $roles, true));
 
 echo "AuthService — external (local) path\n";

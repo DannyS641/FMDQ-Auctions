@@ -6,6 +6,7 @@ import { Download, Plus, Upload } from "lucide-react";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { PageHeaderCard, bannerActionClass } from "@/components/ui/PageHeaderCard";
 import { PageSpinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { useAuth } from "@/context/auth-context";
@@ -234,36 +235,35 @@ export default function AdminItems() {
   return (
     <PageShell>
       <div className="flex flex-col gap-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-slate">{isShopOwner ? "Shop owner" : "Admin"}</p>
-            <h1 className="mt-2 text-[27px] font-semibold text-neon">Items</h1>
-            <p className="mt-2 text-sm text-slate">
-              {isAdmin
-                ? "Review all auction items, edit existing listings, and create new ones."
-                : "Review auction listings, inspect bid activity, and export auction details."}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button variant="secondary" onClick={() => void handleExportAuctionDetails()}>
-              Export auction details
-            </Button>
-            {isAdmin && (
-              <Button variant="secondary" onClick={downloadBulkImportTemplate}>
-                <Download size={16} />
-                Bulk import template
+        <PageHeaderCard
+          title="Items"
+          subtitle={
+            isAdmin
+              ? `${isShopOwner ? "Shop owner" : "Admin"} · Review all auction items, edit existing listings, and create new ones.`
+              : `${isShopOwner ? "Shop owner" : "Admin"} · Review auction listings, inspect bid activity, and export auction details.`
+          }
+          actions={
+            <>
+              <Button variant="secondary" className={bannerActionClass} onClick={() => void handleExportAuctionDetails()}>
+                Export auction details
               </Button>
-            )}
-            {isAdmin && (
-              <Link to="/admin/items/new">
-                <Button>
-                  <Plus size={16} />
-                  New item
+              {isAdmin && (
+                <Button variant="secondary" className={bannerActionClass} onClick={downloadBulkImportTemplate}>
+                  <Download size={16} />
+                  Bulk import template
                 </Button>
-              </Link>
-            )}
-          </div>
-        </div>
+              )}
+              {isAdmin && (
+                <Link to="/admin/items/new">
+                  <Button variant="secondary" className={bannerActionClass}>
+                    <Plus size={16} />
+                    New item
+                  </Button>
+                </Link>
+              )}
+            </>
+          }
+        />
 
         {isAdmin && (
           <Card>

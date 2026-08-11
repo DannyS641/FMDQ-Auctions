@@ -11,7 +11,7 @@ namespace App\Auth;
  */
 final class RoleMapper
 {
-    private const KNOWN_ROLES = ['Admin', 'Bidder', 'Observer'];
+    private const KNOWN_ROLES = ['Admin', 'Bidder', 'ShopOwner'];
 
     /**
      * @param string[]            $groupDns  AD group DNs from memberOf

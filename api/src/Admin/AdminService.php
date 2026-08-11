@@ -37,7 +37,7 @@ final class AdminService
             'status' => $u['status'],
             'createdAt' => Dates::iso($u['created_at']),
             'lastLoginAt' => Dates::iso($u['last_login_at']),
-            'roles' => array_map([Permissions::class, 'normalizeDisplayRoleName'], $u['roles']),
+            'roles' => $u['roles'],
         ], $this->users->listAllWithRoles());
     }
 
