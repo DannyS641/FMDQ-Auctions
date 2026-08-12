@@ -243,6 +243,31 @@ CREATE TABLE IF NOT EXISTS notification_queue (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- -----------------------------------------------------------------------------
+-- site_slides  (admin-managed images: 'landing' is the rotating hero slideshow,
+-- 'auth' is the single static image behind the sign-in/sign-up forms)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS site_slides (
+  id          CHAR(36)              NOT NULL,
+  url         VARCHAR(1024)         NOT NULL,
+  placement   ENUM('landing','auth') NOT NULL DEFAULT 'landing',
+  name        VARCHAR(255)          NOT NULL,
+  sort_order  INT                   NOT NULL DEFAULT 0,
+  created_at  DATETIME(6)           NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (id),
+  KEY idx_site_slides_placement_sort (placement, sort_order)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- -----------------------------------------------------------------------------
+-- site_settings  (generic admin-editable key/value settings, e.g. slideshow timing)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS site_settings (
+  `key`       VARCHAR(64)  NOT NULL,
+  value       VARCHAR(255) NOT NULL,
+  updated_at  DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- -----------------------------------------------------------------------------
 -- security_events  (was: deny-all RLS; jsonb -> JSON)
 --   id is NOT a UUID here: the rate limiter stores a 64-char HMAC-SHA256 hex as
 --   the PK (slot key). Widened to VARCHAR(64). (Postgres used unbounded text.)
@@ -266,6 +291,10 @@ CREATE TABLE IF NOT EXISTS security_events (
 INSERT INTO roles (name) VALUES
   ('Admin'), ('Bidder'), ('ShopOwner'), ('SuperAdmin')
   ON DUPLICATE KEY UPDATE name = name;
+
+INSERT INTO site_settings (`key`, value) VALUES
+  ('slide_duration_seconds', '4')
+  ON DUPLICATE KEY UPDATE value = value;
 
 INSERT INTO categories (name) VALUES
   ('Cars'), ('Furniture'), ('Household Appliances'),

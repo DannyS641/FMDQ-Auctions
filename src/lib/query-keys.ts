@@ -16,6 +16,10 @@ export const queryKeys = {
     bids: () => ["me", "bids"] as const,
     wins: () => ["me", "wins"] as const,
   },
+  content: {
+    slides: (placement: "landing" | "auth" = "landing") => ["content", "slides", placement] as const,
+    settings: () => ["content", "settings"] as const,
+  },
   admin: {
     users: () => ["admin", "users"] as const,
     roles: () => ["admin", "roles"] as const,

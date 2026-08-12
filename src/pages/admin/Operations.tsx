@@ -11,6 +11,11 @@ import {
   Users,
   Activity,
   X,
+  Upload,
+  Trash2,
+  ArrowUp,
+  ArrowDown,
+  Images,
 } from "lucide-react";
 import type { Workbook, Worksheet, Cell, Row } from "exceljs";
 import { PageShell } from "@/components/layout/PageShell";
@@ -35,6 +40,7 @@ import {
   forcePasswordReset,
   bulkPasswordReset,
 } from "@/api/admin";
+import { getSlides, uploadSlide, deleteSlide, reorderSlides, getSiteSettings, updateSiteSettings } from "@/api/slides";
 import { queryKeys } from "@/lib/query-keys";
 import { formatDate, formatMoney, formatTimeAgo } from "@/lib/formatters";
 import { cn } from "@/lib/cn";
@@ -43,7 +49,7 @@ import { buttonHover } from "@/lib/motion";
 import type { AdminUser, AuditEntry } from "@/types";
 import { useAuth } from "@/context/auth-context";
 
-type Tab = "overview" | "users" | "audits" | "reports" | "notifications";
+type Tab = "overview" | "users" | "audits" | "reports" | "slideshow" | "notifications";
 const ACTIVITY_PAGE_SIZE = 10;
 const NOTIFICATION_PAGE_SIZE = 10;
 const OVERVIEW_ACTIVITY_PAGE_SIZE = 5;
@@ -53,6 +59,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "users", label: "Users" },
   { id: "audits", label: "Activity log" },
   { id: "reports", label: "Reports" },
+  { id: "slideshow", label: "Slideshow" },
   { id: "notifications", label: "Notifications" },
 ];
 
@@ -1987,6 +1994,291 @@ function ReportsTab() {
   );
 }
 
+// ─── Slideshow ────────────────────────────────────────────────────────────────
+
+const SLIDE_API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+
+function UploadButton({ label, uploading, onSelect }: { label: string; uploading: boolean; onSelect: (file: File) => void }) {
+  return (
+    <label>
+      <input
+        type="file"
+        accept="image/*"
+        className="hidden"
+        disabled={uploading}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onSelect(file);
+          e.target.value = "";
+        }}
+      />
+      <motion.span
+        {...buttonHover}
+        className={cn(
+          "inline-flex cursor-pointer items-center gap-2 rounded-none bg-neon px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(29,50,108,0.2)] transition duration-200 hover:bg-neon/90",
+          uploading && "cursor-not-allowed opacity-60"
+        )}
+      >
+        <Upload size={16} />
+        {uploading ? "Uploading…" : label}
+      </motion.span>
+    </label>
+  );
+}
+
+function LandingSlideshowSection() {
+  const queryClient = useQueryClient();
+
+  const { data: slides = [], isLoading } = useQuery({
+    queryKey: queryKeys.content.slides("landing"),
+    queryFn: () => getSlides("landing"),
+  });
+
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: queryKeys.content.slides("landing") });
+
+  const { mutate: upload, isPending: uploading } = useMutation({
+    mutationFn: (file: File) => uploadSlide(file, "landing"),
+    onSuccess: () => {
+      toast.success("Slide uploaded.");
+      refresh();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not upload slide."),
+  });
+
+  const { mutate: remove } = useMutation({
+    mutationFn: (id: string) => deleteSlide(id),
+    onSuccess: () => {
+      toast.success("Slide removed.");
+      refresh();
+    },
+    onError: () => toast.error("Could not remove slide."),
+  });
+
+  const { mutate: reorder } = useMutation({
+    mutationFn: (orderedIds: string[]) => reorderSlides(orderedIds),
+    onSuccess: refresh,
+    onError: () => toast.error("Could not reorder slides."),
+  });
+
+  const move = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= slides.length) return;
+    const next = [...slides];
+    [next[index], next[target]] = [next[target], next[index]];
+    reorder(next.map((s) => s.id));
+  };
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.3em] text-slate">Landing page</p>
+          <h2 className="mt-2 text-xl font-semibold text-ink">Hero slideshow</h2>
+          <p className="mt-2 text-sm text-slate">
+            These images rotate on the public landing page only. Order here is display order.
+          </p>
+        </div>
+        <UploadButton label="Upload slide" uploading={uploading} onSelect={upload} />
+      </div>
+
+      <div className="mt-6">
+        {isLoading ? (
+          <p className="text-sm text-slate">Loading slides…</p>
+        ) : slides.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-ink/10 bg-ash p-10 text-center text-slate">
+            <Images size={24} />
+            <p className="text-sm">No slides yet. Upload one to populate the hero rotation.</p>
+          </div>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {slides.map((slide, index) => (
+              <div key={slide.id} className="overflow-hidden rounded-2xl border border-ink/10 bg-white">
+                <div className="aspect-[4/3] w-full overflow-hidden bg-ash">
+                  <img
+                    src={`${SLIDE_API_BASE}${slide.url}`}
+                    alt={slide.name}
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2 px-3 py-2">
+                  <p className="min-w-0 truncate text-xs text-slate" title={slide.name}>{slide.name}</p>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <motion.button
+                      type="button"
+                      {...buttonHover}
+                      disabled={index === 0}
+                      onClick={() => move(index, -1)}
+                      className="rounded-none p-1.5 text-slate transition hover:bg-ash hover:text-ink disabled:cursor-not-allowed disabled:opacity-30"
+                      aria-label="Move earlier"
+                    >
+                      <ArrowUp size={14} />
+                    </motion.button>
+                    <motion.button
+                      type="button"
+                      {...buttonHover}
+                      disabled={index === slides.length - 1}
+                      onClick={() => move(index, 1)}
+                      className="rounded-none p-1.5 text-slate transition hover:bg-ash hover:text-ink disabled:cursor-not-allowed disabled:opacity-30"
+                      aria-label="Move later"
+                    >
+                      <ArrowDown size={14} />
+                    </motion.button>
+                    <motion.button
+                      type="button"
+                      {...buttonHover}
+                      onClick={() => remove(slide.id)}
+                      className="rounded-none p-1.5 text-red-600 transition hover:bg-red-50"
+                      aria-label={`Remove ${slide.name}`}
+                    >
+                      <Trash2 size={14} />
+                    </motion.button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function SlideDurationSection() {
+  const queryClient = useQueryClient();
+  const { data: settings } = useQuery({
+    queryKey: queryKeys.content.settings(),
+    queryFn: getSiteSettings,
+  });
+  const [seconds, setSeconds] = useState<string>("");
+
+  const current = settings?.slideDurationSeconds;
+  const displayValue = seconds !== "" ? seconds : (current?.toString() ?? "");
+
+  const { mutate: save, isPending: saving } = useMutation({
+    mutationFn: (value: number) => updateSiteSettings(value),
+    onSuccess: () => {
+      toast.success("Slide duration updated.");
+      setSeconds("");
+      void queryClient.invalidateQueries({ queryKey: queryKeys.content.settings() });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not update slide duration."),
+  });
+
+  return (
+    <Card>
+      <p className="text-xs uppercase tracking-[0.3em] text-slate">Landing page</p>
+      <h2 className="mt-2 text-xl font-semibold text-ink">Slideshow timing</h2>
+      <p className="mt-2 text-sm text-slate">How long each slide stays on screen before crossfading to the next one.</p>
+      <div className="mt-4 flex flex-wrap items-end gap-3">
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.15em] text-slate">
+            Seconds per slide
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={60}
+            value={displayValue}
+            onChange={(e) => setSeconds(e.target.value)}
+            className="w-32 rounded-none border border-ink/10 bg-white px-4 py-2 text-sm text-ink"
+          />
+        </div>
+        <Button
+          variant="secondary"
+          isLoading={saving}
+          disabled={displayValue === "" || Number(displayValue) === current}
+          onClick={() => save(Number(displayValue))}
+        >
+          Save
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function AuthImageSection() {
+  const queryClient = useQueryClient();
+  const { data: slides = [], isLoading } = useQuery({
+    queryKey: queryKeys.content.slides("auth"),
+    queryFn: () => getSlides("auth"),
+  });
+  const image = slides[0];
+
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: queryKeys.content.slides("auth") });
+
+  const { mutate: upload, isPending: uploading } = useMutation({
+    mutationFn: (file: File) => uploadSlide(file, "auth"),
+    onSuccess: () => {
+      toast.success("Sign-in image updated.");
+      refresh();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not upload image."),
+  });
+
+  const { mutate: remove } = useMutation({
+    mutationFn: (id: string) => deleteSlide(id),
+    onSuccess: () => {
+      toast.success("Sign-in image removed.");
+      refresh();
+    },
+    onError: () => toast.error("Could not remove image."),
+  });
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.3em] text-slate">Sign-in / sign-up pages</p>
+          <h2 className="mt-2 text-xl font-semibold text-ink">Auth page image</h2>
+          <p className="mt-2 text-sm text-slate">
+            One static image (no rotation) shown beside the sign-in/sign-up forms. Uploading a new one replaces the current image.
+          </p>
+        </div>
+        <UploadButton label={image ? "Replace image" : "Upload image"} uploading={uploading} onSelect={upload} />
+      </div>
+
+      <div className="mt-6 max-w-sm">
+        {isLoading ? (
+          <p className="text-sm text-slate">Loading…</p>
+        ) : !image ? (
+          <div className="flex flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-ink/10 bg-ash p-10 text-center text-slate">
+            <Images size={24} />
+            <p className="text-sm">No image set. The auth pages will show a plain background.</p>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-2xl border border-ink/10 bg-white">
+            <div className="aspect-[4/3] w-full overflow-hidden bg-ash">
+              <img src={`${SLIDE_API_BASE}${image.url}`} alt={image.name} className="h-full w-full object-cover" />
+            </div>
+            <div className="flex items-center justify-between gap-2 px-3 py-2">
+              <p className="min-w-0 truncate text-xs text-slate" title={image.name}>{image.name}</p>
+              <motion.button
+                type="button"
+                {...buttonHover}
+                onClick={() => remove(image.id)}
+                className="shrink-0 rounded-none p-1.5 text-red-600 transition hover:bg-red-50"
+                aria-label="Remove auth page image"
+              >
+                <Trash2 size={14} />
+              </motion.button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function SlideshowTab() {
+  return (
+    <div className="flex flex-col gap-6">
+      <LandingSlideshowSection />
+      <SlideDurationSection />
+      <AuthImageSection />
+    </div>
+  );
+}
+
 // ─── Notifications ────────────────────────────────────────────────────────────
 
 function NotificationsTab() {
@@ -2217,6 +2509,7 @@ export default function Operations() {
         {activeTab === "users" && <UsersTab />}
         {activeTab === "audits" && <AuditsTab />}
         {activeTab === "reports" && <ReportsTab />}
+        {activeTab === "slideshow" && <SlideshowTab />}
         {isSuperAdmin && activeTab === "notifications" && <NotificationsTab />}
       </div>
     </PageShell>

@@ -6,7 +6,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { motion } from "motion/react";
-import { Trash2, ChevronLeft, Upload } from "lucide-react";
+import { Trash2, ChevronLeft, Upload, Plus } from "lucide-react";
 import { buttonHover } from "@/lib/motion";
 import { PageShell } from "@/components/layout/PageShell";
 import { Card } from "@/components/ui/Card";
@@ -15,8 +15,7 @@ import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PageSpinner } from "@/components/ui/Spinner";
-import { getItem, createItem, updateItem, archiveItem } from "@/api/items";
-import { getCategories } from "@/api/items";
+import { getItem, createItem, updateItem, archiveItem, getCategories, createCategory } from "@/api/items";
 import { queryKeys } from "@/lib/query-keys";
 import { formatDateTimeLocal } from "@/lib/formatters";
 import { ApiError } from "@/lib/api-client";
@@ -55,6 +54,8 @@ export default function AdminItemForm() {
   const [docFiles, setDocFiles] = useState<File[]>([]);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [primaryImageUrl, setPrimaryImageUrl] = useState<string | undefined>(undefined);
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
 
   const { data: item, isLoading: itemLoading } = useQuery({
     queryKey: queryKeys.items.detail(id ?? ""),
@@ -72,8 +73,26 @@ export default function AdminItemForm() {
     register,
     handleSubmit,
     reset,
+    setValue,
     formState: { errors, isDirty },
   } = useForm<FormData>({ resolver: zodResolver(schema) });
+
+  const { mutate: addCategory, isPending: addingCategoryPending } = useMutation({
+    mutationFn: (name: string) => createCategory(name),
+    onSuccess: (_data, name) => {
+      toast.success(`Category "${name}" added.`);
+      // Update the cache directly (not just invalidate) so the new <option> exists
+      // in the DOM before setValue tries to select it — a refetch alone races the render.
+      queryClient.setQueryData<string[]>(queryKeys.items.categories(), (old) =>
+        Array.from(new Set([...(old ?? []), name])).sort()
+      );
+      setAddingCategory(false);
+      setNewCategoryName("");
+      // Deferred one tick so the option has actually rendered before we select it.
+      setTimeout(() => setValue("category", name, { shouldDirty: true, shouldValidate: true }), 0);
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not add category."),
+  });
 
   // Populate form when editing
   useEffect(() => {
@@ -177,18 +196,64 @@ export default function AdminItemForm() {
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.2em] text-slate">
-                  Category
-                </label>
-                <select
-                  className="w-full rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-neon"
-                  {...register("category")}
-                >
-                  <option value="">Select category</option>
-                  {categories.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label className="block text-xs font-semibold uppercase tracking-[0.2em] text-slate">
+                    Category
+                  </label>
+                  {!addingCategory && (
+                    <motion.button
+                      type="button"
+                      {...buttonHover}
+                      onClick={() => setAddingCategory(true)}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-neon hover:underline"
+                    >
+                      <Plus size={12} />
+                      New category
+                    </motion.button>
+                  )}
+                </div>
+                {addingCategory ? (
+                  <div className="flex gap-2">
+                    <input
+                      autoFocus
+                      type="text"
+                      value={newCategoryName}
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                      placeholder="e.g. Furniture"
+                      className="w-full rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-neon"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      isLoading={addingCategoryPending}
+                      disabled={!newCategoryName.trim()}
+                      onClick={() => addCategory(newCategoryName.trim())}
+                    >
+                      Add
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        setAddingCategory(false);
+                        setNewCategoryName("");
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <select
+                    className="w-full rounded-2xl border border-ink/10 bg-white px-4 py-3 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-neon"
+                    {...register("category")}
+                  >
+                    <option value="">Select category</option>
+                    {categories.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                )}
                 {errors.category && <p className="mt-1 text-xs text-red-500">{errors.category.message}</p>}
               </div>
               <Input id="lot" label="Lot number" placeholder="e.g. LOT-001" error={errors.lot?.message} {...register("lot")} />

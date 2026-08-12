@@ -1,8 +1,13 @@
 ﻿import { type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { useAuth } from "@/context/auth-context";
 import { buttonHover } from "@/lib/motion";
+import { getSlides } from "@/api/slides";
+import { queryKeys } from "@/lib/query-keys";
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 type AuthLayoutProps = {
   eyebrow?: string;
@@ -15,15 +20,26 @@ type AuthLayoutProps = {
 export function AuthLayout({ eyebrow = "FMDQ Auctions Portal", title, description, children, footer }: AuthLayoutProps) {
   const navigate = useNavigate();
   const { isSignedIn, session } = useAuth();
+  const { data: slides = [] } = useQuery({
+    queryKey: queryKeys.content.slides("auth"),
+    queryFn: () => getSlides("auth"),
+    staleTime: 5 * 60_000,
+  });
+  const authImage = slides[0];
 
   return (
     <div className="flex h-screen overflow-hidden bg-white">
       {/* Left — image panel */}
       <div className="hidden w-[42%] shrink-0 overflow-hidden lg:block">
         <div className="relative h-full w-full bg-[#0f172a]">
-          <img src="/slides/slide-1.jpg" alt="" fetchPriority="high" className="slide-fade absolute inset-0 h-full w-full object-cover opacity-80" />
-          <img src="/slides/slide-2.jpg" alt="" loading="lazy" className="slide-fade absolute inset-0 h-full w-full object-cover opacity-80" style={{ animationDelay: "4s" }} />
-          <img src="/slides/slide-3.jpg" alt="" loading="lazy" className="slide-fade absolute inset-0 h-full w-full object-cover opacity-80" style={{ animationDelay: "8s" }} />
+          {authImage && (
+            <img
+              src={`${API_BASE}${authImage.url}`}
+              alt=""
+              fetchPriority="high"
+              className="absolute inset-0 h-full w-full object-cover opacity-80"
+            />
+          )}
         </div>
       </div>
 

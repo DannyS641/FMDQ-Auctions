@@ -1,10 +1,26 @@
 ﻿import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/context/auth-context";
 import { useLandingStats } from "@/hooks/use-auction-items";
+import { getSlides, getSiteSettings } from "@/api/slides";
+import { queryKeys } from "@/lib/query-keys";
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export default function Landing() {
   const { isSignedIn } = useAuth();
   const { data: stats } = useLandingStats();
+  const { data: slides = [] } = useQuery({
+    queryKey: queryKeys.content.slides("landing"),
+    queryFn: () => getSlides("landing"),
+    staleTime: 5 * 60_000,
+  });
+  const { data: settings } = useQuery({
+    queryKey: queryKeys.content.settings(),
+    queryFn: getSiteSettings,
+    staleTime: 5 * 60_000,
+  });
+  const cycleSeconds = (settings?.slideDurationSeconds ?? 4) * slides.length;
 
   return (
     <section className="relative mx-auto grid w-full max-w-7xl flex-1 items-center gap-10 px-6 py-12 md:grid-cols-[1.2fr_0.8fr]">
@@ -50,26 +66,20 @@ export default function Landing() {
       </div>
       <div className="relative z-10 h-full">
         <div className="relative h-full min-h-[400px] w-full overflow-hidden rounded-3xl bg-white">
-          <img
-            src="/slides/slide-1.jpg"
-            alt="Auction preview"
-            fetchPriority="high"
-            className="slide-fade absolute inset-0 h-full w-full object-cover"
-          />
-          <img
-            src="/slides/slide-2.jpg"
-            alt="Auction preview"
-            loading="lazy"
-            className="slide-fade absolute inset-0 h-full w-full object-cover"
-            style={{ animationDelay: "4s" }}
-          />
-          <img
-            src="/slides/slide-3.jpg"
-            alt="Auction preview"
-            loading="lazy"
-            className="slide-fade absolute inset-0 h-full w-full object-cover"
-            style={{ animationDelay: "8s" }}
-          />
+          {slides.map((slide, index) => (
+            <img
+              key={slide.id}
+              src={`${API_BASE}${slide.url}`}
+              alt="Auction preview"
+              fetchPriority={index === 0 ? "high" : undefined}
+              loading={index === 0 ? undefined : "lazy"}
+              className="slide-fade absolute inset-0 h-full w-full object-cover"
+              style={{
+                animationDuration: `${cycleSeconds}s`,
+                animationDelay: `${index * (cycleSeconds / slides.length)}s`,
+              }}
+            />
+          ))}
         </div>
       </div>
     </section>

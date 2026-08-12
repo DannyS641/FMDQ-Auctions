@@ -11,6 +11,13 @@ export type FileRef = {
   isPrimary?: boolean;
 };
 
+/** Admin-managed hero slideshow image, shared by the Landing page and auth pages. */
+export type Slide = {
+  id: string;
+  url: string;
+  name: string;
+};
+
 export type Bid = {
   bidder: string;
   bidderUserId?: string;

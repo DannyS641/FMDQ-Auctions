@@ -34,6 +34,8 @@ use App\Repository\CategoryRepository;
 use App\Repository\ItemRepository;
 use App\Repository\RoleRepository;
 use App\Repository\SessionRepository;
+use App\Repository\SiteSettingsRepository;
+use App\Repository\SlideRepository;
 use App\Repository\UserRepository;
 use App\Storage\FileStorage;
 use App\Support\Csv;
@@ -622,6 +624,80 @@ try {
         }
         $categories->delete($validation['value']);
         (new AuditService())->append($ctx, 'CATEGORY_DELETED', 'system', $validation['value'], ['category' => $validation['value']]);
+        respond(200, ['ok' => true]);
+    }
+
+    // --- Admin: site imagery (landing slideshow + single auth-page image) ----
+    if ($method === 'GET' && $path === '/api/slides') {
+        $placement = ($_GET['placement'] ?? 'landing') === 'auth' ? 'auth' : 'landing';
+        respond(200, array_map(static fn ($s) => [
+            'id' => (string) $s['id'], 'url' => $s['url'], 'name' => $s['name'],
+        ], (new SlideRepository())->all($placement)));
+    }
+
+    if ($method === 'GET' && $path === '/api/site-settings') {
+        $settings = new SiteSettingsRepository();
+        respond(200, [
+            'slideDurationSeconds' => (int) ($settings->get('slide_duration_seconds', '4')),
+        ]);
+    }
+
+    if ($method === 'PATCH' && $path === '/api/admin/site-settings') {
+        $ctx = $requireAdmin();
+        $body = jsonBody();
+        $seconds = (int) ($body['slideDurationSeconds'] ?? 0);
+        if ($seconds < 1 || $seconds > 60) {
+            respond(400, ['error' => 'Slide duration must be between 1 and 60 seconds.']);
+        }
+        (new SiteSettingsRepository())->set('slide_duration_seconds', (string) $seconds);
+        (new AuditService())->append($ctx, 'SITE_SETTINGS_UPDATED', 'system', 'slide_duration_seconds', ['value' => $seconds]);
+        respond(200, ['ok' => true, 'slideDurationSeconds' => $seconds]);
+    }
+
+    if ($method === 'POST' && $path === '/api/admin/slides') {
+        $ctx = $requireAdmin();
+        $placement = ($_POST['placement'] ?? 'landing') === 'auth' ? 'auth' : 'landing';
+        $files = uploadedFiles('image');
+        if (!$files) {
+            respond(400, ['error' => 'Upload an image file.']);
+        }
+        $file = $files[0];
+        try {
+            $stored = (new FileStorage())->store($file['tmp_name'], $file['name'], 'image', 'bidder_visible', true);
+        } catch (\RuntimeException $e) {
+            respond(400, ['error' => $e->getMessage()]);
+        }
+        $slides = new SlideRepository();
+        $result = $slides->insert($stored['url'], $file['name'], $placement);
+        if ($result['replacedUrl'] !== null) {
+            (new FileStorage())->deleteByUrl($result['replacedUrl']);
+        }
+        (new AuditService())->append($ctx, 'SLIDE_ADDED', 'system', $result['id'], ['name' => $file['name'], 'placement' => $placement]);
+        respond(201, ['id' => $result['id'], 'url' => $stored['url'], 'name' => $file['name']]);
+    }
+
+    if ($method === 'DELETE' && preg_match('#^/api/admin/slides/([^/]+)$#', $path, $m)) {
+        $ctx = $requireAdmin();
+        $slides = new SlideRepository();
+        $slide = $slides->find(rawurldecode($m[1]));
+        if ($slide === null) {
+            respond(404, ['error' => 'Slide not found.']);
+        }
+        $slides->delete($slide['id']);
+        (new FileStorage())->deleteByUrl($slide['url']);
+        (new AuditService())->append($ctx, 'SLIDE_REMOVED', 'system', $slide['id'], ['name' => $slide['name']]);
+        respond(200, ['ok' => true]);
+    }
+
+    if ($method === 'PATCH' && $path === '/api/admin/slides/reorder') {
+        $ctx = $requireAdmin();
+        $body = jsonBody();
+        $orderedIds = array_map('strval', (array) ($body['orderedIds'] ?? []));
+        if (!$orderedIds) {
+            respond(400, ['error' => 'orderedIds is required.']);
+        }
+        (new SlideRepository())->reorder($orderedIds);
+        (new AuditService())->append($ctx, 'SLIDES_REORDERED', 'system', 'slides', ['count' => count($orderedIds)]);
         respond(200, ['ok' => true]);
     }
 
