@@ -37,7 +37,7 @@ const NotFound = lazyWithRetry(() => import("@/pages/NotFound"), "NotFound");
 function PageFallback() {
   return (
     <div className="flex flex-1 items-center justify-center py-24">
-      <div className="h-8 w-8 animate-spin rounded-full border-2 border-ink/10 border-t-neon" />
+      <div className="h-8 w-8 animate-spin rounded-[50%] border-2 border-ink/10 border-t-neon" />
     </div>
   );
 }

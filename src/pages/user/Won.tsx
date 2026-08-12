@@ -7,6 +7,8 @@ import { queryKeys } from "@/lib/query-keys";
 import { useAuth } from "@/context/auth-context";
 import { formatMoney, formatDate } from "@/lib/formatters";
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+
 export default function Won() {
   const { session } = useAuth();
   const { data: wins, isLoading, isError } = useQuery({
@@ -44,7 +46,16 @@ export default function Won() {
           <div className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
             {wins.map((item) => (
               <article key={item.id} className="rounded-3xl border border-ink/10 bg-white p-5">
-                <div className="flex items-center justify-between gap-3">
+                <div className="aspect-[4/3] w-full overflow-hidden rounded-2xl border border-ink/10 bg-ash">
+                  {item.thumbnailUrl ? (
+                    <img
+                      src={`${API_BASE}${item.thumbnailUrl}`}
+                      alt={item.title}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : null}
+                </div>
+                <div className="mt-4 flex items-center justify-between gap-3">
                   <p className="text-xs uppercase tracking-[0.3em] text-slate">{item.category}</p>
                   <span className="inline-flex items-center gap-2 text-xs font-semibold text-ink">
                     <span className="h-2.5 w-2.5 rounded-full bg-gold" />

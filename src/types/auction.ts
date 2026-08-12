@@ -50,6 +50,7 @@ export type UserBidRecord = {
   endTime: string;
   lastBidAt: string;
   status: BidStatus;
+  thumbnailUrl: string | null;
 };
 
 export type WonItem = {
@@ -58,6 +59,7 @@ export type WonItem = {
   category: string;
   currentBid: number;
   endTime: string;
+  thumbnailUrl: string | null;
 };
 
 export type DashboardSummary = {

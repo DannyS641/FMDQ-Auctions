@@ -7,6 +7,8 @@ import { queryKeys } from "@/lib/query-keys";
 import { useAuth } from "@/context/auth-context";
 import { formatMoney, formatDate } from "@/lib/formatters";
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+
 export default function MyBids() {
   const { session } = useAuth();
   const { data: bids, isLoading, isError } = useQuery({
@@ -46,10 +48,21 @@ export default function MyBids() {
             {bids.map((entry) => (
               <article key={entry.itemId} className="rounded-3xl border border-ink/10 bg-white p-5 sm:p-6">
                 <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-slate">{entry.category}</p>
-                    <h2 className="mt-2 break-words text-xl font-semibold text-ink sm:text-2xl">{entry.title}</h2>
-                    <p className="mt-2 text-sm text-slate">Lot {entry.lot}</p>
+                  <div className="flex min-w-0 items-start gap-4">
+                    <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl border border-ink/10 bg-ash">
+                      {entry.thumbnailUrl ? (
+                        <img
+                          src={`${API_BASE}${entry.thumbnailUrl}`}
+                          alt={entry.title}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : null}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs uppercase tracking-[0.3em] text-slate">{entry.category}</p>
+                      <h2 className="mt-2 break-words text-xl font-semibold text-ink sm:text-2xl">{entry.title}</h2>
+                      <p className="mt-2 text-sm text-slate">Lot {entry.lot}</p>
+                    </div>
                   </div>
                   <span className="rounded-full border border-ink/10 bg-ink/5 px-3 py-1 text-xs font-semibold text-ink capitalize">
                     {entry.status}

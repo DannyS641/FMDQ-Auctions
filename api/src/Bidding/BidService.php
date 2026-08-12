@@ -272,6 +272,7 @@ final class BidService
                 'lot' => $item['lot'], 'currentBid' => $item['currentBid'],
                 'yourLatestBid' => $latest['amount'], 'endTime' => $item['endTime'],
                 'lastBidAt' => $latest['createdAt'], 'status' => $status,
+                'thumbnailUrl' => $item['images'][0]['url'] ?? null,
             ];
         }
         return $records;

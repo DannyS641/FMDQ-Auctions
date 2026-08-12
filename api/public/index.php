@@ -490,11 +490,12 @@ try {
             static fn ($r) => $r['status'] === 'won'
         ));
         respond(200, array_map(static fn ($r) => [
-            'id'         => $r['itemId'],
-            'title'      => $r['title'],
-            'category'   => $r['category'],
-            'currentBid' => $r['currentBid'],
-            'endTime'    => $r['endTime'],
+            'id'           => $r['itemId'],
+            'title'        => $r['title'],
+            'category'     => $r['category'],
+            'currentBid'   => $r['currentBid'],
+            'endTime'      => $r['endTime'],
+            'thumbnailUrl' => $r['thumbnailUrl'],
         ], $wins));
     }
 
