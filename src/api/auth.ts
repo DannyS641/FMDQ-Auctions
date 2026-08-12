@@ -8,6 +8,14 @@ type LoginResponse = {
   user: { id: string; email: string; displayName: string; role: string } | null;
 };
 
+// Shape of the raw goldhive AD endpoint response — distinct from LoginResponse,
+// which describes our own backend's /api/auth/login and /api/auth/me replies.
+type AdEndpointResponse = {
+  success: boolean;
+  message?: string;
+  data: Array<{ emailAddress: string; displayName: string }>;
+};
+
 type RegisterResponse = {
   registered?: boolean;
   verificationRequired?: boolean;
@@ -34,12 +42,12 @@ export const loginWithFallback = async (
     return session;
   }
 
-  let adResult: LoginResponse;
+  let adResult: AdEndpointResponse;
   try {
     const API_BASE = import.meta.env.VITE_AUTH_ENDPOINT ?? "";
     const basicToken = import.meta.env.VITE_BASIC_TOKEN ?? "";
 
-    const { data } = await axios.post<LoginResponse>(
+    const { data } = await axios.post<AdEndpointResponse>(
       API_BASE,
       { email, password },
       {
@@ -49,12 +57,12 @@ export const loginWithFallback = async (
         },
       },
     );
-    adResult = data as any;
+    adResult = data;
   } catch (adErr) {
     if (axios.isAxiosError(adErr) && adErr.response?.status === 401) {
       throw new ApiError(
+        401,
         adErr.response?.data?.message ?? "Invalid username or password",
-        "401",
       );
     }
     throw adErr;
@@ -62,8 +70,8 @@ export const loginWithFallback = async (
 
   if (!adResult.success || adResult.data.length <= 0) {
     throw new ApiError(
+      401,
       adResult?.message ?? "Invalid username or password",
-      "401",
     );
   }
 
