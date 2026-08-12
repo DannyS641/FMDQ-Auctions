@@ -46,7 +46,7 @@ return [
         'internal_email_domains' => ['fmdq.com', 'fmdqgroup.com'], // AD domain(s)
         // Role granted to any authenticated internal user even with no group match.
         // Set to null to deny internal users who match no mapped group.
-        'default_internal_role'  => 'ShopOwner',
+        'default_internal_role'  => 'Bidder',
         'email_verification_ttl_seconds' => 24 * 60 * 60, // verify link lifetime (24h)
         'password_reset_ttl_seconds'     => 60 * 60,      // reset link lifetime (1h)
     ],
