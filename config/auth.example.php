@@ -22,6 +22,12 @@ return [
         'charset' => 'utf8mb4',
         // Optional: connect via unix socket instead of host/port (leave '' to use TCP)
         'unix_socket' => '',
+        // TLS is required automatically whenever 'host' isn't localhost/127.0.0.1
+        // and no unix_socket is set. ssl_ca: path to a CA bundle if the DB
+        // server's cert isn't publicly trusted. ssl_verify: set false only for
+        // troubleshooting — never in production.
+        'ssl_ca'      => '',
+        'ssl_verify'  => true,
     ],
 
     // -------------------------------------------------------------------------

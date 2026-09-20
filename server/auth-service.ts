@@ -1,6 +1,6 @@
 import type express from "express";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { randomUUID } from "crypto";
+import { randomUUID, timingSafeEqual } from "crypto";
 import type { AuthContext, Role, SessionRow, StoredUser, UserRow } from "./server-types.js";
 import { isAdminRole } from "../shared/permissions.js";
 
@@ -65,7 +65,15 @@ export const createAuthService = ({
   };
 
   const getAuthContext = async (req: express.Request, adminApiToken?: string): Promise<AuthContext> => {
-    if (adminApiToken && req.header("x-admin-token") === adminApiToken) {
+    const providedAdminToken = req.header("x-admin-token") || "";
+    const expectedAdminTokenBuf = Buffer.from(adminApiToken || "");
+    const providedAdminTokenBuf = Buffer.from(providedAdminToken);
+    const adminTokenMatches =
+      Boolean(adminApiToken) &&
+      Boolean(providedAdminToken) &&
+      providedAdminTokenBuf.length === expectedAdminTokenBuf.length &&
+      timingSafeEqual(providedAdminTokenBuf, expectedAdminTokenBuf);
+    if (adminTokenMatches) {
       return {
         userId: "admin-token",
         sessionId: undefined,

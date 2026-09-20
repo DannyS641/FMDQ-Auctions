@@ -25,11 +25,26 @@ final class Database
             $dsn = sprintf('mysql:host=%s;port=%d;dbname=%s;charset=%s', $db['host'], (int) $db['port'], $db['dbname'], $db['charset']);
         }
 
-        $pdo = new PDO($dsn, $db['user'], $db['pass'], [
+        $options = [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES   => false,
-        ]);
+        ];
+
+        // A non-local DB host means credentials and query data would otherwise
+        // cross the network in the clear. Require TLS in that case; set
+        // db.ssl_ca in config to a CA bundle path if the server's certificate
+        // isn't already publicly trusted.
+        $isRemoteHost = empty($db['unix_socket'])
+            && !in_array(strtolower((string) ($db['host'] ?? '')), ['127.0.0.1', 'localhost', '::1'], true);
+        if ($isRemoteHost) {
+            $options[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] = ($db['ssl_verify'] ?? true) !== false;
+            if (!empty($db['ssl_ca'])) {
+                $options[PDO::MYSQL_ATTR_SSL_CA] = (string) $db['ssl_ca'];
+            }
+        }
+
+        $pdo = new PDO($dsn, $db['user'], $db['pass'], $options);
         // App works entirely in UTC; pin the session timezone so NOW()/CURRENT_TIMESTAMP match.
         $pdo->exec("SET time_zone = '+00:00'");
 

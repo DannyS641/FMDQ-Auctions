@@ -307,6 +307,14 @@ final class BulkImportService
                 if ($totalFiles > $this->maxEntries) {
                     throw new \RuntimeException("The ZIP bundle contains too many extracted files. Maximum allowed is {$this->maxEntries}.");
                 }
+                // Check the entry's declared uncompressed size BEFORE inflating it,
+                // so a single highly-compressed entry can't exhaust memory before
+                // the safety limit below has a chance to reject it (zip-bomb guard).
+                $declaredSize = (int) ($stat['size'] ?? 0);
+                if ($totalBytes + $declaredSize > $this->maxBytes) {
+                    $mb = (int) round($this->maxBytes / (1024 * 1024));
+                    throw new \RuntimeException("The extracted ZIP bundle exceeds the {$mb} MB safety limit.");
+                }
                 $data = $zip->getFromIndex($i);
                 if ($data === false) {
                     throw new \RuntimeException('Failed to read a file from the ZIP bundle.');

@@ -281,7 +281,15 @@ app.use((req, res, next) => {
       next();
       return;
     }
-    if (adminApiToken && req.header("x-admin-token") === adminApiToken) {
+    const providedCsrfBypassToken = req.header("x-admin-token") || "";
+    const expectedCsrfBypassBuf = Buffer.from(adminApiToken || "");
+    const providedCsrfBypassBuf = Buffer.from(providedCsrfBypassToken);
+    const csrfBypassTokenMatches =
+      Boolean(adminApiToken) &&
+      Boolean(providedCsrfBypassToken) &&
+      providedCsrfBypassBuf.length === expectedCsrfBypassBuf.length &&
+      timingSafeEqual(providedCsrfBypassBuf, expectedCsrfBypassBuf);
+    if (csrfBypassTokenMatches) {
       next();
       return;
     }
@@ -305,7 +313,10 @@ app.use((req, res, next) => {
     }
     const expectedToken = buildCsrfToken(sessionId);
     const providedToken = String(req.header("x-csrf-token") || "");
-    if (!providedToken || providedToken !== expectedToken) {
+    const expectedBuf = Buffer.from(expectedToken);
+    const providedBuf = Buffer.from(providedToken);
+    const tokensMatch = providedBuf.length === expectedBuf.length && timingSafeEqual(providedBuf, expectedBuf);
+    if (!providedToken || !tokensMatch) {
       res.status(403).json({ error: "Invalid or missing CSRF token." });
       return;
     }

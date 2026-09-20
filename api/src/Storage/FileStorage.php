@@ -15,9 +15,9 @@ use App\Support\Uuid;
  * Returns the managed-file shape {id, kind, name, url} the item layer expects.
  * Document names are stored with the vis: visibility prefix.
  *
- * NOTE: deep content sniffing / image re-encoding (sharp) / malware scanning
- * from the original are deferred to Phase 5/7 hardening. Extension + size are
- * enforced here.
+ * Extension, size, and magic-byte content signature are enforced here. Image
+ * re-encoding (sharp) / malware scanning from the original are still deferred
+ * to later hardening work.
  */
 final class FileStorage
 {
@@ -50,6 +50,7 @@ final class FileStorage
         if (!is_file($sourcePath) || filesize($sourcePath) > $this->maxBytes) {
             throw new \RuntimeException("File {$originalName} is missing or exceeds the size limit.");
         }
+        $this->assertRealFileType($sourcePath, $originalName, $kind, $ext);
 
         $subdir = $kind === 'image' ? 'images' : 'documents';
         $dir = $this->uploadsDir . '/' . $subdir;
@@ -71,6 +72,56 @@ final class FileStorage
             'name' => $kind === 'document' ? DocumentVisibility::encode($originalName, $visibility) : $originalName,
             'url'  => "/uploads/{$subdir}/{$storedName}",
         ];
+    }
+
+    /**
+     * Verify the file's actual content (magic bytes) matches its claimed type —
+     * a file extension alone is trivially spoofable. Mirrors the equivalent
+     * check in server/index.ts (detectFileSignatureMimeType).
+     */
+    private function assertRealFileType(string $path, string $originalName, string $kind, string $ext): void
+    {
+        $signature = $this->detectSignature($path);
+        if ($kind === 'image') {
+            if (!in_array($signature, ['image/jpeg', 'image/png', 'image/webp'], true)) {
+                throw new \RuntimeException("Uploaded image {$originalName} does not match an allowed file signature.");
+            }
+            return;
+        }
+
+        // Documents: PDF and legacy OLE (.doc/.xls) are identified directly by
+        // signature. OOXML (.docx/.xlsx) files are ZIP containers, so a bare ZIP
+        // signature is only accepted when the extension itself claims docx/xlsx —
+        // otherwise a ZIP renamed to .pdf/.doc would slip through on extension alone.
+        if ($signature === 'application/pdf' || $signature === 'application/msword') {
+            return;
+        }
+        if ($signature === 'application/zip' && in_array($ext, ['docx', 'xlsx'], true)) {
+            return;
+        }
+        throw new \RuntimeException("Uploaded {$kind} {$originalName} does not match an allowed file signature.");
+    }
+
+    /** Read the first bytes of a file and classify it by magic-byte signature. */
+    private function detectSignature(string $path): ?string
+    {
+        $fh = @fopen($path, 'rb');
+        if ($fh === false) {
+            return null;
+        }
+        $header = fread($fh, 16);
+        fclose($fh);
+        if ($header === false || strlen($header) < 4) {
+            return null;
+        }
+
+        if (substr($header, 0, 3) === "\xFF\xD8\xFF") return 'image/jpeg';
+        if (substr($header, 0, 8) === "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A") return 'image/png';
+        if (strlen($header) >= 12 && substr($header, 0, 4) === 'RIFF' && substr($header, 8, 4) === 'WEBP') return 'image/webp';
+        if (substr($header, 0, 4) === '%PDF') return 'application/pdf';
+        if (substr($header, 0, 8) === "\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1") return 'application/msword';
+        if (substr($header, 0, 4) === "\x50\x4B\x03\x04") return 'application/zip';
+        return null;
     }
 
     /** Absolute path to a stored file if it exists on disk, else null. */

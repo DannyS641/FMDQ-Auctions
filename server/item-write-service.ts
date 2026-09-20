@@ -166,6 +166,14 @@ export const createItemWriteService = ({
         throw new Error(`The ZIP bundle contains too many extracted files. Maximum allowed is ${maxImportArchiveEntries}.`);
       }
 
+      // Check the entry's declared uncompressed size BEFORE inflating it, so a
+      // single highly-compressed entry can't exhaust memory before the safety
+      // limit below has a chance to reject it (zip-bomb guard).
+      const declaredSize = entry.header.size || 0;
+      if (totalBytes + declaredSize > maxImportExtractedBytes) {
+        throw new Error(`The extracted ZIP bundle exceeds the ${Math.round(maxImportExtractedBytes / (1024 * 1024))} MB safety limit.`);
+      }
+
       const data = entry.getData();
       totalBytes += data.length;
       if (totalBytes > maxImportExtractedBytes) {

@@ -79,10 +79,13 @@ final class AdminService
     public function recentAudits(int $limit = 20): array
     {
         $lookup = $this->auditActorRoleLookup();
-        $rows = Database::pdo()->query(
+        $stmt = Database::pdo()->prepare(
             'SELECT id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at
-             FROM audits ORDER BY created_at DESC LIMIT ' . ($limit + 100)
-        )->fetchAll();
+             FROM audits ORDER BY created_at DESC LIMIT :limit'
+        );
+        $stmt->bindValue(':limit', $limit + 100, \PDO::PARAM_INT);
+        $stmt->execute();
+        $rows = $stmt->fetchAll();
         $filtered = array_filter($rows, static fn ($r) => !in_array($r['event_type'], self::SECURITY_TELEMETRY, true));
         return array_map(fn ($r) => $this->mapAuditRow($r, $lookup), array_slice(array_values($filtered), 0, $limit));
     }
@@ -118,9 +121,14 @@ final class AdminService
 
         $stmt = $pdo->prepare(
             "SELECT id,event_type,entity_type,entity_id,actor,actor_type,request_id,details_json,created_at
-             FROM audits $whereSql ORDER BY created_at DESC LIMIT $pageSize OFFSET $offset"
+             FROM audits $whereSql ORDER BY created_at DESC LIMIT :limit OFFSET :offset"
         );
-        $stmt->execute($params);
+        foreach ($params as $key => $value) {
+            $stmt->bindValue($key, $value);
+        }
+        $stmt->bindValue(':limit', $pageSize, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
         $lookup = $this->auditActorRoleLookup();
         $items = array_map(function ($row) use ($lookup) {
             $details = self::parseDetails($row['details_json']);
@@ -144,9 +152,11 @@ final class AdminService
         $offset = ($page - 1) * $pageSize;
         $pdo = Database::pdo();
         $total = (int) $pdo->query('SELECT COUNT(*) c FROM notification_queue')->fetch()['c'];
-        $rows = $pdo->query(
-            "SELECT * FROM notification_queue ORDER BY created_at DESC LIMIT $pageSize OFFSET $offset"
-        )->fetchAll();
+        $stmt = $pdo->prepare('SELECT * FROM notification_queue ORDER BY created_at DESC LIMIT :limit OFFSET :offset');
+        $stmt->bindValue(':limit', $pageSize, \PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, \PDO::PARAM_INT);
+        $stmt->execute();
+        $rows = $stmt->fetchAll();
         return ['items' => array_map([$this, 'mapNotificationForAdmin'], $rows), 'total' => $total, 'page' => $page, 'pageSize' => $pageSize];
     }
 

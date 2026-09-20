@@ -180,7 +180,6 @@ try {
                 'POST /api/auth/login'  => 'body: {"email","password"}',
                 'POST /api/auth/logout' => 'ends the session',
             ],
-            'demo_account' => ['email' => 'demo@auction.test', 'password' => 'Demo12345!'],
         ]);
     }
 
@@ -394,7 +393,7 @@ try {
             $item['currentBid'] > 0 ? $bidResult['previousBidderUserId'] : null
         );
 
-        respond(200, $model->getItemById($item['id'])); // unsanitized, matching the original
+        respond(200, $model->sanitizeForAuth($model->getItemById($item['id']), $ctx));
     }
 
     // --- User self-service (/api/me/*) ---------------------------------------

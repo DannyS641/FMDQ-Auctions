@@ -26,10 +26,24 @@ final class Csv
     {
         return implode(',', array_map(static function ($cell): string {
             $value = is_bool($cell) ? ($cell ? 'true' : 'false') : (string) ($cell ?? '');
+            $value = self::neutralizeFormula($value);
             if (preg_match('/[",\r\n]/', $value)) {
                 return '"' . str_replace('"', '""', $value) . '"';
             }
             return $value;
         }, $cells));
+    }
+
+    /**
+     * CSV/formula (DDE) injection guard: a cell starting with =, +, -, or @ can
+     * be interpreted as a formula by Excel/Sheets when the export is opened.
+     * Prefixing with a leading apostrophe forces it to be read as plain text.
+     */
+    private static function neutralizeFormula(string $value): string
+    {
+        if ($value !== '' && str_contains("=+-@\t\r", $value[0])) {
+            return "'" . $value;
+        }
+        return $value;
     }
 }
