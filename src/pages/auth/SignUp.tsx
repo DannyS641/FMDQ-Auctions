@@ -46,21 +46,28 @@ export default function SignUp() {
     setError,
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
-  const { mutate, isPending } = useMutation({
+  const { mutate } = useMutation({
     mutationFn: (data: FormData) =>
       registerUser(data.displayName, data.email, data.password),
     onSuccess: () => {
-      toast.success("Account created! Check your email to verify your account.");
+      toast.success(
+        "Account created! Check your email to verify your account.",
+      );
       navigate("/signin");
     },
     onError: (err) => {
       if (err instanceof ApiError && err.status === 409) {
         // Generic message to avoid user enumeration
-        toast.info("If this email is not registered, your account has been created. Check your inbox.");
+        toast.info(
+          "If this email is not registered, your account has been created. Check your inbox.",
+        );
         navigate("/signin");
       } else {
         setError("root", {
-          message: err instanceof Error ? err.message : "Registration failed. Please try again.",
+          message:
+            err instanceof Error
+              ? err.message
+              : "Registration failed. Please try again.",
         });
       }
     },
@@ -71,8 +78,14 @@ export default function SignUp() {
       title="Create your account"
       description="Join the FMDQ auction portal to start bidding."
     >
-      <form onSubmit={handleSubmit((data) => mutate(data))} noValidate className="flex flex-col gap-4">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate">Register</p>
+      <form
+        onSubmit={handleSubmit((data) => mutate(data))}
+        noValidate
+        className="flex flex-col gap-4"
+      >
+        <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate">
+          Register
+        </p>
         <Input
           id="displayName"
           label="Full name"
@@ -110,11 +123,12 @@ export default function SignUp() {
           <p className="text-xs text-red-500">{errors.root.message}</p>
         )}
         <p className="text-xs text-slate">
-          By creating an account you agree to our terms of service and privacy policy.
+          By creating an account you agree to our terms of service and privacy
+          policy.
         </p>
-        <Button type="submit" isLoading={isPending} className="mt-2 w-full">
+        {/* <Button type="submit" isLoading={isPending} className="mt-2 w-full">
           Create account
-        </Button>
+        </Button> */}
         <Button
           type="button"
           variant="secondary"

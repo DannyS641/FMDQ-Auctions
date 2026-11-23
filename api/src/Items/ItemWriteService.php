@@ -19,6 +19,9 @@ use App\Support\Uuid;
  */
 final class ItemWriteService
 {
+    /** Wall-clock times entered by admins (and in import files) are Lagos time. */
+    private const INPUT_TIMEZONE = 'Africa/Lagos';
+
     public function __construct(
         private CategoryRepository $categories = new CategoryRepository(),
         private AuditService $audit = new AuditService(),
@@ -255,7 +258,9 @@ final class ItemWriteService
         $value = trim($value);
         if ($value === '') return null;
         try {
-            $dt = new \DateTimeImmutable($value, new \DateTimeZone('UTC'));
+            // A bare "2026-11-24T09:00" carries no offset, so it is read in the
+            // input timezone; a value that states its own offset keeps it.
+            $dt = new \DateTimeImmutable($value, new \DateTimeZone(self::INPUT_TIMEZONE));
         } catch (\Throwable) {
             return null;
         }

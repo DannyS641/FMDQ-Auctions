@@ -34,7 +34,10 @@ export default function SignIn() {
     handleSubmit,
     formState: { errors },
     setError,
-  } = useForm<FormData>({ resolver: zodResolver(schema) });
+  } = useForm<FormData>({
+    resolver: zodResolver(schema),
+    defaultValues: { useAd: true },
+  });
 
   const { mutate, isPending } = useMutation({
     mutationFn: ({ email, password, useAd }: FormData) =>
@@ -93,32 +96,9 @@ export default function SignIn() {
           error={errors.password?.message}
           {...register("password")}
         />
-        <div className="flex items-center justify-between">
-          <label className="flex items-center gap-2 text-xs text-slate">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-ink/20 accent-neon"
-              {...register("useAd")}
-            />
-            Sign in with Active Directory
-          </label>
-          <a
-            href="/reset-password"
-            className="text-xs text-slate hover:text-neon hover:underline"
-          >
-            Forgot password?
-          </a>
-        </div>
+        <input type="checkbox" className="hidden" {...register("useAd")} />
         <Button type="submit" isLoading={isPending} className="mt-2 w-full">
           Sign in
-        </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          className="w-full"
-          onClick={() => navigate("/signup")}
-        >
-          Create account
         </Button>
       </form>
     </AuthLayout>

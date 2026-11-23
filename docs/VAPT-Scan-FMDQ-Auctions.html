@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aquilon PT — Detailed Scan Report</title>
+<style>
+  @page { size: A4; margin: 14mm 12mm; }
+
+  :root {
+    --ink:        #1f3a5f;
+    --maroon:     #7b1220;
+    --rule:       #9b2330;
+    --tile:       #c7d5e8;
+    --tile-low:   #eaf7ee;
+    --tile-info:  #e8f1fb;
+    --tile-total: #f4f6f8;
+    --c-crit:     #8b1a1a;
+    --c-high:     #b7342a;
+    --c-med:      #c8791a;
+    --c-low:      #2e8b50;
+    --c-info:     #2a7fc1;
+    --c-total:    #16263c;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+    color: var(--ink);
+    font-family: "Segoe UI", Calibri, Arial, Helvetica, sans-serif;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .sheet {
+    max-width: 190mm;
+    margin: 0 auto;
+    padding: 6mm 2mm;
+  }
+
+  /* ---------------------------------------------------------- header band */
+  .band {
+    background: linear-gradient(100deg, #1d0607 0%, #3d0c11 42%, #6d141d 100%);
+    color: #ffffff;
+    padding: 26px 30px 30px;
+    margin-bottom: 26px;
+  }
+  .band h1 {
+    margin: 0;
+    font-size: 40px;
+    font-weight: 700;
+    letter-spacing: 0.10em;
+    line-height: 1.05;
+  }
+  .band .divider {
+    border: 0;
+    border-top: 1px solid rgba(255,255,255,0.75);
+    margin: 14px 0 14px;
+  }
+  .band h2 {
+    margin: 0 0 18px;
+    font-size: 19px;
+    font-weight: 400;
+    letter-spacing: 0.01em;
+  }
+  .band p {
+    margin: 0 0 10px;
+    font-size: 13.5px;
+    font-weight: 400;
+    color: #f2e9ea;
+  }
+  .band p:last-child { margin-bottom: 0; }
+
+  /* ----------------------------------------------------------- stat grid */
+  .grid {
+    display: grid;
+    grid-template-columns: 1.55fr 1fr 1fr;
+    grid-template-rows: auto auto;
+    gap: 10px;
+    margin-bottom: 30px;
+  }
+  .tile {
+    background: var(--tile);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 20px 10px;
+    min-height: 96px;
+  }
+  .tile .num {
+    font-size: 40px;
+    font-weight: 400;
+    line-height: 1;
+    margin-bottom: 10px;
+  }
+  .tile .lbl {
+    font-size: 11.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    line-height: 1.25;
+  }
+
+  .t-crit  { grid-column: 1; grid-row: 1 / span 2; }
+  .t-high  { grid-column: 2; grid-row: 1; }
+  .t-med   { grid-column: 3; grid-row: 1; }
+  .t-low   { background: var(--tile-low); }
+  .t-info  { background: var(--tile-info); }
+
+  .t-crit .num, .t-crit .lbl { color: var(--c-crit); }
+  .t-high .num, .t-high .lbl { color: var(--c-high); }
+  .t-med  .num, .t-med  .lbl { color: var(--c-med); }
+  .t-low  .num, .t-low  .lbl { color: var(--c-low); }
+  .t-info .num, .t-info .lbl { color: var(--c-info); }
+
+  /* LOW, INFO and TOTAL share the second row, right of CRITICAL */
+  .row2 {
+    grid-column: 2 / span 2;
+    grid-row: 2;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+  }
+  .t-total {
+    background: var(--tile-total);
+    border: 2px solid var(--c-total);
+  }
+  .t-total .num, .t-total .lbl { color: var(--c-total); }
+
+  /* ------------------------------------------------------------- section */
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 16px;
+  }
+  .section-head .bar {
+    width: 4px;
+    align-self: stretch;
+    min-height: 22px;
+    background: var(--rule);
+  }
+  .section-head h3 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 400;
+    color: var(--ink);
+  }
+
+  .body p {
+    margin: 0 0 14px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--ink);
+  }
+
+  /* -------------------------------------------------------------- footer */
+  .foot {
+    margin-top: 40px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule);
+    text-align: center;
+  }
+  .foot p {
+    margin: 0 0 4px;
+    font-size: 11.5px;
+    color: var(--maroon);
+  }
+
+  @media print {
+    .sheet { max-width: none; padding: 0; }
+    .band  { break-inside: avoid; }
+    .grid  { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <div class="band">
+    <h1>AQUILON PT</h1>
+    <hr class="divider">
+    <h2>Detailed Scan Report</h2>
+    <p>Target: https://auctions.fmdqgroup.com</p>
+    <p>Assessment Date: 2026-09-30, 14:56:09 (UTC+1)</p>
+    <p>Duration: 00:12:36</p>
+  </div>
+
+  <div class="grid">
+    <div class="tile t-crit">
+      <div class="num">0</div>
+      <div class="lbl">Critical</div>
+    </div>
+    <div class="tile t-high">
+      <div class="num">0</div>
+      <div class="lbl">High</div>
+    </div>
+    <div class="tile t-med">
+      <div class="num">0</div>
+      <div class="lbl">Medium</div>
+    </div>
+    <div class="row2">
+      <div class="tile t-low">
+        <div class="num">0</div>
+        <div class="lbl">Low</div>
+      </div>
+      <div class="tile t-info">
+        <div class="num">0</div>
+        <div class="lbl">Info</div>
+      </div>
+      <div class="tile t-total">
+        <div class="num">0</div>
+        <div class="lbl">Total<br>Findings</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-head">
+    <div class="bar"></div>
+    <h3>Vulnerability Analysis</h3>
+  </div>
+
+  <div class="body">
+    <p>No security vulnerabilities were identified in the assessment data for the target application. The
+       available information only indicates limited contextual details (such as application language and
+       assessment metadata) and does not contain any findings that represent exploitable security issues,
+       misconfigurations, or weaknesses.</p>
+
+    <p>As a result, there are no vulnerability types to document, no affected endpoints or parameters to list
+       as evidence, and no remediation actions required based on the provided scan data.</p>
+  </div>
+
+  <div class="foot">
+    <p>This report is a point-in-time assessment and may not reflect the current security posture.</p>
+    <p>For questions or clarifications, please contact your security team.</p>
+  </div>
+
+</div>
+</body>
+</html>

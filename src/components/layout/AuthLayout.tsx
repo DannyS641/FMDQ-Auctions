@@ -92,11 +92,6 @@ export function AuthLayout({ eyebrow = "FMDQ Auctions Portal", title, descriptio
             {footer && (
               <div className="mt-6 text-center text-sm text-slate">{footer}</div>
             )}
-
-            {/* New users hint */}
-            <p className="mt-6 rounded-2xl bg-gold/10 px-4 py-3 text-xs text-gold">
-              New users should create an account first, verify their email, then sign in.
-            </p>
           </div>
         </div>
       </div>
